@@ -1,11 +1,11 @@
 # Python
 __pycache__/
 *.pyc
-.venv/
-env/
+# .venv/
+# env/
 
 # Environment variables
-.env
+# .env
 
 # Databases
 *.db
