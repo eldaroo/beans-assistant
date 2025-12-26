@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo $env:GEMINI_MODEL)",
+      "Bash(echo $env:OPENAI_MODEL)",
+      "Bash(.venvScriptspip list)",
+      "Bash(.venv/Scripts/pip:*)",
+      "WebSearch",
+      "Bash(mkdir:*)",
+      "Bash(if [ -f requirements.txt ])",
+      "Bash(then cat requirements.txt)",
+      "Bash(else echo \"No requirements.txt found\")",
+      "Bash(fi)",
+      "Bash(python:*)",
+      "Bash(.venv/Scripts/python:*)",
+      "Bash(sqlite3:*)"
+    ]
+  }
+}
