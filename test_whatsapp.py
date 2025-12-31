@@ -3,7 +3,12 @@ Test WhatsApp integration with Green API.
 
 Verifies connection and basic functionality.
 """
+import os
+from dotenv import load_dotenv
 from whatsapp_client import GreenAPIWhatsAppClient
+
+# Load environment variables
+load_dotenv()
 
 
 def test_green_api_connection():
@@ -12,9 +17,14 @@ def test_green_api_connection():
     print("Testing Green API WhatsApp Integration")
     print("="*60)
 
-    # Initialize client
-    ID_INSTANCE = "7105281616"
-    API_TOKEN = "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c"
+    # Initialize client from environment
+    ID_INSTANCE = os.getenv("GREEN_API_INSTANCE_ID")
+    API_TOKEN = os.getenv("GREEN_API_TOKEN")
+
+    if not ID_INSTANCE or not API_TOKEN:
+        print("[ERROR] Missing Green API credentials in .env file")
+        print("Please set GREEN_API_INSTANCE_ID and GREEN_API_TOKEN")
+        return False
 
     client = GreenAPIWhatsAppClient(ID_INSTANCE, API_TOKEN)
 

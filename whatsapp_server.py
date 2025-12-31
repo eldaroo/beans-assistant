@@ -3,15 +3,25 @@ WhatsApp Server - Integrates multi-agent system with WhatsApp via Green API.
 
 Polls for incoming WhatsApp messages and processes them with the agent system.
 """
+import os
 import time
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from whatsapp_client import GreenAPIWhatsAppClient, format_message_for_whatsapp
 from graph import create_business_agent_graph
 
+# Load environment variables
+load_dotenv()
 
-# Green API credentials
-ID_INSTANCE = "7105281616"
-API_TOKEN = "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c"
+# Green API credentials from environment
+ID_INSTANCE = os.getenv("GREEN_API_INSTANCE_ID")
+API_TOKEN = os.getenv("GREEN_API_TOKEN")
+
+if not ID_INSTANCE or not API_TOKEN:
+    raise ValueError(
+        "Missing Green API credentials. Please set GREEN_API_INSTANCE_ID and "
+        "GREEN_API_TOKEN in your .env file"
+    )
 
 # Conversation memory: chat_id -> list of messages
 conversation_history = {}
@@ -183,8 +193,7 @@ def run_whatsapp_server():
                     print(f"    [IN] \"{user_message}\"")
 
                     # Track timing
-                    import time as time_module
-                    start_time = time_module.time()
+                    start_time = time.time()
 
                     print(f"    [AGENT] Processing...")
 
@@ -197,15 +206,15 @@ def run_whatsapp_server():
                     # Add assistant response to history
                     add_to_history(chat_id, "assistant", agent_response)
 
-                    process_time = time_module.time() - start_time
+                    process_time = time.time() - start_time
                     print(f"    [AGENT] Processing took {process_time:.2f}s")
                     print(f"    [AGENT] Response: \"{agent_response[:100]}...\"")
 
                     # Send response
-                    send_start = time_module.time()
+                    send_start = time.time()
                     formatted_response = format_message_for_whatsapp(agent_response)
                     success = client.send_message(chat_id, formatted_response)
-                    send_time = time_module.time() - send_start
+                    send_time = time.time() - send_start
 
                     if success:
                         print(f"    [OUT] Sent in {send_time:.2f}s")
@@ -215,9 +224,9 @@ def run_whatsapp_server():
                 # Delete notification
                 receipt_id = notification.get("receiptId")
                 if receipt_id:
-                    delete_start = time_module.time()
+                    delete_start = time.time()
                     client.delete_notification(receipt_id)
-                    delete_time = time_module.time() - delete_start
+                    delete_time = time.time() - delete_start
                     print(f"    [CLEANUP] Notification deleted in {delete_time:.2f}s")
 
             # Sleep to avoid hammering the API (reduced to 1 second for faster response)

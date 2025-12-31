@@ -214,6 +214,26 @@ def create_router_agent(llm):
         try:
             result = chain.invoke({"input": user_input})
 
+            # If classification is low confidence, ask for clarification instead of guessing
+            if result["confidence"] < 0.6:
+                clarification = (
+                    "Tengo dudas sobre lo que necesitas. "
+                    "Puedes decirme si quieres consultar datos (stock, ventas, precios) "
+                    "o registrar algo (venta, gasto, producto nuevo, agregar stock)?"
+                )
+                return {
+                    "intent": "AMBIGUOUS",
+                    "operation_type": result.get("operation_type", "UNKNOWN"),
+                    "confidence": result["confidence"],
+                    "missing_fields": [],
+                    "normalized_entities": result.get("normalized_entities", {}),
+                    "final_answer": clarification,
+                    "messages": [{
+                        "role": "assistant",
+                        "content": f"[Router] Confianza baja ({result['confidence']:.2f}). Pido aclaracion al usuario."
+                    }]
+                }
+
             return {
                 "intent": result["intent"],
                 "operation_type": result.get("operation_type", "UNKNOWN"),

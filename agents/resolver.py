@@ -114,12 +114,17 @@ def create_resolver_agent():
 
         try:
             resolved = {}
+            variant_hints = detect_variant_hints(user_input)
 
             # Resolve product references
             if "items" in entities:
                 resolved_items = []
                 for item in entities["items"]:
-                    resolved_item = resolve_product_reference(item)
+                    item_with_hint = apply_variant_hint(item, variant_hints)
+                    resolved_item = resolve_product_reference(item_with_hint)
+                    resolved_item = enforce_variant_alignment(
+                        item_with_hint, resolved_item, variant_hints
+                    )
 
                     # Convert unit_price (USD) to unit_price_cents if present
                     if "unit_price" in resolved_item:
@@ -254,7 +259,15 @@ def translate_product_terms(text: str) -> list[str]:
     Returns:
         List of variations to try
     """
-    variations = [text]
+    variations = []
+    seen = set()
+
+    def add_variation(variation: str):
+        if variation not in seen:
+            seen.add(variation)
+            variations.append(variation)
+
+    add_variation(text)
 
     # Translation mappings (both directions)
     translations = {
@@ -277,14 +290,84 @@ def translate_product_terms(text: str) -> list[str]:
         if word in translations:
             new_words = words.copy()
             new_words[i] = translations[word]
-            variations.append(" ".join(new_words))
+            add_variation(" ".join(new_words))
 
     # Also try just translating individual words without context
     for original, translation in translations.items():
         if original in text.lower():
-            variations.append(text.lower().replace(original, translation))
+            add_variation(text.lower().replace(original, translation))
 
-    return list(set(variations))  # Remove duplicates
+    return variations
+
+
+VARIANT_HINT_TOKENS = {
+    "dorada": ["dorad", "gold"],
+    "negra": ["negr", "black"],
+    "clasica": ["clasic"],
+}
+
+
+def detect_variant_hints(text: str) -> set[str]:
+    """Detect variant hints (dorada/negra/clasica) from the user text."""
+    normalized = normalize_text(text)
+    hints = set()
+    for variant, tokens in VARIANT_HINT_TOKENS.items():
+        if any(token in normalized for token in tokens):
+            hints.add(variant)
+    return hints
+
+
+def apply_variant_hint(item: Dict[str, Any], variant_hints: set[str]) -> Dict[str, Any]:
+    """
+    Append a hinted variant to the product_ref when the LLM missed it.
+    """
+    if not variant_hints:
+        return item
+
+    product_ref = item.get("product_ref") or item.get("sku")
+    if not product_ref:
+        return item
+
+    ref_normalized = normalize_text(product_ref)
+    for variant, tokens in VARIANT_HINT_TOKENS.items():
+        # Skip if the variant (or any of its tokens) already appears
+        if variant in ref_normalized or any(token in ref_normalized for token in tokens):
+            continue
+        if variant in variant_hints:
+            new_ref = f"{product_ref} {variant}".strip()
+            return {**item, "product_ref": new_ref}
+
+    return item
+
+
+def enforce_variant_alignment(
+    original_item: Dict[str, Any],
+    resolved_item: Dict[str, Any],
+    variant_hints: set[str],
+) -> Dict[str, Any]:
+    """
+    If a variant is hinted in the text but the resolved product disagrees,
+    retry resolution with the hinted variant appended.
+    """
+    if not variant_hints:
+        return resolved_item
+
+    resolved_name_norm = normalize_text(resolved_item.get("resolved_name", ""))
+    if "product_id" in resolved_item and any(
+        variant in resolved_name_norm for variant in variant_hints
+    ):
+        return resolved_item
+
+    base_ref = original_item.get("product_ref") or original_item.get("sku") or ""
+    for variant in variant_hints:
+        retry_ref = f"{base_ref} {variant}".strip()
+        retry_item = {**original_item, "product_ref": retry_ref}
+        retry_result = resolve_product_reference(retry_item)
+        retry_name_norm = normalize_text(retry_result.get("resolved_name", ""))
+        if "product_id" in retry_result and variant in retry_name_norm:
+            return retry_result
+
+    return resolved_item
 
 
 def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -363,7 +446,7 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                     if row:
                         break
 
-            # If still not found, try individual words
+            # If still not found, try individual words with variations (plural/singular)
             if not row:
                 # print(f"DEBUG: Multi-word search failed, trying individual words")
                 for word in words:
@@ -371,17 +454,22 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                     if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans"]:
                         continue
 
-                    # print(f"DEBUG: Searching for individual word: {word}")
-                    row = fetch_one(
-                        """
-                        SELECT id, sku, name FROM products
-                        WHERE REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o') LIKE ?
-                        LIMIT 1
-                        """,
-                        (f"%{normalize_text(word)}%",)
-                    )
+                    # Try all variations (singular/plural) of this word
+                    word_variations = generate_word_variations(word)
+                    for word_var in word_variations:
+                        # print(f"DEBUG: Searching for individual word variation: {word_var}")
+                        row = fetch_one(
+                            """
+                            SELECT id, sku, name FROM products
+                            WHERE REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o') LIKE ?
+                            LIMIT 1
+                            """,
+                            (f"%{normalize_text(word_var)}%",)
+                        )
+                        if row:
+                            # print(f"DEBUG: Found match with individual word: {row['name']}")
+                            break
                     if row:
-                        # print(f"DEBUG: Found match with individual word: {row['name']}")
                         break
 
             if row:

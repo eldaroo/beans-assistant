@@ -1,10 +1,21 @@
 """
 Fix Green API settings to enable incoming webhooks.
 """
+import os
 import requests
+from dotenv import load_dotenv
 
-ID_INSTANCE = "7105281616"
-API_TOKEN = "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c"
+# Load environment variables
+load_dotenv()
+
+ID_INSTANCE = os.getenv("GREEN_API_INSTANCE_ID")
+API_TOKEN = os.getenv("GREEN_API_TOKEN")
+
+if not ID_INSTANCE or not API_TOKEN:
+    print("[ERROR] Missing Green API credentials in .env file")
+    print("Please set GREEN_API_INSTANCE_ID and GREEN_API_TOKEN")
+    exit(1)
+
 BASE_URL = f"https://7105.api.greenapi.com/waInstance{ID_INSTANCE}"
 
 print("="*60)

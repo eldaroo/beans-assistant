@@ -13,7 +13,11 @@
       "Bash(fi)",
       "Bash(python:*)",
       "Bash(.venv/Scripts/python:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(if [ -f .gitignore ])",
+      "Bash(then cat .gitignore)",
+      "Bash(else echo \"No .gitignore file found\")",
+      "Bash(chmod:*)"
     ]
   }
 }

@@ -4,17 +4,26 @@ Integración completa del sistema multi-agente con WhatsApp usando Green API.
 
 ## 🚀 Inicio Rápido
 
-### 1. Asegúrate de que tu instancia esté autorizada
+### 1. Configura las credenciales en .env
 
-Ve a la consola de Green API y verifica que tu instancia **7105281616** esté autorizada y conectada a WhatsApp.
-
-### 2. Instala dependencias (si no las tienes)
+Asegúrate de que tu archivo `.env` contiene las credenciales de Green API:
 
 ```bash
-pip install requests
+GREEN_API_INSTANCE_ID=tu-instance-id
+GREEN_API_TOKEN=tu-api-token
 ```
 
-### 3. Inicia el servidor de WhatsApp
+### 2. Asegúrate de que tu instancia esté autorizada
+
+Ve a la consola de Green API y verifica que tu instancia esté autorizada y conectada a WhatsApp.
+
+### 3. Instala dependencias (si no las tienes)
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Inicia el servidor de WhatsApp
 
 ```bash
 python whatsapp_server.py
@@ -26,7 +35,7 @@ Verás algo como:
 ============================================================
 WhatsApp Server - Beans&Co Business Assistant
 ============================================================
-Instance ID: 7105281616
+Instance ID: [tu-instance-id]
 Starting message polling...
 Press Ctrl+C to stop
 ============================================================
@@ -120,12 +129,14 @@ Bot: "Registering sale of 1 item type(s) with status PAID...
 
 ## ⚙️ Configuración
 
-Las credenciales están en `whatsapp_server.py`:
+Las credenciales se cargan automáticamente desde el archivo `.env`:
 
-```python
-ID_INSTANCE = "7105281616"
-API_TOKEN = "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c"
+```bash
+GREEN_API_INSTANCE_ID=tu-instance-id
+GREEN_API_TOKEN=tu-api-token
 ```
+
+**Importante:** Nunca compartas tus credenciales en el código o en repositorios públicos. El archivo `.env` está excluido de git.
 
 ## 🛠️ Troubleshooting
 
@@ -154,10 +165,23 @@ API_TOKEN = "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c"
 
 Para verificar el estado de tu instancia:
 
+```bash
+python check_account.py
+```
+
+O programáticamente:
+
 ```python
+import os
+from dotenv import load_dotenv
 from whatsapp_client import GreenAPIWhatsAppClient
 
-client = GreenAPIWhatsAppClient("7105281616", "e44f5320e85d4222baff6089d5f192bc6363f86e55da4e3e8c")
+load_dotenv()
+
+client = GreenAPIWhatsAppClient(
+    os.getenv("GREEN_API_INSTANCE_ID"),
+    os.getenv("GREEN_API_TOKEN")
+)
 state = client.get_state_instance()
 print(state)
 ```

@@ -180,10 +180,12 @@ def create_final_answer_node():
         # If AMBIGUOUS, ask for clarification
         if state.get("intent") == "AMBIGUOUS":
             return {
-                "final_answer": "I'm not sure what you want to do. Can you please clarify? For example:\n"
-                "- 'Show me current stock' (analytics)\n"
-                "- 'Register a sale of 5 black bracelets' (operation)\n"
-                "- 'I spent $50 on shipping yesterday' (expense)"
+                "final_answer": "No estoy seguro de lo que necesitas. "
+                "Aclarame si quieres consultar datos (stock, ventas, precios) "
+                "o registrar algo (venta, gasto, producto nuevo, agregar stock).\n"
+                "- \"Muestrame el stock actual\" (consultar)\n"
+                "- \"Registra una venta de 5 pulseras\" (operacion)\n"
+                "- \"Gaste 50 en envios\" (gasto)"
             }
 
         # Default fallback
