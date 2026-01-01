@@ -125,9 +125,9 @@ INSERT INTO products (sku, name, description, unit_price_cents, unit_cost_cents)
 ('BC-BRACELET-GOLD', 'Pulsera de Granos de Café - Dorada', 'Pulsera artesanal de granos de café dorados', 1600, 500),
 ('BC-KEYCHAIN', 'Llavero de Granos de Café', 'Llavero artesanal hecho con granos de café', 800, 250);
 
--- Insert Initial Stock
+-- Insert Initial Stock (skip products with 0 stock)
 INSERT INTO stock_movements (product_id, movement_type, quantity, reason) VALUES
 (1, 'IN', 3, 'Stock inicial'),
 (2, 'IN', 97, 'Stock inicial'),
-(3, 'IN', 3, 'Stock inicial'),
-(4, 'IN', 0, 'Stock inicial');
+(3, 'IN', 3, 'Stock inicial');
+-- Product 4 (Llavero) starts with 0 stock, no movement needed
