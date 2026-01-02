@@ -55,6 +55,12 @@ tail -f whatsapp.log
 
 ## 🔄 Actualizar desde Git
 
+### Método Automático (Recomendado):
+```bash
+./update.sh
+```
+
+### Método Manual:
 ```bash
 # 1. Detener servidor
 ./stop_server.sh
@@ -65,12 +71,14 @@ git pull
 # 3. Activar entorno virtual
 source .venv/bin/activate
 
-# 4. Actualizar dependencias
+# 4. Actualizar dependencias (si requirements.txt cambió)
 pip install -r requirements.txt
 
 # 5. Reiniciar servidor
 ./start_server.sh
 ```
+
+**Ver guía completa:** [UPDATE_GUIDE.md](UPDATE_GUIDE.md)
 
 ## 🧪 Probar que funciona
 
