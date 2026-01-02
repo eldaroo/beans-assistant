@@ -31,12 +31,20 @@ FROM revenue_paid r, expenses_total e;
 -- =========================
 CREATE VIEW IF NOT EXISTS stock_current AS
 SELECT
-  product_id,
-  SUM(
-    CASE
-      WHEN movement_type IN ('IN', 'ADJUSTMENT') THEN quantity
-      WHEN movement_type = 'OUT' THEN -quantity
-    END
+  p.id AS product_id,
+  p.sku,
+  p.name,
+  COALESCE(
+    SUM(
+      CASE
+        WHEN sm.movement_type IN ('IN', 'ADJUSTMENT') THEN sm.quantity
+        WHEN sm.movement_type = 'OUT' THEN -sm.quantity
+        ELSE 0
+      END
+    ),
+    0
   ) AS stock_qty
-FROM stock_movements
-GROUP BY product_id;
+FROM products p
+LEFT JOIN stock_movements sm ON p.id = sm.product_id
+WHERE p.is_active = 1
+GROUP BY p.id, p.sku, p.name;

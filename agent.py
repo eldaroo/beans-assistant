@@ -131,15 +131,16 @@ stock_current:
 - sku (TEXT)
 - name (TEXT)
 - stock_qty (INTEGER)
+Note: Includes ALL active products, even those with 0 stock.
 
 profit_summary:
 - profit_usd (REAL)
 
 revenue_paid:
-- revenue_usd (REAL)
+- total_revenue_cents (INTEGER)
 
 expenses_total:
-- expenses_usd (REAL)
+- total_expenses_cents (INTEGER)
 
 Do NOT inspect sqlite_master to infer view schemas.
 These schemas are authoritative.
@@ -170,9 +171,38 @@ Respond with a concise, human-readable explanation of the result.
 # =========================
 
 def run_agent_query(agent, system_prompt: str, question: str):
+    """
+    Run agent query with error handling.
+
+    Args:
+        agent: SQL agent instance
+        system_prompt: System prompt template
+        question: User question
+
+    Returns:
+        Agent response string
+    """
     prompt = f"{system_prompt}\n\nQuestion: {question}"
-    result = agent.invoke(prompt)
-    return result["output"] if isinstance(result, dict) and "output" in result else result
+
+    try:
+        result = agent.invoke(prompt)
+        return result["output"] if isinstance(result, dict) and "output" in result else result
+    except Exception as e:
+        # Log the error for debugging
+        print(f"\n[ERROR] Agent execution failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+        # Return a user-friendly error message
+        error_msg = str(e)
+        if "No hay suficiente stock" in error_msg:
+            return f"⚠️ {error_msg}\n\nPor favor verifica el inventario disponible antes de registrar la venta."
+        elif "Unknown product" in error_msg or "no encontrado" in error_msg:
+            return f"⚠️ {error_msg}\n\nPor favor verifica que el producto exista en el catálogo."
+        elif "output parsing error" in error_msg.lower() or "I don't know" in error_msg:
+            return "⚠️ No pude entender tu pregunta.\n\nPor favor reformula tu pregunta sobre el negocio (ventas, stock, productos, gastos, ganancias, etc.)"
+        else:
+            return f"⚠️ Lo siento, ocurrió un error al procesar tu solicitud:\n{error_msg}\n\nPor favor intenta de nuevo o reformula tu pregunta."
 
 
 def interactive_console(agent, system_prompt: str):

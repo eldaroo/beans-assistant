@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from whatsapp_client import GreenAPIWhatsAppClient, format_message_for_whatsapp
 from graph import create_business_agent_graph
+from audio_transcriber import transcribe_audio_from_url
 
 # Load environment variables
 load_dotenv()
@@ -137,10 +138,24 @@ def process_message_with_agent(user_message: str, chat_id: str = None) -> str:
             return "Lo siento, no pude procesar tu solicitud. ¿Podrías reformularla?"
 
     except Exception as e:
-        print(f"Error processing message: {e}")
+        # Log the error for debugging
+        print(f"\n[ERROR] Agent processing failed: {str(e)}")
         import traceback
         traceback.print_exc()
-        return f"Disculpa, hubo un error procesando tu mensaje. Por favor intenta de nuevo."
+
+        # Return user-friendly error messages based on error type
+        error_msg = str(e)
+
+        if "No hay suficiente stock" in error_msg:
+            return f"⚠️ {error_msg}\n\nPor favor verifica el inventario disponible antes de registrar la venta."
+        elif "Unknown product" in error_msg or "no encontrado" in error_msg:
+            return f"⚠️ {error_msg}\n\nPor favor verifica que el producto exista en el catálogo."
+        elif "duplicate" in error_msg.lower() or "unique constraint" in error_msg.lower():
+            return "⚠️ Este elemento ya existe en el sistema. Por favor verifica los datos."
+        elif "output parsing error" in error_msg.lower() or "I don't know" in error_msg:
+            return "⚠️ No pude entender tu mensaje.\n\nPor favor reformula tu pregunta sobre el negocio (ventas, stock, productos, gastos, ganancias, etc.)"
+        else:
+            return f"⚠️ Disculpa, hubo un error procesando tu mensaje:\n{error_msg}\n\nPor favor intenta de nuevo o reformula tu pregunta."
 
 
 def run_whatsapp_server():
@@ -187,13 +202,89 @@ def run_whatsapp_server():
                     sender_name = message_data["sender_name"]
                     sender = message_data["sender"]
                     chat_id = message_data["chat_id"]
+                    message_type = message_data.get("message_type", "text")
                     user_message = message_data["message"]
 
                     print(f"\n[{message_count}] [MSG] From {sender_name} ({sender})")
-                    print(f"    [IN] \"{user_message}\"")
+                    print(f"    [TYPE] {message_type}")
 
                     # Track timing
                     start_time = time.time()
+
+                    # Handle audio messages
+                    if message_type == "audio":
+                        audio_url = message_data.get("audio_url")
+
+                        print(f"\n{'='*60}")
+                        print(f"    [AUDIO] Audio message detected")
+                        print(f"    [AUDIO] URL present: {bool(audio_url)}")
+                        if audio_url:
+                            print(f"    [AUDIO] URL: {audio_url[:100]}...")
+                        else:
+                            print(f"    [AUDIO ERROR] No audio URL provided!")
+                            print(f"    [AUDIO] Full message_data: {message_data}")
+                        print(f"{'='*60}\n")
+
+                        if not audio_url:
+                            print(f"    [ERROR] Cannot transcribe - no audio URL")
+                            client.send_message(
+                                chat_id,
+                                "Lo siento, no pude obtener el archivo de audio. Por favor intenta de nuevo."
+                            )
+                            receipt_id = notification.get("receiptId")
+                            if receipt_id:
+                                client.delete_notification(receipt_id)
+                            continue
+
+                        print(f"    [AUDIO] Starting transcription process...")
+                        transcription_start = time.time()
+
+                        try:
+                            transcription = transcribe_audio_from_url(audio_url)
+                            transcription_time = time.time() - transcription_start
+
+                            if transcription:
+                                user_message = transcription
+                                print(f"\n{'='*60}")
+                                print(f"    [AUDIO SUCCESS] Transcription completed in {transcription_time:.2f}s")
+                                print(f"    [TRANSCRIPTION] \"{user_message}\"")
+                                print(f"{'='*60}\n")
+                            else:
+                                print(f"\n{'='*60}")
+                                print(f"    [AUDIO ERROR] Transcription returned None")
+                                print(f"    [AUDIO ERROR] Time elapsed: {transcription_time:.2f}s")
+                                print(f"{'='*60}\n")
+
+                                # Send error message to user
+                                client.send_message(
+                                    chat_id,
+                                    "Lo siento, no pude transcribir el mensaje de audio. Por favor intenta de nuevo o envía un mensaje de texto."
+                                )
+                                # Delete notification and continue
+                                receipt_id = notification.get("receiptId")
+                                if receipt_id:
+                                    client.delete_notification(receipt_id)
+                                continue
+
+                        except Exception as e:
+                            print(f"\n{'='*60}")
+                            print(f"    [AUDIO ERROR] Exception during transcription: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            print(f"{'='*60}\n")
+
+                            # Send error message to user
+                            client.send_message(
+                                chat_id,
+                                "Lo siento, ocurrió un error al procesar el audio. Por favor intenta de nuevo."
+                            )
+                            # Delete notification and continue
+                            receipt_id = notification.get("receiptId")
+                            if receipt_id:
+                                client.delete_notification(receipt_id)
+                            continue
+                    else:
+                        print(f"    [IN] \"{user_message}\"")
 
                     print(f"    [AGENT] Processing...")
 

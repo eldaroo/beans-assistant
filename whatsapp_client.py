@@ -128,26 +128,60 @@ class GreenAPIWhatsAppClient:
             notification: Notification from receiveNotification
 
         Returns:
-            Dict with 'chat_id', 'sender', 'message' or None
+            Dict with 'chat_id', 'sender', 'message', 'message_type', 'audio_url' or None
         """
         body = notification.get("body", {})
         type_webhook = body.get("typeWebhook")
 
-        # Only process incoming text messages
+        print(f"[WA-CLIENT] Processing notification:")
+        print(f"[WA-CLIENT]   typeWebhook: {type_webhook}")
+
+        # Only process incoming messages
         if type_webhook == "incomingMessageReceived":
             message_data = body.get("messageData", {})
             type_message = message_data.get("typeMessage")
+            sender_data = body.get("senderData", {})
 
+            print(f"[WA-CLIENT]   typeMessage: {type_message}")
+
+            # Process text messages
             if type_message == "textMessage":
                 text_data = message_data.get("textMessageData", {})
-                sender_data = body.get("senderData", {})
+                print(f"[WA-CLIENT]   ✓ Text message detected")
 
                 return {
                     "chat_id": sender_data.get("chatId", ""),
                     "sender": sender_data.get("sender", ""),
                     "sender_name": sender_data.get("senderName", "Unknown"),
-                    "message": text_data.get("textMessage", "")
+                    "message": text_data.get("textMessage", ""),
+                    "message_type": "text"
                 }
+
+            # Process audio messages
+            elif type_message == "audioMessage":
+                # Get download URL for audio file
+                download_url = message_data.get("downloadUrl", "")
+
+                print(f"[WA-CLIENT]   ✓ Audio message detected")
+                print(f"[WA-CLIENT]   Download URL: {download_url[:100] if download_url else 'MISSING'}...")
+
+                if not download_url:
+                    print(f"[WA-CLIENT ERROR] Audio message has no downloadUrl!")
+                    print(f"[WA-CLIENT] Full message_data: {message_data}")
+
+                return {
+                    "chat_id": sender_data.get("chatId", ""),
+                    "sender": sender_data.get("sender", ""),
+                    "sender_name": sender_data.get("senderName", "Unknown"),
+                    "message": "[Audio message]",  # Placeholder, will be transcribed
+                    "message_type": "audio",
+                    "audio_url": download_url
+                }
+            else:
+                print(f"[WA-CLIENT]   ⚠ Unsupported message type: {type_message}")
+
+        else:
+            print(f"[WA-CLIENT]   ⚠ Not an incoming message, skipping")
 
         return None
 

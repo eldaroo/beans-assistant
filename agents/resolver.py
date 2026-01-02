@@ -446,31 +446,43 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                     if row:
                         break
 
-            # If still not found, try individual words with variations (plural/singular)
+            # If still not found, try individual words BUT rank by match count
             if not row:
-                # print(f"DEBUG: Multi-word search failed, trying individual words")
-                for word in words:
-                    # Skip common words
-                    if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans"]:
-                        continue
+                # print(f"DEBUG: Multi-word search failed, trying individual words with ranking")
 
-                    # Try all variations (singular/plural) of this word
-                    word_variations = generate_word_variations(word)
-                    for word_var in word_variations:
-                        # print(f"DEBUG: Searching for individual word variation: {word_var}")
-                        row = fetch_one(
-                            """
-                            SELECT id, sku, name FROM products
-                            WHERE REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o') LIKE ?
-                            LIMIT 1
-                            """,
-                            (f"%{normalize_text(word_var)}%",)
-                        )
-                        if row:
-                            # print(f"DEBUG: Found match with individual word: {row['name']}")
-                            break
-                    if row:
-                        break
+                # Get all products
+                all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = 1")
+
+                # Score each product by how many words match
+                best_match = None
+                best_score = 0
+
+                for product in all_products:
+                    product_name_norm = normalize_text(product["name"])
+                    score = 0
+
+                    # Count how many input words appear in this product name
+                    for word in words:
+                        # Skip common words
+                        if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans"]:
+                            continue
+
+                        # Check word variations (singular/plural)
+                        word_variations = generate_word_variations(word)
+                        for word_var in word_variations:
+                            if normalize_text(word_var) in product_name_norm:
+                                score += 1
+                                break  # Don't double-count the same word
+
+                    # Update best match if this product scores higher
+                    if score > best_score:
+                        best_score = score
+                        best_match = product
+
+                # Only accept if we matched at least one meaningful word
+                if best_match and best_score > 0:
+                    row = best_match
+                    # print(f"DEBUG: Best match with score {best_score}: {row['name']}")
 
             if row:
                 break
