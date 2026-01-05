@@ -21,7 +21,7 @@ from agents import (
     route_after_write,
     route_after_resolver,
 )
-from llm import get_llm
+from llm import get_llm, get_llm_cheap
 
 
 def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
@@ -34,14 +34,15 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     Returns:
         Compiled LangGraph workflow
     """
-    # Initialize LLM
-    llm = get_llm()
+    # Initialize LLMs
+    llm = get_llm()  # Main LLM for router and read agent
+    llm_cheap = get_llm_cheap()  # Cheap LLM for resolver disambiguation
 
     # Create specialized agents
     router = create_router_agent(llm)
     read_agent = create_read_agent(llm)  # Custom read agent (no db_path needed)
     write_agent = create_write_agent()
-    resolver = create_resolver_agent()
+    resolver = create_resolver_agent(llm_cheap)  # Use cheap LLM for product disambiguation
 
     # Define the graph
     workflow = StateGraph(AgentState)

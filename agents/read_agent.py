@@ -113,14 +113,33 @@ Extract entities:
   * If user says "última semana" or "last week" → "semana"
   * If user says "último mes" or "last month" → "mes"
   * If user says "hoy" or "today" → "hoy"
+  * IMPORTANT: If user says "todos", "all", "totales", "total" → "todos" (means ALL, no time filter)
+  * If NO time reference is mentioned → leave time_period EMPTY (don't infer a default!)
 - specific_values: Numbers, amounts mentioned
 
-IMPORTANT: For time_period, extract the Spanish or English phrase as-is.
+CRITICAL: Only extract time_period if the user EXPLICITLY mentions a time reference.
+Do NOT infer or assume a default time period.
 
 Examples:
 - "gastos de la última semana" → time_period: "última semana"
 - "sales last month" → time_period: "last month"
 - "gastos de hoy" → time_period: "hoy"
+- "egresos totales?" → time_period: "todos" (or empty)
+- "mostrame todos los gastos" → time_period: "todos"
+- "y mis gastos?" → time_period: "" (empty, no time reference)
+- "cuánto gasté?" → time_period: "" (empty, no time reference)
+
+CHAIN-OF-THOUGHT REASONING:
+
+Before responding, think step-by-step:
+1. What is the user asking about? (stock, revenue, profit, sales, expenses, or product info?)
+2. Are there specific products mentioned, or is this a general query?
+3. Is there an explicit time reference? (semana, mes, hoy, todos, etc.)
+4. If there's a time reference, what exact string should I extract?
+5. If there's NO time reference, am I leaving time_period empty (not inferring a default)?
+6. What level of confidence do I have in this classification?
+
+Include your reasoning in the 'reasoning' field to explain your decision.
 
 Output valid JSON only."""),
     ("user", "{input}")
@@ -233,19 +252,25 @@ def generate_expense_query(entities: dict) -> str:
     if time_period:
         # Parse time period references
         time_ref = str(time_period).lower() if time_period else ""
-        today = datetime.now().date()
 
-        if "semana" in time_ref or "week" in time_ref:
-            # Last 7 days
-            start_date = (today - timedelta(days=7)).isoformat()
-            where_clause = f"WHERE expense_date >= '{start_date}'"
-        elif "mes" in time_ref or "month" in time_ref:
-            # Last 30 days
-            start_date = (today - timedelta(days=30)).isoformat()
-            where_clause = f"WHERE expense_date >= '{start_date}'"
-        elif "hoy" in time_ref or "today" in time_ref:
-            # Today
-            where_clause = f"WHERE expense_date = '{today.isoformat()}'"
+        # IMPORTANT: If user explicitly asks for "all" or "todos", don't filter by time
+        if "todos" in time_ref or "all" in time_ref or "total" in time_ref:
+            # No WHERE clause - show all expenses
+            where_clause = ""
+        else:
+            today = datetime.now().date()
+
+            if "semana" in time_ref or "week" in time_ref:
+                # Last 7 days
+                start_date = (today - timedelta(days=7)).isoformat()
+                where_clause = f"WHERE expense_date >= '{start_date}'"
+            elif "mes" in time_ref or "month" in time_ref:
+                # Last 30 days
+                start_date = (today - timedelta(days=30)).isoformat()
+                where_clause = f"WHERE expense_date >= '{start_date}'"
+            elif "hoy" in time_ref or "today" in time_ref:
+                # Today
+                where_clause = f"WHERE expense_date = '{today.isoformat()}'"
 
     return f"""
     SELECT
@@ -281,8 +306,8 @@ def format_stock_result(rows) -> str:
         return "No hay productos en el inventario."
 
     # Filter only bracelets (pulseras) if that's what was asked
-    # Check if all results are bracelets
-    bracelet_rows = [r for r in rows if "Pulsera" in r["name"]]
+    # Check if all results are bracelets (case-insensitive)
+    bracelet_rows = [r for r in rows if "pulsera" in r["name"].lower() or "bracelet" in r["name"].lower()]
 
     if bracelet_rows and len(bracelet_rows) < len(rows):
         # User probably asked about bracelets specifically
@@ -355,6 +380,15 @@ def format_sales_result(rows) -> str:
 def format_expense_result(rows) -> str:
     """Format expense query results."""
     if not rows:
+        # Check if this might be a filtering issue vs actually no expenses
+        from database import fetch_one
+        total_expenses = fetch_one("SELECT COUNT(*) as count FROM expenses")
+        if total_expenses and total_expenses['count'] > 0:
+            return (
+                f"No encontré gastos en el período consultado, "
+                f"pero hay {total_expenses['count']} gastos en total.\n\n"
+                "¿Querés ver todos los gastos? Decime 'mostrame todos los gastos'"
+            )
         return "No hay gastos registrados."
 
     lines = ["*💸 Gastos:*\n"]
@@ -499,6 +533,12 @@ Por favor intenta de nuevo con una pregunta más clara.""",
 
             # 3. Execute SQL
             rows = fetch_all(sql_query)
+
+            # DEBUG: Log query and results for debugging
+            print(f"[DEBUG] Query Type: {query_type}")
+            print(f"[DEBUG] Entities: {entities}")
+            print(f"[DEBUG] SQL: {sql_query[:200]}...")
+            print(f"[DEBUG] Rows returned: {len(rows) if rows else 0}")
 
             # 4. Format results based on query type
             formatters = {

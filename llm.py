@@ -45,3 +45,25 @@ def get_llm() -> ChatGoogleGenerativeAI:
         temperature=temperature,
         google_api_key=api_key,
     )
+
+
+def get_llm_cheap() -> ChatGoogleGenerativeAI:
+    """
+    Get a cheaper/faster LLM for simple tasks like disambiguation.
+    Uses gemini-1.5-flash-8b (cheapest) or falls back to flash-exp.
+
+    Returns:
+        ChatGoogleGenerativeAI configured for cheap operations
+    """
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY (or OPENAI_API_KEY) is not set")
+
+    # Use the cheapest model available
+    model = "gemini-1.5-flash-8b"  # Cheapest option
+
+    return ChatGoogleGenerativeAI(
+        model=model,
+        temperature=0.1,  # Low temperature for disambiguation
+        google_api_key=api_key,
+    )

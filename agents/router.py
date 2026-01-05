@@ -20,7 +20,7 @@ from .state import AgentState
 class IntentClassification(BaseModel):
     """Structured output for intent classification."""
     intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, or AMBIGUOUS")
-    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, or UNKNOWN")
+    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, or UNKNOWN")
     confidence: float = Field(description="Confidence score between 0 and 1")
     missing_fields: list[str] = Field(description="List of missing required fields")
     normalized_entities: dict = Field(description="Extracted entities with normalized values")
@@ -64,6 +64,9 @@ INTENT CATEGORIES:
        - IMPORTANT: Only ADD_STOCK if adding to EXISTING product, not creating new one
      * CANCEL_SALE: "cancela la venta", "anula la última venta", "borra esa venta"
      * CANCEL_EXPENSE: "cancela el gasto", "anula ese gasto", "borra el último gasto"
+     * CANCEL_STOCK: "cancela el stock", "anula el stock", "revertí el stock"
+     * CANCEL_LAST_OPERATION: "anula la última operación", "cancela lo último", "borra lo último que hice"
+       - IMPORTANT: Use this when user says "última operación" without specifying if it's sale/expense/stock
    - Examples:
      * "registrame una venta de 20 pulseras negras"
      * "gasté 30 dólares en envíos"
@@ -114,7 +117,10 @@ For WRITE_OPERATION, identify if required fields are missing:
 - REGISTER_SALE: needs items (product_ref + quantity)
 - REGISTER_EXPENSE: needs amount and description
 - REGISTER_PRODUCT: needs name and unit_price (sku and cost are auto-generated/optional)
-- ADD_STOCK: needs product_ref and quantity
+- ADD_STOCK: needs items (product_ref + quantity) OR single product_ref and quantity
+  * Can handle MULTIPLE products in one message using items array
+  * Example: "entraron 400 clasicas y 200 doradas" → {{"items": [{{"product_ref": "clasicas", "quantity": 400}}, {{"product_ref": "doradas", "quantity": 200}}]}}
+  * Example: "agregar 50 pulseras negras" → {{"product_ref": "pulseras negras", "quantity": 50}}
 - CANCEL_SALE: needs target ("last" or sale_id) - extract "last", "última", "ese", "esa" as target: "last"
 - CANCEL_EXPENSE: needs target ("last" or expense_id) - extract "last", "última", "último", "ese", "esa" as target: "last"
 

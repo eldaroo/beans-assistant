@@ -42,31 +42,44 @@ def fetch_all(query, params=()):
 # =========================
 
 def register_product(data: dict):
-    with get_conn() as conn:
-        conn.execute(
-            """
-            INSERT INTO products (
-              sku,
-              name,
-              description,
-              unit_price_cents,
-              unit_cost_cents
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                data["sku"],
-                data["name"],
-                data.get("description"),
-                data["unit_price_cents"],
-                data["unit_cost_cents"],
-            ),
-        )
+    import sqlite3
 
-    return {
-        "status": "ok",
-        "sku": data["sku"],
-    }
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO products (
+                  sku,
+                  name,
+                  description,
+                  unit_price_cents,
+                  unit_cost_cents
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    data["sku"],
+                    data["name"],
+                    data.get("description"),
+                    data["unit_price_cents"],
+                    data["unit_cost_cents"],
+                ),
+            )
+
+        return {
+            "status": "ok",
+            "sku": data["sku"],
+        }
+    except sqlite3.IntegrityError as e:
+        error_msg = str(e)
+        if "UNIQUE constraint failed: products.sku" in error_msg:
+            # This should never happen if SKU deduplication works correctly
+            print(f"[ERROR] UNIQUE constraint failed for SKU: {data['sku']}")
+            print(f"[ERROR] Product name: {data['name']}")
+            print(f"[ERROR] This indicates SKU deduplication didn't work!")
+            raise ValueError(f"El SKU '{data['sku']}' ya existe. Por favor reportá este error.")
+        else:
+            raise  # Re-raise if it's a different integrity error
 
 def add_stock(data: dict):
     """
@@ -259,7 +272,8 @@ def register_sale(data):
             })
 
         # 4. Insert sale
-        sale_number = f"S-{int(time.time())}"
+        # Use time_ns for uniqueness (nanoseconds instead of seconds)
+        sale_number = f"S-{int(time.time_ns())}"
 
         sale_id = conn.execute(
             """
@@ -303,8 +317,8 @@ def register_sale(data):
         "status": "ok",
         "sale_id": sale_id,
         "total_usd": total_cents / 100.0,
-        "revenue_usd": revenue["total_revenue_cents"] / 100.0 if revenue else None,
-        "profit_usd": profit["profit_usd"] if profit else None,
+        "revenue_usd": revenue["total_revenue_cents"] / 100.0 if revenue and revenue["total_revenue_cents"] is not None else 0.0,
+        "profit_usd": profit["profit_usd"] if profit and profit["profit_usd"] is not None else 0.0,
     }
 
 
@@ -334,6 +348,63 @@ def get_last_expense():
         LIMIT 1
         """
     )
+
+
+def get_last_stock_movement():
+    """Get the most recent stock movement (IN or ADJUSTMENT only, not sales)."""
+    return fetch_one(
+        """
+        SELECT sm.id, sm.product_id, sm.quantity, sm.reason, sm.movement_type,
+               sm.created_at, p.name as product_name, p.sku
+        FROM stock_movements sm
+        JOIN products p ON sm.product_id = p.id
+        WHERE sm.movement_type IN ('IN', 'ADJUSTMENT')
+        ORDER BY sm.created_at DESC
+        LIMIT 1
+        """
+    )
+
+
+def get_last_operation():
+    """
+    Get the most recent operation (sale, expense, or stock movement).
+
+    Returns:
+        Dict with 'type' (SALE/EXPENSE/STOCK) and 'data' (the operation details)
+    """
+    last_sale = get_last_sale()
+    last_expense = get_last_expense()
+    last_stock = get_last_stock_movement()
+
+    operations = []
+
+    if last_sale:
+        operations.append({
+            "type": "SALE",
+            "timestamp": last_sale["created_at"],
+            "data": last_sale
+        })
+
+    if last_expense:
+        operations.append({
+            "type": "EXPENSE",
+            "timestamp": last_expense["created_at"],
+            "data": last_expense
+        })
+
+    if last_stock:
+        operations.append({
+            "type": "STOCK",
+            "timestamp": last_stock["created_at"],
+            "data": last_stock
+        })
+
+    if not operations:
+        return None
+
+    # Sort by timestamp and get the most recent
+    operations.sort(key=lambda x: x["timestamp"], reverse=True)
+    return operations[0]
 
 
 def cancel_sale(sale_id: int):
@@ -393,8 +464,8 @@ def cancel_sale(sale_id: int):
         "status": "ok",
         "sale_number": sale["sale_number"],
         "cancelled_amount": sale["total_amount_cents"] / 100.0,
-        "revenue_usd": revenue["total_revenue_cents"] / 100.0 if revenue else 0,
-        "profit_usd": profit["profit_usd"] if profit else 0,
+        "revenue_usd": revenue["total_revenue_cents"] / 100.0 if revenue and revenue["total_revenue_cents"] is not None else 0.0,
+        "profit_usd": profit["profit_usd"] if profit and profit["profit_usd"] is not None else 0.0,
     }
 
 
@@ -429,4 +500,63 @@ def cancel_expense(expense_id: int):
         "description": expense["description"],
         "cancelled_amount": expense["amount_cents"] / 100.0,
         "profit_usd": profit["profit_usd"] if profit else 0,
+    }
+
+
+def cancel_stock_movement(movement_id: int):
+    """
+    Cancel a stock movement by creating an inverse movement.
+
+    Args:
+        movement_id: ID of the stock movement to cancel
+
+    Returns:
+        Dict with cancellation result
+    """
+    with get_conn() as conn:
+        # Get movement details
+        movement = conn.execute(
+            """
+            SELECT sm.id, sm.product_id, sm.quantity, sm.reason, sm.movement_type,
+                   p.name as product_name, p.sku
+            FROM stock_movements sm
+            JOIN products p ON sm.product_id = p.id
+            WHERE sm.id = ?
+            """,
+            (movement_id,)
+        ).fetchone()
+
+        if not movement:
+            raise ValueError(f"Movimiento de stock con ID {movement_id} no encontrado")
+
+        # Can only cancel IN or ADJUSTMENT movements (not sales)
+        if movement["movement_type"] not in ["IN", "ADJUSTMENT"]:
+            raise ValueError(f"Solo se pueden cancelar movimientos de tipo IN o ADJUSTMENT")
+
+        # Create inverse movement (OUT with negative quantity to cancel)
+        conn.execute(
+            """
+            INSERT INTO stock_movements
+            (product_id, movement_type, quantity, reason, created_at)
+            VALUES (?, 'ADJUSTMENT', ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                movement["product_id"],
+                -movement["quantity"],  # Negative to reverse
+                f"Cancelación de: {movement['reason']}"
+            )
+        )
+
+        # Get updated stock
+        stock = conn.execute(
+            "SELECT stock_qty FROM stock_current WHERE product_id = ?",
+            (movement["product_id"],)
+        ).fetchone()
+
+    return {
+        "status": "ok",
+        "product_name": movement["product_name"],
+        "sku": movement["sku"],
+        "cancelled_quantity": movement["quantity"],
+        "current_stock": stock["stock_qty"] if stock else 0,
     }

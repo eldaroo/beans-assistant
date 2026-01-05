@@ -87,12 +87,17 @@ def extract_from_context(user_input: str, field_name: str) -> Any:
     return None
 
 
-def create_resolver_agent():
+def create_resolver_agent(llm=None):
     """
     Create the resolver agent that normalizes entities.
 
     This agent uses simple database lookups and rule-based logic
     to resolve human references to concrete values.
+
+    Optionally uses LLM (Haiku) for disambiguation when needed.
+
+    Args:
+        llm: Optional language model for ambiguous cases (Haiku recommended)
 
     Returns:
         Agent function that resolves entities
@@ -121,7 +126,13 @@ def create_resolver_agent():
                 resolved_items = []
                 for item in entities["items"]:
                     item_with_hint = apply_variant_hint(item, variant_hints)
-                    resolved_item = resolve_product_reference(item_with_hint)
+
+                    # Use hybrid resolution if LLM is available
+                    if llm:
+                        resolved_item = resolve_product_reference_hybrid(item_with_hint, llm)
+                    else:
+                        resolved_item = resolve_product_reference(item_with_hint)
+
                     resolved_item = enforce_variant_alignment(
                         item_with_hint, resolved_item, variant_hints
                     )
@@ -143,7 +154,12 @@ def create_resolver_agent():
                 temp_item = {
                     "product_ref": entities.get("product_ref") or entities.get("sku")
                 }
-                resolved_item = resolve_product_reference(temp_item)
+
+                # Use hybrid resolution if LLM is available
+                if llm:
+                    resolved_item = resolve_product_reference_hybrid(temp_item, llm)
+                else:
+                    resolved_item = resolve_product_reference(temp_item)
 
                 # Extract product_id from resolved item
                 if "product_id" in resolved_item:
@@ -320,6 +336,10 @@ def detect_variant_hints(text: str) -> set[str]:
 def apply_variant_hint(item: Dict[str, Any], variant_hints: set[str]) -> Dict[str, Any]:
     """
     Append a hinted variant to the product_ref when the LLM missed it.
+
+    IMPORTANT: Only applies a variant hint if the product_ref doesn't already
+    have ANY variant specified. This prevents adding multiple variants to a
+    single item when processing multi-item commands like "400 clasicas y 200 doradas".
     """
     if not variant_hints:
         return item
@@ -329,10 +349,19 @@ def apply_variant_hint(item: Dict[str, Any], variant_hints: set[str]) -> Dict[st
         return item
 
     ref_normalized = normalize_text(product_ref)
+
+    # Check if product_ref already has ANY variant
+    has_any_variant = any(
+        variant in ref_normalized or any(token in ref_normalized for token in tokens)
+        for variant, tokens in VARIANT_HINT_TOKENS.items()
+    )
+
+    # If it already has a variant, don't add another one
+    if has_any_variant:
+        return item
+
+    # If no variant found, apply the first matching hint
     for variant, tokens in VARIANT_HINT_TOKENS.items():
-        # Skip if the variant (or any of its tokens) already appears
-        if variant in ref_normalized or any(token in ref_normalized for token in tokens):
-            continue
         if variant in variant_hints:
             new_ref = f"{product_ref} {variant}".strip()
             return {**item, "product_ref": new_ref}
@@ -456,6 +485,12 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                 # Score each product by how many words match
                 best_match = None
                 best_score = 0
+                total_meaningful_words = 0
+
+                # Count how many meaningful words the user provided
+                for word in words:
+                    if word not in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans", "pulsera", "pulseras", "bracelet"]:
+                        total_meaningful_words += 1
 
                 for product in all_products:
                     product_name_norm = normalize_text(product["name"])
@@ -479,10 +514,17 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                         best_score = score
                         best_match = product
 
-                # Only accept if we matched at least one meaningful word
+                # CRITICAL SAFETY CHECK: Only accept match if we matched ALL meaningful words
+                # If user said specific descriptors (like "arcoiris"), we MUST match them
+                # Don't accept matches based only on generic words like "pulsera"
                 if best_match and best_score > 0:
-                    row = best_match
-                    # print(f"DEBUG: Best match with score {best_score}: {row['name']}")
+                    # Require that ALL meaningful words were matched
+                    if total_meaningful_words > 0 and best_score >= total_meaningful_words:
+                        row = best_match
+                        # print(f"DEBUG: Best match with score {best_score}/{total_meaningful_words}: {row['name']}")
+                    # If user only said generic words (total_meaningful_words == 0), DON'T guess
+                    # This forces users to be specific when there are multiple products
+                    # Otherwise: Don't match - user needs to be more specific
 
             if row:
                 break
@@ -496,10 +538,240 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # If still not found, return original with error flag
-    return {
-        **item,
-        "resolution_error": f"Product not found: {product_ref}. Available products: BC-BRACELET-BLACK (Pulsera Negra), BC-BRACELET-CLASSIC (Pulsera Clásica), BC-BRACELET-GOLD (Pulsera Dorada), BC-KEYCHAIN (Llavero)"
-    }
+    # Get all active products to show in error message
+    all_products = fetch_all("SELECT sku, name FROM products WHERE is_active = 1 ORDER BY name")
+    available_list = ", ".join([f"{p['name']}" for p in all_products])
+
+    # Check if user input was too generic (no specific variant/color mentioned)
+    normalized_ref = normalize_text(product_ref)
+    if any(generic in normalized_ref for generic in ["pulsera", "bracelet", "llavero", "keychain"]):
+        # User said something generic - tell them to be more specific
+        return {
+            **item,
+            "resolution_error": f"Por favor especificá cuál producto querés. Productos disponibles: {available_list}"
+        }
+    else:
+        # User said something specific that doesn't exist
+        return {
+            **item,
+            "resolution_error": f"Producto '{product_ref}' no encontrado. Productos disponibles: {available_list}"
+        }
+
+
+def resolve_product_reference_hybrid(item: Dict[str, Any], llm) -> Dict[str, Any]:
+    """
+    Hybrid product resolution using deterministic matching + LLM fallback.
+
+    Strategy:
+    1. If exact match or high-confidence (>90%) → use deterministic (FAST, FREE)
+    2. If no match or low confidence → use LLM Haiku (SMART, CHEAP)
+    3. If multiple similar candidates → use LLM to disambiguate
+
+    Args:
+        item: Item dict with product_ref or sku
+        llm: Language model instance (Haiku)
+
+    Returns:
+        Item dict with product_id resolved
+    """
+    # If already has product_id, return as-is
+    if "product_id" in item:
+        return item
+
+    # Get product reference
+    product_ref = item.get("product_ref") or item.get("sku")
+    if not product_ref:
+        return item
+
+    # Get all candidates with scores
+    candidates = fuzzy_match_with_scores(product_ref)
+
+    # Decision logic based on confidence
+    if len(candidates) == 0:
+        # No matches found → fallback to original error handling
+        print(f"[Hybrid Resolver] No candidates found for '{product_ref}'")
+        return resolve_product_reference(item)  # Use original function for error message
+
+    elif len(candidates) == 1 and candidates[0]["score"] >= 0.9:
+        # Single high-confidence match → deterministic (FAST, FREE)
+        print(f"[Hybrid Resolver] High confidence match: {candidates[0]['name']} ({candidates[0]['score']:.0%})")
+        return {
+            **item,
+            "product_id": candidates[0]["id"],
+            "resolved_sku": candidates[0]["sku"],
+            "resolved_name": candidates[0]["name"]
+        }
+
+    elif len(candidates) == 1 and candidates[0]["score"] < 0.9:
+        # Single low-confidence match → use LLM to verify
+        print(f"[Hybrid Resolver] Low confidence ({candidates[0]['score']:.0%}), asking LLM to verify")
+        result = llm_disambiguate_product(product_ref, candidates, llm)
+        return {**item, **result}
+
+    else:
+        # Multiple candidates → use LLM to disambiguate
+        top_scores = [c["score"] for c in candidates[:3]]
+        print(f"[Hybrid Resolver] Multiple candidates (top scores: {top_scores}), asking LLM")
+        result = llm_disambiguate_product(product_ref, candidates, llm)
+        return {**item, **result}
+
+
+def fuzzy_match_with_scores(product_ref: str) -> list:
+    """
+    Find all matching products with confidence scores.
+
+    Args:
+        product_ref: Product reference to match
+
+    Returns:
+        List of dicts with keys: id, sku, name, score (0-1)
+    """
+    # Try exact SKU match first
+    row = fetch_one(
+        "SELECT id, sku, name FROM products WHERE sku = ?",
+        (product_ref,)
+    )
+
+    if row:
+        return [{
+            "id": row["id"],
+            "sku": row["sku"],
+            "name": row["name"],
+            "score": 1.0  # Exact SKU match = 100% confidence
+        }]
+
+    # Get all active products for fuzzy matching
+    all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = 1")
+
+    # Get variations with translations
+    variations = translate_product_terms(product_ref)
+
+    candidates = []
+
+    for variation in variations:
+        words = variation.lower().split()
+        total_meaningful_words = sum(
+            1 for word in words
+            if word not in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans", "pulsera", "pulseras", "bracelet"]
+        )
+
+        for product in all_products:
+            product_name_norm = normalize_text(product["name"])
+            score = 0
+
+            # Count matching words
+            for word in words:
+                if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans"]:
+                    continue
+
+                word_variations = generate_word_variations(word)
+                for word_var in word_variations:
+                    if normalize_text(word_var) in product_name_norm:
+                        score += 1
+                        break
+
+            # Calculate confidence score
+            if total_meaningful_words > 0:
+                confidence = score / total_meaningful_words
+
+                if confidence > 0:
+                    # Check if already in candidates
+                    existing = next((c for c in candidates if c["id"] == product["id"]), None)
+                    if existing:
+                        # Update if better score
+                        if confidence > existing["score"]:
+                            existing["score"] = confidence
+                    else:
+                        candidates.append({
+                            "id": product["id"],
+                            "sku": product["sku"],
+                            "name": product["name"],
+                            "score": confidence
+                        })
+
+    # Sort by score descending
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+
+    return candidates
+
+
+def llm_disambiguate_product(product_ref: str, candidates: list, llm) -> Dict[str, Any]:
+    """
+    Use LLM to disambiguate between multiple product candidates.
+
+    Args:
+        product_ref: User's product reference
+        candidates: List of candidate products with scores
+        llm: Language model instance (Haiku)
+
+    Returns:
+        Dict with resolved product_id, sku, name
+    """
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.output_parsers import JsonOutputParser
+    from pydantic import BaseModel, Field
+
+    class ProductChoice(BaseModel):
+        product_id: int = Field(description="ID of the chosen product")
+        reasoning: str = Field(description="Why this product was chosen")
+
+    # Build candidates list for prompt
+    candidates_str = "\n".join([
+        f"- ID {c['id']}: {c['name']} (SKU: {c['sku']}, confidence: {c['score']:.0%})"
+        for c in candidates[:5]  # Top 5 only
+    ])
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a product disambiguation assistant.
+
+The user asked for: "{product_ref}"
+
+We found these possible matches:
+{candidates}
+
+Choose the MOST LIKELY product the user meant. Consider:
+- Exact word matches (colors, variants)
+- Confidence scores
+- Context clues in the user's query
+
+Return JSON with product_id and reasoning."""),
+        ("user", "Which product did the user mean?")
+    ])
+
+    parser = JsonOutputParser(pydantic_object=ProductChoice)
+    chain = prompt | llm | parser
+
+    try:
+        result = chain.invoke({
+            "product_ref": product_ref,
+            "candidates": candidates_str
+        })
+
+        # Find the chosen candidate
+        chosen = next((c for c in candidates if c["id"] == result["product_id"]), None)
+
+        if chosen:
+            print(f"[LLM Disambiguate] Chose '{chosen['name']}' - Reasoning: {result['reasoning']}")
+            return {
+                "product_id": chosen["id"],
+                "resolved_sku": chosen["sku"],
+                "resolved_name": chosen["name"],
+                "llm_used": True
+            }
+
+    except Exception as e:
+        print(f"[LLM Disambiguate] Failed: {e}")
+
+    # Fallback: return highest scoring candidate
+    if candidates:
+        return {
+            "product_id": candidates[0]["id"],
+            "resolved_sku": candidates[0]["sku"],
+            "resolved_name": candidates[0]["name"],
+            "llm_used": False
+        }
+
+    return {"resolution_error": f"No se pudo resolver '{product_ref}'"}
 
 
 def resolve_date(date_ref: str) -> str:
@@ -537,70 +809,93 @@ def resolve_date(date_ref: str) -> str:
 
 def generate_sku_from_name(name: str) -> str:
     """
-    Generate SKU automatically from product name.
+    Generate SKU automatically from ANY product name without hardcoded mappings.
+
+    Strategy:
+    - Extract product type (pulsera, llavero, etc.)
+    - Extract descriptive words (color, size, name, etc.)
+    - Build SKU: BC-{TYPE}-{DESCRIPTORS}
+    - Deduplicate if needed
+
+    Examples:
+        "Pulseras Fuccias" → "BC-PULS-FUCCIAS"
+        "Pulseras Grandes Negras" → "BC-PULS-GRANDES-NEGRAS"
+        "Llavero María" → "BC-LLAV-MARIA"
+        "Pulseras Premium Arcoíris" → "BC-PULS-PREMIUM-ARCOIRIS"
+        "Pulseras Celestes XL" → "BC-PULS-CELESTES-XL"
 
     Args:
-        name: Product name (e.g., "Pulseras Azules", "Llavero Rojo")
+        name: Product name (any descriptive name)
 
     Returns:
-        Generated SKU (e.g., "BC-PULS-AZUL", "BC-LLAV-ROJO")
+        Generated SKU (unique, descriptive, max 30 chars)
     """
     # Normalize and extract key words
     normalized = normalize_text(name)
     words = normalized.split()
 
-    # Mapping of product types
+    # Mapping of product types (ONLY types, not colors!)
     type_mapping = {
         "pulsera": "PULS",
         "pulseras": "PULS",
         "bracelet": "PULS",
+        "bracelets": "PULS",
         "llavero": "LLAV",
         "llaveros": "LLAV",
         "keychain": "LLAV",
+        "keychains": "LLAV",
     }
 
-    # Color/variant mapping
-    color_mapping = {
-        "negra": "NEGRA",
-        "negras": "NEGRA",
-        "black": "NEGRA",
-        "clasica": "CLASICA",
-        "clasicas": "CLASICA",
-        "classic": "CLASICA",
-        "dorada": "DORADA",
-        "doradas": "DORADA",
-        "gold": "DORADA",
-        "azul": "AZUL",
-        "azules": "AZUL",
-        "blue": "AZUL",
-        "roja": "ROJA",
-        "rojas": "ROJA",
-        "red": "ROJA",
-        "verde": "VERDE",
-        "verdes": "VERDE",
-        "green": "VERDE",
-        "blanca": "BLANCA",
-        "blancas": "BLANCA",
-        "white": "BLANCA",
+    # Common filler words to skip (don't add value to SKU)
+    skip_words = {
+        "de", "del", "la", "las", "el", "los",  # Articles
+        "granos", "cafe", "coffee", "bean", "beans",  # Generic coffee words
+        "con", "y", "e", "and",  # Connectors
     }
 
-    # Identify type and variant
+    # Extract type and descriptive words
     product_type = None
-    variant = None
+    descriptors = []
 
     for word in words:
         if word in type_mapping and not product_type:
             product_type = type_mapping[word]
-        if word in color_mapping and not variant:
-            variant = color_mapping[word]
+        elif word not in skip_words and len(word) > 1:  # Skip single letters
+            # Keep as descriptor (color, size, name, etc.)
+            descriptors.append(word.upper())
 
-    # Default values
+    # Build SKU
     if not product_type:
         product_type = "PROD"  # Generic product
-    if not variant:
-        variant = "STD"  # Standard variant
 
-    return f"BC-{product_type}-{variant}"
+    if descriptors:
+        # Use first 2 descriptors to keep SKU readable
+        # Limit each descriptor to 10 chars to avoid huge SKUs
+        desc_parts = [d[:10] for d in descriptors[:2]]
+        desc_part = "-".join(desc_parts)
+        base_sku = f"BC-{product_type}-{desc_part}"
+    else:
+        base_sku = f"BC-{product_type}-STD"
+
+    # Check if SKU already exists and make it unique if needed
+    from database import fetch_one
+    existing = fetch_one("SELECT sku FROM products WHERE sku = ?", (base_sku,))
+
+    if existing:
+        # SKU exists, append a number to make it unique
+        print(f"[SKU Generation] SKU '{base_sku}' already exists, generating unique SKU...")
+        counter = 2
+        while True:
+            new_sku = f"{base_sku}-{counter}"
+            existing = fetch_one("SELECT sku FROM products WHERE sku = ?", (new_sku,))
+            if not existing:
+                print(f"[SKU Generation] Generated unique SKU: {new_sku}")
+                return new_sku
+            counter += 1
+    else:
+        print(f"[SKU Generation] Generated SKU: {base_sku} (from name: '{name}')")
+
+    return base_sku
 
 
 def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> list[str]:
@@ -649,10 +944,19 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
             entities["unit_cost_cents"] = 0
 
     elif operation_type == "ADD_STOCK":
-        if "product_id" not in entities:
-            missing.append("product_id")
-        if "quantity" not in entities:
-            missing.append("quantity")
+        # ADD_STOCK can work with either:
+        # 1. Single product: product_id + quantity
+        # 2. Multiple products: items array (like REGISTER_SALE)
+        has_single = "product_id" in entities and "quantity" in entities
+        has_items = "items" in entities and len(entities.get("items", [])) > 0
+
+        if not has_single and not has_items:
+            # Need either single product OR items array
+            if "items" not in entities:
+                missing.append("product_id")
+                missing.append("quantity")
+            else:
+                missing.append("items")
 
     return missing
 

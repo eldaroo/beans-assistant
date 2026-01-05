@@ -17,3 +17,14 @@ env/
 
 # OS
 .DS_Store
+
+# Claude Code
+.claude/
+
+# Local data and configs
+data/
+configs/
+
+# Temp files
+nul
+=*

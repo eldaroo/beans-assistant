@@ -16,8 +16,11 @@ from database import (
     register_expense,
     cancel_sale,
     cancel_expense,
+    cancel_stock_movement,
     get_last_sale,
     get_last_expense,
+    get_last_stock_movement,
+    get_last_operation,
 )
 
 from .state import AgentState
@@ -94,6 +97,11 @@ def create_write_agent():
 
                 if not items:
                     raise ValueError("No se especificaron artículos para la venta")
+
+                # CRITICAL SAFETY CHECK: Verify NO items have resolution errors
+                for item in items:
+                    if "resolution_error" in item:
+                        raise ValueError(item["resolution_error"])
 
                 sale_data = {
                     "items": items,
@@ -177,30 +185,52 @@ def create_write_agent():
                 operation_summary += f"• Precio: *${unit_price_cents/100:.2f}*"
 
             elif operation_type == "ADD_STOCK":
-                # Prepare stock data
-                product_id = entities.get("product_id")
-                quantity = entities.get("quantity")
-                reason = entities.get("reason", "Actualización de stock")
+                # ADD_STOCK can handle either single product or multiple items
+                reason = entities.get("reason", "Entrada de stock")
                 movement_type = entities.get("movement_type", "IN")
 
-                if product_id is None or quantity is None:
-                    raise ValueError("Se requieren product_id y quantity para actualizar el stock")
+                items = entities.get("items", [])
 
-                stock_data = {
-                    "product_id": product_id,
-                    "quantity": quantity,
-                    "reason": reason,
-                    "movement_type": movement_type
-                }
+                # If no items array, treat as single product
+                if not items:
+                    product_id = entities.get("product_id")
+                    quantity = entities.get("quantity")
 
-                result = add_stock(stock_data)
+                    if product_id is None or quantity is None:
+                        raise ValueError("Se requieren product_id y quantity para actualizar el stock")
 
-                product_name = entities.get("resolved_name", "producto")
-                current = result.get('current_stock', 0)
+                    items = [{
+                        "product_id": product_id,
+                        "quantity": quantity,
+                        "resolved_name": entities.get("resolved_name", "producto")
+                    }]
 
+                # CRITICAL SAFETY CHECK: Verify NO items have resolution errors
+                for item in items:
+                    if "resolution_error" in item:
+                        raise ValueError(item["resolution_error"])
+
+                # Process each stock movement
+                results = []
+                for item in items:
+                    stock_data = {
+                        "product_id": item["product_id"],
+                        "quantity": item["quantity"],
+                        "reason": reason,
+                        "movement_type": movement_type
+                    }
+                    result = add_stock(stock_data)
+                    result["resolved_name"] = item.get("resolved_name", "producto")
+                    result["quantity"] = item.get("quantity", 0)  # Preserve quantity for display
+                    results.append(result)
+
+                # Build summary
                 operation_summary = f"*📦 Stock actualizado!*\n\n"
-                operation_summary += f"• Se agregaron *{quantity}* unidades de {product_name}\n"
-                operation_summary += f"• Stock actual: *{current}* unidades"
+                for res in results:
+                    product_name = res["resolved_name"]
+                    quantity = res.get("quantity", 0)
+                    current = res.get("current_stock", 0)
+                    operation_summary += f"• *{product_name}*: +{quantity} unidades (stock actual: {current})\n"
 
             elif operation_type == "CANCEL_SALE":
                 # Get the sale to cancel
@@ -257,6 +287,71 @@ def create_write_agent():
                         operation_summary += f"\n_Ganancia acumulada: ${profit:.2f}_"
                     else:
                         operation_summary += f"\n_Pérdida acumulada: ${abs(profit):.2f}_"
+
+            elif operation_type == "CANCEL_STOCK":
+                # Get the stock movement to cancel
+                target = entities.get("target", "last")
+
+                if target == "last":
+                    # Get last stock movement
+                    last_movement = get_last_stock_movement()
+                    if not last_movement:
+                        raise ValueError("No hay movimientos de stock para cancelar")
+                    movement_id = last_movement["id"]
+                else:
+                    # Specific movement_id
+                    movement_id = int(target)
+
+                # Cancel the stock movement
+                result = cancel_stock_movement(movement_id)
+
+                operation_summary = f"*❌ Stock cancelado!*\n\n"
+                operation_summary += f"• Se canceló entrada de stock de *{result['product_name']}*\n"
+                operation_summary += f"• Cantidad cancelada: {result['cancelled_quantity']} unidades\n"
+                operation_summary += f"• Stock actual: {result['current_stock']} unidades"
+
+            elif operation_type == "CANCEL_LAST_OPERATION":
+                # Detect which was the last operation and cancel it
+                last_op = get_last_operation()
+
+                if not last_op:
+                    raise ValueError("No hay operaciones recientes para cancelar")
+
+                op_type = last_op["type"]
+                op_data = last_op["data"]
+
+                if op_type == "SALE":
+                    result = cancel_sale(op_data["id"])
+                    operation_summary = f"*❌ Venta cancelada!*\n\n"
+                    operation_summary += f"• Se canceló la venta por *${result['cancelled_amount']:.2f}*\n"
+                    if result.get('revenue_usd') is not None:
+                        operation_summary += f"\n_Ventas totales: ${result['revenue_usd']:.2f}_"
+                    if result.get('profit_usd') is not None:
+                        profit = result['profit_usd']
+                        if profit >= 0:
+                            operation_summary += f"\n_Ganancia acumulada: ${profit:.2f}_"
+                        else:
+                            operation_summary += f"\n_Pérdida acumulada: ${abs(profit):.2f}_"
+
+                elif op_type == "EXPENSE":
+                    result = cancel_expense(op_data["id"])
+                    operation_summary = f"*❌ Gasto cancelado!*\n\n"
+                    operation_summary += f"• Se canceló: {result['description']}\n"
+                    operation_summary += f"• Monto: *${result['cancelled_amount']:.2f}*"
+                    if result.get('profit_usd') is not None:
+                        profit = result['profit_usd']
+                        operation_summary += "\n"
+                        if profit >= 0:
+                            operation_summary += f"\n_Ganancia acumulada: ${profit:.2f}_"
+                        else:
+                            operation_summary += f"\n_Pérdida acumulada: ${abs(profit):.2f}_"
+
+                elif op_type == "STOCK":
+                    result = cancel_stock_movement(op_data["id"])
+                    operation_summary = f"*❌ Stock cancelado!*\n\n"
+                    operation_summary += f"• Se canceló entrada de stock de *{result['product_name']}*\n"
+                    operation_summary += f"• Cantidad cancelada: {result['cancelled_quantity']} unidades\n"
+                    operation_summary += f"• Stock actual: {result['current_stock']} unidades"
 
             else:
                 raise ValueError(f"Tipo de operación desconocido: {operation_type}")
