@@ -43,7 +43,10 @@
       "Bash(python -m pytest:*)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: Sistema de SKU dinámico + Hybrid Resolver + Tests\n\nCambios principales:\n\n1. Sistema de SKU 100% dinámico\n   - Elimina color_mapping hardcodeado \\(80+ líneas\\)\n   - Genera SKUs desde CUALQUIER nombre automáticamente\n   - Ejemplos: \"Pulseras Fuccias\" → BC-PULS-FUCCIAS\n   - Soporta colores, tamaños, nombres propios sin modificar código\n\n2. Hybrid Resolver \\(determinístico + LLM fallback\\)\n   - 90%+ casos: matching determinístico \\(GRATIS, RÁPIDO\\)\n   - Casos ambiguos: LLM Gemini Flash-8b \\(SMART, BARATO\\)\n   - Reduce costos ~90% vs usar LLM siempre\n\n3. Chain-of-Thought en Read Agent\n   - Mejor reasoning para queries complejas\n   - Evita inferir time_period por defecto\n   - Fix: \"egresos totales\" mostraba vacío\n\n4. Mejor manejo de errores\n   - UNIQUE constraint: logging detallado\n   - Mensajes más claros al usuario\n\n5. Tests comprehensivos\n   - 22 tests del resolver híbrido \\(100% passing\\)\n   - Fixtures con mock LLM\n   - Cobertura de todos los edge cases\n\n6. Verificación de cálculos\n   - Script verify_calculations.py\n   - Documentación CALCULATION_VERIFICATION.md\n   - Confirma: Revenue, Expenses, Profit correctos\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(findstr:*)",
+      "Bash(git log:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
