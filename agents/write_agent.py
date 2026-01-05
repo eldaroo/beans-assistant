@@ -353,6 +353,24 @@ def create_write_agent():
                     operation_summary += f"• Cantidad cancelada: {result['cancelled_quantity']} unidades\n"
                     operation_summary += f"• Stock actual: {result['current_stock']} unidades"
 
+            elif operation_type == "DEACTIVATE_PRODUCT":
+                # Deactivate a product (mark as inactive, don't delete)
+                product_id = entities.get("product_id")
+                product_name = entities.get("resolved_name", "producto")
+
+                if product_id is None:
+                    raise ValueError("No se pudo identificar el producto a desactivar")
+
+                # Import the deactivate function
+                from database import deactivate_product
+
+                result = deactivate_product(product_id)
+
+                operation_summary = f"*🗑️ Producto desactivado!*\n\n"
+                operation_summary += f"• *{product_name}* ha sido removido del catálogo\n"
+                operation_summary += f"• El producto ya no aparecerá en el inventario\n"
+                operation_summary += f"• El historial de ventas se mantiene intacto"
+
             else:
                 raise ValueError(f"Tipo de operación desconocido: {operation_type}")
 

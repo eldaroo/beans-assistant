@@ -560,3 +560,45 @@ def cancel_stock_movement(movement_id: int):
         "cancelled_quantity": movement["quantity"],
         "current_stock": stock["stock_qty"] if stock else 0,
     }
+
+
+def deactivate_product(product_id: int):
+    """
+    Deactivate a product (mark as inactive, don't delete).
+
+    This preserves all historical data (sales, stock movements, etc.)
+    but removes the product from the active catalog.
+
+    Args:
+        product_id: ID of the product to deactivate
+
+    Returns:
+        Dict with status
+    """
+    with get_conn() as conn:
+        # Get product details
+        product = conn.execute(
+            "SELECT id, sku, name, is_active FROM products WHERE id = ?",
+            (product_id,)
+        ).fetchone()
+
+        if not product:
+            raise ValueError(f"Producto con ID {product_id} no encontrado")
+
+        if not product["is_active"]:
+            raise ValueError(f"El producto '{product['name']}' ya está desactivado")
+
+        # Mark as inactive
+        conn.execute(
+            "UPDATE products SET is_active = 0 WHERE id = ?",
+            (product_id,)
+        )
+
+        print(f"[Deactivate Product] Desactivado: {product['name']} (SKU: {product['sku']})")
+
+    return {
+        "status": "ok",
+        "product_id": product_id,
+        "sku": product["sku"],
+        "name": product["name"],
+    }

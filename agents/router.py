@@ -20,7 +20,7 @@ from .state import AgentState
 class IntentClassification(BaseModel):
     """Structured output for intent classification."""
     intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, or AMBIGUOUS")
-    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, or UNKNOWN")
+    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, DEACTIVATE_PRODUCT, or UNKNOWN")
     confidence: float = Field(description="Confidence score between 0 and 1")
     missing_fields: list[str] = Field(description="List of missing required fields")
     normalized_entities: dict = Field(description="Extracted entities with normalized values")
@@ -67,6 +67,9 @@ INTENT CATEGORIES:
      * CANCEL_STOCK: "cancela el stock", "anula el stock", "revertí el stock"
      * CANCEL_LAST_OPERATION: "anula la última operación", "cancela lo último", "borra lo último que hice"
        - IMPORTANT: Use this when user says "última operación" without specifying if it's sale/expense/stock
+     * DEACTIVATE_PRODUCT: "eliminar producto", "borrar producto", "desactivar producto", "sacar producto"
+       - IMPORTANT: This deactivates a product (not deleting data, just marking as inactive)
+       - Use when user wants to remove a product from catalog
    - Examples:
      * "registrame una venta de 20 pulseras negras"
      * "gasté 30 dólares en envíos"
@@ -75,6 +78,8 @@ INTENT CATEGORIES:
      * "agrego 10 pulseras negras" → ADD_STOCK (adding to existing product)
      * "cancela la última venta"
      * "anula el gasto que acabo de hacer"
+     * "eliminá las pulseras nuevas" → DEACTIVATE_PRODUCT
+     * "borra el producto X" → DEACTIVATE_PRODUCT
 
 3. MIXED
    - User wants to do a write operation AND then see the result
@@ -123,6 +128,8 @@ For WRITE_OPERATION, identify if required fields are missing:
   * Example: "agregar 50 pulseras negras" → {{"product_ref": "pulseras negras", "quantity": 50}}
 - CANCEL_SALE: needs target ("last" or sale_id) - extract "last", "última", "ese", "esa" as target: "last"
 - CANCEL_EXPENSE: needs target ("last" or expense_id) - extract "last", "última", "último", "ese", "esa" as target: "last"
+- DEACTIVATE_PRODUCT: needs product_ref (product name or SKU to deactivate)
+  * Example: "eliminá las pulseras nuevas" → {{"product_ref": "pulseras nuevas"}}
 
 OUTPUT FORMAT:
 

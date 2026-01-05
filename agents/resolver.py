@@ -958,6 +958,11 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
             else:
                 missing.append("items")
 
+    elif operation_type == "DEACTIVATE_PRODUCT":
+        # Need product_id (should be resolved from product_ref)
+        if "product_id" not in entities:
+            missing.append("product_id")
+
     return missing
 
 
