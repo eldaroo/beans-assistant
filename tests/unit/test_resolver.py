@@ -344,17 +344,17 @@ class TestUtilityFunctions:
         variations_en = translate_product_terms("black")
         assert "negra" in " ".join(variations_en)
 
-    def test_generate_sku_from_name_pulsera(self):
+    def test_generate_sku_from_name_pulsera(self, test_db):
         """Test SKU generation from product name (pulsera)."""
         sku = generate_sku_from_name("Pulseras Azules")
-        assert sku == "BC-PULS-AZUL"
+        assert sku == "BC-PULS-AZULES"  # Dynamic extraction keeps original form
 
-    def test_generate_sku_from_name_llavero(self):
+    def test_generate_sku_from_name_llavero(self, test_db):
         """Test SKU generation from product name (llavero)."""
         sku = generate_sku_from_name("Llavero Rojo")
-        assert sku == "BC-LLAV-ROJA"
+        assert sku == "BC-LLAV-ROJO"  # Dynamic extraction keeps original form
 
-    def test_generate_sku_from_name_fallback(self):
+    def test_generate_sku_from_name_fallback(self, test_db):
         """Test SKU generation with fallback for unknown type/color."""
         sku = generate_sku_from_name("Unknown Product Name")
         assert sku.startswith("BC-")
