@@ -85,6 +85,7 @@ CREATE VIEW stock_current AS
       ), 0) AS stock_qty
     FROM products p
     LEFT JOIN stock_movements sm ON sm.product_id = p.id
+    WHERE p.is_active = 1  -- Only show active products
     GROUP BY p.id, p.sku, p.name;
 
 CREATE VIEW sales_summary AS
