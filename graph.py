@@ -123,6 +123,41 @@ def create_final_answer_node():
         if state.get("error"):
             return {"final_answer": f"Error: {state['error']}"}
 
+        # If greeting, respond friendly
+        if state.get("intent") == "GREETING":
+            import random
+            greetings = [
+                "Hola! ¿En qué te puedo ayudar hoy?",
+                "Hola! Decime, ¿qué necesitás?",
+                "Hola! ¿Cómo te va? ¿Qué necesitás?",
+                "Hola! Estoy acá para ayudarte con tu negocio.",
+                "Hola! ¿Querés consultar o registrar algo?",
+            ]
+            farewells = [
+                "Chau! Que tengas un buen día.",
+                "Hasta luego!",
+                "Nos vemos! Cualquier cosa avisame.",
+                "Chau! Acá estoy cuando necesites.",
+            ]
+            thanks = [
+                "De nada! Para eso estoy.",
+                "Un placer ayudarte!",
+                "No hay problema! Acá estoy.",
+                "De nada! Cualquier cosa avisame.",
+            ]
+
+            user_input_lower = state.get("user_input", "").lower()
+
+            # Check for farewell keywords
+            if any(word in user_input_lower for word in ["chau", "adiós", "adios", "bye", "hasta luego", "nos vemos"]):
+                return {"final_answer": random.choice(farewells)}
+            # Check for thank you keywords
+            elif any(word in user_input_lower for word in ["gracias", "thank", "thanks"]):
+                return {"final_answer": random.choice(thanks)}
+            # Default greeting
+            else:
+                return {"final_answer": random.choice(greetings)}
+
         # If we have missing fields, ask for them
         missing = state.get("missing_fields", [])
         if missing:

@@ -363,6 +363,10 @@ def run_whatsapp_server():
                     else:
                         print(f"    [IN] \"{user_message}\"")
 
+                    # Show typing indicator
+                    client.send_typing(chat_id)
+                    print(f"    [TYPING] Indicator sent")
+
                     # Check if tenant exists
                     if not tenant_manager.tenant_exists(phone_number):
                         print(f"    [TENANT] New client detected: {phone_number}")
