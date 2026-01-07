@@ -281,9 +281,15 @@ GROUP BY p.id, p.sku, p.name;
             }
         }
 
-    def list_tenants(self) -> Dict[str, Any]:
+    def list_tenants(self) -> list:
         """List all registered tenants."""
-        return self.registry
+        return [
+            {
+                "phone_number": phone,
+                **data
+            }
+            for phone, data in self.registry.items()
+        ]
 
     def get_tenant_stats(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get statistics for a tenant."""
@@ -307,11 +313,12 @@ GROUP BY p.id, p.sku, p.name;
 
             # Revenue
             result = conn.execute("SELECT total_revenue_cents FROM revenue_paid").fetchone()
-            stats["revenue_usd"] = result["total_revenue_cents"] / 100.0 if result else 0
+            revenue_cents = result["total_revenue_cents"] if result and result["total_revenue_cents"] is not None else 0
+            stats["revenue_usd"] = revenue_cents / 100.0
 
             # Profit
             result = conn.execute("SELECT profit_usd FROM profit_summary").fetchone()
-            stats["profit_usd"] = result["profit_usd"] if result else 0
+            stats["profit_usd"] = result["profit_usd"] if result and result["profit_usd"] is not None else 0
 
             return stats
 

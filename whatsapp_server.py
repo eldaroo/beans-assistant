@@ -288,6 +288,10 @@ def run_whatsapp_server():
 
                     print(f"    [AGENT] Processing...")
 
+                    # Show typing indicator
+                    client.send_typing(chat_id)
+                    print(f"    [TYPING] Indicator sent")
+
                     # Add user message to history
                     add_to_history(chat_id, "user", user_message)
 

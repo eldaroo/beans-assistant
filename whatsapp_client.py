@@ -54,6 +54,24 @@ class GreenAPIWhatsAppClient:
             print(f"Green API request error: {e}")
             return {}
 
+    def send_typing(self, chat_id: str) -> bool:
+        """
+        Send typing indicator to WhatsApp chat.
+        Shows "escribiendo..." status for ~10 seconds.
+
+        Args:
+            chat_id: WhatsApp chat ID (phone number with country code + @c.us)
+
+        Returns:
+            True if sent successfully
+        """
+        data = {
+            "chatId": chat_id
+        }
+
+        response = self._make_request("POST", "sendChatStateComposing", data)
+        return "result" in response or bool(response)
+
     def send_message(self, chat_id: str, message: str) -> bool:
         """
         Send text message to WhatsApp chat.

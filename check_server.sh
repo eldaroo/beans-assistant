@@ -1,28 +1,47 @@
 #!/bin/bash
-# Script para verificar el estado del servidor de WhatsApp
+# Script para verificar el estado de los servidores (WhatsApp + Backend)
 
 echo "=========================================="
-echo "WhatsApp Server Status Check"
+echo "Servers Status Check"
 echo "=========================================="
 echo ""
 
-# Verificar si el proceso está corriendo
-echo "[1] Checking if process is running..."
+# Verificar si los procesos están corriendo
+echo "[1] Checking if processes are running..."
+
+# WhatsApp Server
 if pgrep -f "whatsapp_server.py" > /dev/null; then
     echo "✅ WhatsApp server is RUNNING"
     echo "   PID: $(pgrep -f whatsapp_server.py)"
 else
     echo "❌ WhatsApp server is NOT running"
 fi
+
+# Backend API
+if pgrep -f "uvicorn backend.app:app" > /dev/null; then
+    echo "✅ Backend API is RUNNING"
+    echo "   PID: $(pgrep -f 'uvicorn backend.app:app')"
+    echo "   URL: http://localhost:8000"
+else
+    echo "❌ Backend API is NOT running"
+fi
 echo ""
 
 # Verificar sesiones de screen
 echo "[2] Checking screen sessions..."
+
 if screen -ls | grep -q "whatsapp"; then
     echo "✅ Screen session 'whatsapp' exists"
     screen -ls | grep whatsapp
 else
     echo "ℹ️  No screen session named 'whatsapp'"
+fi
+
+if screen -ls | grep -q "backend"; then
+    echo "✅ Screen session 'backend' exists"
+    screen -ls | grep backend
+else
+    echo "ℹ️  No screen session named 'backend'"
 fi
 echo ""
 
@@ -71,12 +90,20 @@ echo ""
 
 # Verificar logs recientes
 echo "[7] Recent logs (last 10 lines)..."
+
+echo "--- WhatsApp Logs ---"
 if [ -f "whatsapp.log" ]; then
-    echo "--- whatsapp.log ---"
     tail -10 whatsapp.log
 elif systemctl is-active --quiet whatsapp-bot 2>/dev/null; then
-    echo "--- systemd journal ---"
     journalctl -u whatsapp-bot -n 10 --no-pager
+else
+    echo "ℹ️  No logs found"
+fi
+
+echo ""
+echo "--- Backend Logs ---"
+if [ -f "backend.log" ]; then
+    tail -10 backend.log
 else
     echo "ℹ️  No logs found"
 fi
@@ -87,44 +114,57 @@ echo "Summary:"
 echo "=========================================="
 
 # Resumen
-RUNNING=0
+WHATSAPP_RUNNING=0
+BACKEND_RUNNING=0
+
 if pgrep -f "whatsapp_server.py" > /dev/null; then
-    RUNNING=1
+    WHATSAPP_RUNNING=1
 fi
 
-if [ $RUNNING -eq 1 ]; then
-    echo "✅ Server Status: RUNNING"
-    echo ""
+if pgrep -f "uvicorn backend.app:app" > /dev/null; then
+    BACKEND_RUNNING=1
+fi
+
+# WhatsApp Status
+if [ $WHATSAPP_RUNNING -eq 1 ]; then
+    echo "✅ WhatsApp Server: RUNNING"
+else
+    echo "❌ WhatsApp Server: NOT RUNNING"
+fi
+
+# Backend Status
+if [ $BACKEND_RUNNING -eq 1 ]; then
+    echo "✅ Backend API: RUNNING (http://localhost:8000)"
+else
+    echo "❌ Backend API: NOT RUNNING"
+fi
+
+echo ""
+echo "Commands:"
+echo ""
+
+if [ $WHATSAPP_RUNNING -eq 1 ] || [ $BACKEND_RUNNING -eq 1 ]; then
     echo "To view logs in real-time:"
     if screen -ls | grep -q "whatsapp"; then
-        echo "  screen -r whatsapp"
-    elif systemctl is-active --quiet whatsapp-bot 2>/dev/null; then
-        echo "  sudo journalctl -u whatsapp-bot -f"
+        echo "  WhatsApp: screen -r whatsapp"
     else
-        echo "  tail -f whatsapp.log"
+        echo "  WhatsApp: tail -f whatsapp.log"
+    fi
+    if screen -ls | grep -q "backend"; then
+        echo "  Backend:  screen -r backend"
+    else
+        echo "  Backend:  tail -f backend.log"
     fi
     echo ""
-    echo "To stop the server:"
-    if screen -ls | grep -q "whatsapp"; then
-        echo "  screen -r whatsapp"
-        echo "  (then press Ctrl+C)"
-    elif systemctl is-active --quiet whatsapp-bot 2>/dev/null; then
-        echo "  sudo systemctl stop whatsapp-bot"
+    echo "To stop servers:"
+    if screen -ls | grep -q "whatsapp\|backend"; then
+        echo "  screen -X -S backend quit && screen -X -S whatsapp quit"
     else
-        echo "  kill $(pgrep -f whatsapp_server.py)"
+        echo "  kill $(pgrep -f 'whatsapp_server.py\|uvicorn backend.app:app')"
     fi
 else
-    echo "❌ Server Status: NOT RUNNING"
-    echo ""
-    echo "To start the server:"
-    if [ -f "/etc/systemd/system/whatsapp-bot.service" ]; then
-        echo "  sudo systemctl start whatsapp-bot"
-    else
-        echo "  screen -S whatsapp"
-        echo "  source .venv/bin/activate"
-        echo "  python whatsapp_server.py"
-        echo "  (then press Ctrl+A, D to detach)"
-    fi
+    echo "To start servers:"
+    echo "  ./start_server.sh"
 fi
 
 echo "=========================================="

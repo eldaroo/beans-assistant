@@ -122,6 +122,49 @@ def add_stock(data: dict):
     }
 
 
+def remove_stock(data: dict):
+    """
+    Remove stock from a product.
+
+    data = { product_id, quantity, reason?, movement_type? }
+    movement_type: OUT | ADJUSTMENT (default OUT)
+    """
+    movement_type = data.get("movement_type", "OUT")
+    reason = data.get("reason", "Stock removal")
+
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO stock_movements (
+                product_id,
+                movement_type,
+                quantity,
+                reason,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                data["product_id"],
+                movement_type,
+                data["quantity"],
+                reason,
+            ),
+        )
+
+        stock = conn.execute(
+            "SELECT stock_qty FROM stock_current WHERE product_id = ?",
+            (data["product_id"],),
+        ).fetchone()
+
+    return {
+        "status": "ok",
+        "message": "Stock removed",
+        "product_id": data["product_id"],
+        "current_stock": stock["stock_qty"] if stock else None,
+    }
+
+
 def register_expense(data: dict):
     """
     Register a business expense.

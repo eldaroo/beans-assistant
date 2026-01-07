@@ -1,0 +1,952 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tenant.business_name }} - Beans&Co Admin{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8" x-data="tenantDashboard()">
+    <!-- Header -->
+    <div class="px-4 py-6 sm:px-0">
+        <div class="flex justify-between items-center">
+            <div>
+                <a href="/" class="text-sm text-gray-500 hover:text-gray-700 mb-2 inline-block">&larr; Back to Tenants</a>
+                <h1 class="text-3xl font-bold text-gray-900">{{ tenant.business_name }}</h1>
+                <p class="mt-2 text-sm text-gray-600">{{ tenant.phone_number }}</p>
+            </div>
+            <button @click="refreshAll()" class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                <svg class="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                Refresh
+            </button>
+        </div>
+
+        <!-- Stats Overview -->
+        <div class="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 bg-green-100 rounded-md p-3">
+                            <svg class="h-6 w-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Revenue</dt>
+                                <dd class="text-lg font-semibold text-gray-900" x-text="'$' + stats.revenue_usd.toFixed(2)">${{ "%.2f"|format(stats.revenue_usd) }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 bg-blue-100 rounded-md p-3">
+                            <svg class="h-6 w-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Profit</dt>
+                                <dd class="text-lg font-semibold text-gray-900" x-text="'$' + stats.profit_usd.toFixed(2)">${{ "%.2f"|format(stats.profit_usd) }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 bg-purple-100 rounded-md p-3">
+                            <svg class="h-6 w-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Products</dt>
+                                <dd class="text-lg font-semibold text-gray-900" x-text="products.length">{{ stats.products_count }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200">
+                <div class="p-5">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 bg-amber-100 rounded-md p-3">
+                            <svg class="h-6 w-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-5 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-gray-500 truncate">Sales</dt>
+                                <dd class="text-lg font-semibold text-gray-900" x-text="sales.length">{{ stats.sales_count }}</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="px-4 sm:px-0">
+        <div class="border-b border-gray-200">
+            <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                <button
+                    @click="currentTab = 'products'; loadProducts()"
+                    :class="currentTab === 'products' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                    Products
+                </button>
+                <button
+                    @click="currentTab = 'stock'; loadStock()"
+                    :class="currentTab === 'stock' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                    Stock
+                </button>
+                <button
+                    @click="currentTab = 'sales'; loadSales()"
+                    :class="currentTab === 'sales' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                    Sales
+                </button>
+                <button
+                    @click="currentTab = 'expenses'; loadExpenses()"
+                    :class="currentTab === 'expenses' ? 'border-amber-500 text-amber-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                    Expenses
+                </button>
+            </nav>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="mt-6">
+            <!-- Products Tab -->
+            <div x-show="currentTab === 'products'" x-cloak>
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                    <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Products</h3>
+                        <div class="flex gap-2">
+                            <button @click="showAddProductModal = true" class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700">
+                                <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                </svg>
+                                Add Product
+                            </button>
+                            <button @click="deleteSelectedProducts()" x-show="selectedProducts.length > 0" class="inline-flex items-center px-3 py-2 border border-red-300 text-sm leading-4 font-medium rounded-md text-red-700 bg-white hover:bg-red-50">
+                                <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                                Delete Selected (<span x-text="selectedProducts.length"></span>)
+                            </button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left">
+                                        <input type="checkbox" @change="toggleAllProducts($event.target.checked)" class="rounded border-gray-300">
+                                    </th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cost</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <template x-if="loading">
+                                    <tr>
+                                        <td colspan="8" class="px-6 py-4 text-center text-sm text-gray-500">Loading...</td>
+                                    </tr>
+                                </template>
+                                <template x-if="!loading && products.length === 0">
+                                    <tr>
+                                        <td colspan="8" class="px-6 py-4 text-center text-sm text-gray-500">No products found</td>
+                                    </tr>
+                                </template>
+                                <template x-for="product in products" :key="product.id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-6 py-4">
+                                            <input type="checkbox" :value="product.id" x-model="selectedProducts" class="rounded border-gray-300">
+                                        </td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="product.sku"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="product.name"></td>
+                                        <td class="px-6 py-4 text-sm text-gray-500" x-text="product.description || '-'"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="'$' + (product.unit_cost_cents / 100).toFixed(2)"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="'$' + (product.unit_price_cents / 100).toFixed(2)"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap">
+                                            <span :class="product.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" x-text="product.is_active ? 'Active' : 'Inactive'"></span>
+                                        </td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <button @click="editProduct(product)" class="text-amber-600 hover:text-amber-900 mr-3">Edit</button>
+                                            <button @click="deleteProduct(product.id)" class="text-red-600 hover:text-red-900">Delete</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stock Tab -->
+            <div x-show="currentTab === 'stock'" x-cloak>
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                    <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Current Stock</h3>
+                        <button @click="showAddStockModal = true" class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700">
+                            <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                            </svg>
+                            Add Stock
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <template x-if="loading">
+                                    <tr>
+                                        <td colspan="4" class="px-6 py-4 text-center text-sm text-gray-500">Loading...</td>
+                                    </tr>
+                                </template>
+                                <template x-if="!loading && stock.length === 0">
+                                    <tr>
+                                        <td colspan="4" class="px-6 py-4 text-center text-sm text-gray-500">No stock data</td>
+                                    </tr>
+                                </template>
+                                <template x-for="item in stock" :key="item.product_id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="item.sku"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="item.name"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                            <!-- Display mode -->
+                                            <span x-show="editingStockId !== item.product_id" :class="item.stock_qty > 0 ? 'text-green-600' : 'text-red-600'" class="font-semibold" x-text="item.stock_qty"></span>
+
+                                            <!-- Edit mode -->
+                                            <div x-show="editingStockId === item.product_id" class="flex items-center gap-2">
+                                                <input
+                                                    type="number"
+                                                    x-model="editingStockValue"
+                                                    class="w-24 border border-gray-300 rounded-md shadow-sm py-1 px-2 focus:outline-none focus:ring-amber-500 focus:border-amber-500 text-sm"
+                                                    min="0"
+                                                    @keydown.enter="saveStockQuantity(item)"
+                                                    @keydown.escape="cancelStockEdit()">
+                                                <button @click="saveStockQuantity(item)" class="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700">
+                                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                                    </svg>
+                                                </button>
+                                                <button @click="cancelStockEdit()" class="inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50">
+                                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <button
+                                                x-show="editingStockId !== item.product_id"
+                                                @click="startEditingStock(item)"
+                                                class="text-amber-600 hover:text-amber-900">
+                                                Edit Qty
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sales Tab -->
+            <div x-show="currentTab === 'sales'" x-cloak>
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                    <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Sales</h3>
+                        <button @click="showAddSaleModal = true" class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700">
+                            <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                            </svg>
+                            New Sale
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sale #</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <template x-if="loading">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">Loading...</td>
+                                    </tr>
+                                </template>
+                                <template x-if="!loading && sales.length === 0">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">No sales found</td>
+                                    </tr>
+                                </template>
+                                <template x-for="sale in sales" :key="sale.id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="sale.sale_number"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="sale.customer_name || '-'"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap">
+                                            <span :class="{
+                                                'bg-green-100 text-green-800': sale.status === 'PAID',
+                                                'bg-yellow-100 text-yellow-800': sale.status === 'PENDING',
+                                                'bg-red-100 text-red-800': sale.status === 'CANCELLED'
+                                            }" class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" x-text="sale.status"></span>
+                                        </td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="'$' + (sale.total_amount_cents / 100).toFixed(2)"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="new Date(sale.created_at).toLocaleDateString()"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <button @click="viewSaleDetails(sale)" class="text-amber-600 hover:text-amber-900 mr-3">View</button>
+                                            <button @click="cancelSale(sale.id)" x-show="sale.status !== 'CANCELLED'" class="text-red-600 hover:text-red-900">Cancel</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Expenses Tab -->
+            <div x-show="currentTab === 'expenses'" x-cloak>
+                <div class="bg-white shadow-sm rounded-lg border border-gray-200">
+                    <div class="px-4 py-5 sm:px-6 border-b border-gray-200 flex justify-between items-center">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Expenses</h3>
+                        <div class="flex gap-2">
+                            <button @click="showAddExpenseModal = true" class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700">
+                                <svg class="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                </svg>
+                                Add Expense
+                            </button>
+                            <button @click="deleteSelectedExpenses()" x-show="selectedExpenses.length > 0" class="inline-flex items-center px-3 py-2 border border-red-300 text-sm leading-4 font-medium rounded-md text-red-700 bg-white hover:bg-red-50">
+                                Delete Selected (<span x-text="selectedExpenses.length"></span>)
+                            </button>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left">
+                                        <input type="checkbox" @change="toggleAllExpenses($event.target.checked)" class="rounded border-gray-300">
+                                    </th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <template x-if="loading">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">Loading...</td>
+                                    </tr>
+                                </template>
+                                <template x-if="!loading && expenses.length === 0">
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-4 text-center text-sm text-gray-500">No expenses found</td>
+                                    </tr>
+                                </template>
+                                <template x-for="expense in expenses" :key="expense.id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-6 py-4">
+                                            <input type="checkbox" :value="expense.id" x-model="selectedExpenses" class="rounded border-gray-300">
+                                        </td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="expense.expense_date"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="expense.category"></td>
+                                        <td class="px-6 py-4 text-sm text-gray-500" x-text="expense.description || '-'"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900" x-text="'$' + (expense.amount_cents / 100).toFixed(2)"></td>
+                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <button @click="deleteExpense(expense.id)" class="text-red-600 hover:text-red-900">Delete</button>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Product Modal -->
+    <div x-show="showAddProductModal" x-cloak class="fixed z-10 inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div x-show="showAddProductModal" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showAddProductModal = false"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div x-show="showAddProductModal" x-transition:enter="ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100" x-transition:leave="ease-in duration-200" x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100" x-transition:leave-end="opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <form @submit.prevent="saveProduct()">
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4" x-text="editingProduct ? 'Edit Product' : 'Add Product'"></h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">SKU</label>
+                                <input type="text" x-model="productForm.sku" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Name</label>
+                                <input type="text" x-model="productForm.name" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Description</label>
+                                <textarea x-model="productForm.description" rows="2" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm"></textarea>
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Cost (USD)</label>
+                                    <input type="number" step="0.01" x-model="productForm.unit_cost_usd" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Price (USD)</label>
+                                    <input type="number" step="0.01" x-model="productForm.unit_price_usd" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-amber-600 text-base font-medium text-white hover:bg-amber-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Save</button>
+                        <button type="button" @click="showAddProductModal = false; resetProductForm()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Stock Modal -->
+    <div x-show="showAddStockModal" x-cloak class="fixed z-10 inset-0 overflow-y-auto">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div x-show="showAddStockModal" class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showAddStockModal = false"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div x-show="showAddStockModal" class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <form @submit.prevent="addStock()">
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Add Stock</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Product</label>
+                                <select x-model="stockForm.product_id" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                                    <option value="">Select a product</option>
+                                    <template x-for="product in products" :key="product.id">
+                                        <option :value="product.id" x-text="product.name + ' (' + product.sku + ')'"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Quantity</label>
+                                <input type="number" x-model="stockForm.quantity" required min="1" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Reason</label>
+                                <input type="text" x-model="stockForm.reason" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-amber-600 text-base font-medium text-white hover:bg-amber-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Add Stock</button>
+                        <button type="button" @click="showAddStockModal = false; resetStockForm()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Expense Modal -->
+    <div x-show="showAddExpenseModal" x-cloak class="fixed z-10 inset-0 overflow-y-auto">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div x-show="showAddExpenseModal" class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showAddExpenseModal = false"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div x-show="showAddExpenseModal" class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+                <form @submit.prevent="addExpense()">
+                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900 mb-4">Add Expense</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Category</label>
+                                <input type="text" x-model="expenseForm.category" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Description</label>
+                                <textarea x-model="expenseForm.description" rows="2" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm"></textarea>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Amount (USD)</label>
+                                <input type="number" step="0.01" x-model="expenseForm.amount_usd" required min="0" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Date</label>
+                                <input type="date" x-model="expenseForm.expense_date" required class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-amber-500 focus:border-amber-500 sm:text-sm">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-amber-600 text-base font-medium text-white hover:bg-amber-700 focus:outline-none sm:ml-3 sm:w-auto sm:text-sm">Add Expense</button>
+                        <button type="button" @click="showAddExpenseModal = false; resetExpenseForm()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function tenantDashboard() {
+    return {
+        currentTab: 'products',
+        phoneNumber: '{{ tenant.phone_number }}',
+        loading: false,
+
+        // Data
+        products: [],
+        stock: [],
+        sales: [],
+        expenses: [],
+        stats: {
+            revenue_usd: {{ stats.revenue_usd }},
+            profit_usd: {{ stats.profit_usd }},
+            products_count: 0,
+            sales_count: 0
+        },
+
+        // Modals
+        showAddProductModal: false,
+        showAddStockModal: false,
+        showAddSaleModal: false,
+        showAddExpenseModal: false,
+
+        // Forms
+        productForm: {
+            sku: '',
+            name: '',
+            description: '',
+            unit_cost_usd: 0,
+            unit_price_usd: 0
+        },
+        stockForm: {
+            product_id: '',
+            quantity: 1,
+            reason: ''
+        },
+        expenseForm: {
+            category: '',
+            description: '',
+            amount_usd: 0,
+            expense_date: new Date().toISOString().split('T')[0]
+        },
+
+        editingProduct: null,
+        selectedProducts: [],
+        selectedExpenses: [],
+
+        // Stock editing
+        editingStockId: null,
+        editingStockValue: 0,
+
+        init() {
+            this.loadProducts();
+            // Auto-refresh every 30 seconds
+            setInterval(() => {
+                if (this.currentTab === 'products') this.loadProducts();
+                else if (this.currentTab === 'stock') this.loadStock();
+                else if (this.currentTab === 'sales') this.loadSales();
+                else if (this.currentTab === 'expenses') this.loadExpenses();
+            }, 30000);
+        },
+
+        async loadProducts() {
+            this.loading = true;
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/products`);
+                const data = await response.json();
+                this.products = data;
+                this.stats.products_count = data.length;
+            } catch (error) {
+                console.error('Error loading products:', error);
+                alert('Error loading products');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async loadStock() {
+            this.loading = true;
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/stock`);
+                const data = await response.json();
+                this.stock = data;
+            } catch (error) {
+                console.error('Error loading stock:', error);
+                alert('Error loading stock');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async loadSales() {
+            this.loading = true;
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/sales`);
+                const data = await response.json();
+                this.sales = data;
+                this.stats.sales_count = data.length;
+            } catch (error) {
+                console.error('Error loading sales:', error);
+                alert('Error loading sales');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async loadExpenses() {
+            this.loading = true;
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/expenses`);
+                const data = await response.json();
+                this.expenses = data;
+            } catch (error) {
+                console.error('Error loading expenses:', error);
+                alert('Error loading expenses');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async saveProduct() {
+            const productData = {
+                sku: this.productForm.sku,
+                name: this.productForm.name,
+                description: this.productForm.description,
+                unit_cost_cents: Math.round(parseFloat(this.productForm.unit_cost_usd) * 100),
+                unit_price_cents: Math.round(parseFloat(this.productForm.unit_price_usd) * 100)
+            };
+
+            try {
+                const url = this.editingProduct
+                    ? `/api/tenants/${encodeURIComponent(this.phoneNumber)}/products/${this.editingProduct.id}`
+                    : `/api/tenants/${encodeURIComponent(this.phoneNumber)}/products`;
+
+                const method = this.editingProduct ? 'PUT' : 'POST';
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(productData)
+                });
+
+                if (response.ok) {
+                    this.showAddProductModal = false;
+                    this.resetProductForm();
+                    await this.loadProducts();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.detail || 'Failed to save product'));
+                }
+            } catch (error) {
+                console.error('Error saving product:', error);
+                alert('Error saving product');
+            }
+        },
+
+        editProduct(product) {
+            this.editingProduct = product;
+            this.productForm = {
+                sku: product.sku,
+                name: product.name,
+                description: product.description || '',
+                unit_cost_usd: (product.unit_cost_cents / 100).toFixed(2),
+                unit_price_usd: (product.unit_price_cents / 100).toFixed(2)
+            };
+            this.showAddProductModal = true;
+        },
+
+        async deleteProduct(id) {
+            if (!confirm('Are you sure you want to delete this product?')) return;
+
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/products/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    await this.loadProducts();
+                } else {
+                    alert('Error deleting product');
+                }
+            } catch (error) {
+                console.error('Error deleting product:', error);
+                alert('Error deleting product');
+            }
+        },
+
+        async deleteSelectedProducts() {
+            if (!confirm(`Delete ${this.selectedProducts.length} products?`)) return;
+
+            for (const id of this.selectedProducts) {
+                try {
+                    await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/products/${id}`, {
+                        method: 'DELETE'
+                    });
+                } catch (error) {
+                    console.error('Error deleting product:', error);
+                }
+            }
+
+            this.selectedProducts = [];
+            await this.loadProducts();
+        },
+
+        toggleAllProducts(checked) {
+            if (checked) {
+                this.selectedProducts = this.products.map(p => p.id);
+            } else {
+                this.selectedProducts = [];
+            }
+        },
+
+        async addStock() {
+            const stockData = {
+                product_id: parseInt(this.stockForm.product_id),
+                quantity: parseInt(this.stockForm.quantity),
+                reason: this.stockForm.reason
+            };
+
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/stock/add`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(stockData)
+                });
+
+                if (response.ok) {
+                    this.showAddStockModal = false;
+                    this.resetStockForm();
+                    await this.loadStock();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.detail || 'Failed to add stock'));
+                }
+            } catch (error) {
+                console.error('Error adding stock:', error);
+                alert('Error adding stock');
+            }
+        },
+
+        startEditingStock(item) {
+            this.editingStockId = item.product_id;
+            this.editingStockValue = item.stock_qty;
+        },
+
+        cancelStockEdit() {
+            this.editingStockId = null;
+            this.editingStockValue = 0;
+        },
+
+        async saveStockQuantity(item) {
+            const newQty = parseInt(this.editingStockValue);
+            const currentQty = item.stock_qty;
+
+            if (newQty === currentQty) {
+                this.cancelStockEdit();
+                return;
+            }
+
+            // Calculate the difference
+            const diff = newQty - currentQty;
+            const quantity = Math.abs(diff);
+            const reason = diff > 0 ? 'Manual adjustment (increase)' : 'Manual adjustment (decrease)';
+
+            try {
+                // Use the add stock endpoint with positive or negative quantity
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/stock/adjust`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        product_id: item.product_id,
+                        quantity: diff,  // Can be positive or negative
+                        reason: reason
+                    })
+                });
+
+                if (response.ok) {
+                    this.cancelStockEdit();
+                    await this.loadStock();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.detail || 'Failed to update stock'));
+                }
+            } catch (error) {
+                console.error('Error updating stock:', error);
+                alert('Error updating stock');
+            }
+        },
+
+        async addExpense() {
+            const expenseData = {
+                category: this.expenseForm.category,
+                description: this.expenseForm.description,
+                amount_cents: Math.round(parseFloat(this.expenseForm.amount_usd) * 100),
+                expense_date: this.expenseForm.expense_date
+            };
+
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/expenses`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(expenseData)
+                });
+
+                if (response.ok) {
+                    this.showAddExpenseModal = false;
+                    this.resetExpenseForm();
+                    await this.loadExpenses();
+                } else {
+                    const error = await response.json();
+                    alert('Error: ' + (error.detail || 'Failed to add expense'));
+                }
+            } catch (error) {
+                console.error('Error adding expense:', error);
+                alert('Error adding expense');
+            }
+        },
+
+        async deleteExpense(id) {
+            if (!confirm('Are you sure you want to delete this expense?')) return;
+
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/expenses/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    await this.loadExpenses();
+                } else {
+                    alert('Error deleting expense');
+                }
+            } catch (error) {
+                console.error('Error deleting expense:', error);
+                alert('Error deleting expense');
+            }
+        },
+
+        async deleteSelectedExpenses() {
+            if (!confirm(`Delete ${this.selectedExpenses.length} expenses?`)) return;
+
+            for (const id of this.selectedExpenses) {
+                try {
+                    await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/expenses/${id}`, {
+                        method: 'DELETE'
+                    });
+                } catch (error) {
+                    console.error('Error deleting expense:', error);
+                }
+            }
+
+            this.selectedExpenses = [];
+            await this.loadExpenses();
+        },
+
+        toggleAllExpenses(checked) {
+            if (checked) {
+                this.selectedExpenses = this.expenses.map(e => e.id);
+            } else {
+                this.selectedExpenses = [];
+            }
+        },
+
+        async cancelSale(id) {
+            if (!confirm('Cancel this sale?')) return;
+
+            try {
+                const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}/sales/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    await this.loadSales();
+                } else {
+                    alert('Error canceling sale');
+                }
+            } catch (error) {
+                console.error('Error canceling sale:', error);
+                alert('Error canceling sale');
+            }
+        },
+
+        viewSaleDetails(sale) {
+            alert('Sale details:\n\n' + JSON.stringify(sale, null, 2));
+            // TODO: Implement detailed sale view modal
+        },
+
+        resetProductForm() {
+            this.productForm = {
+                sku: '',
+                name: '',
+                description: '',
+                unit_cost_usd: 0,
+                unit_price_usd: 0
+            };
+            this.editingProduct = null;
+        },
+
+        resetStockForm() {
+            this.stockForm = {
+                product_id: '',
+                quantity: 1,
+                reason: ''
+            };
+        },
+
+        resetExpenseForm() {
+            this.expenseForm = {
+                category: '',
+                description: '',
+                amount_usd: 0,
+                expense_date: new Date().toISOString().split('T')[0]
+            };
+        },
+
+        async refreshAll() {
+            if (this.currentTab === 'products') await this.loadProducts();
+            else if (this.currentTab === 'stock') await this.loadStock();
+            else if (this.currentTab === 'sales') await this.loadSales();
+            else if (this.currentTab === 'expenses') await this.loadExpenses();
+        }
+    }
+}
+</script>
+{% endblock %}

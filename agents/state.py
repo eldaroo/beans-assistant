@@ -12,6 +12,7 @@ IntentType = Literal[
     "READ_ANALYTICS",      # Analytical queries (SELECT only)
     "WRITE_OPERATION",     # Business operations (register_sale, etc.)
     "MIXED",               # Both write then read
+    "GREETING",            # Casual greetings and conversation
     "AMBIGUOUS"            # Needs clarification
 ]
 

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Tenants - Beans&Co Admin{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="px-4 py-6 sm:px-0">
+        <div class="flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">Tenants</h1>
+                <p class="mt-2 text-sm text-gray-600">
+                    Manage all your business tenants
+                </p>
+            </div>
+            <div>
+                <button
+                    @click="showCreateModal = true"
+                    x-data="{ showCreateModal: false }"
+                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500">
+                    + New Tenant
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tenants Grid -->
+    <div class="px-4 sm:px-0">
+        {% if tenants %}
+        <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {% for tenant in tenants %}
+            <div class="bg-white overflow-hidden shadow-sm rounded-lg border border-gray-200 hover:shadow-md transition-shadow">
+                <div class="p-6">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 bg-amber-100 rounded-full p-3">
+                            <svg class="h-6 w-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                            </svg>
+                        </div>
+                        <div class="ml-4 flex-1">
+                            <h3 class="text-lg font-medium text-gray-900">
+                                {{ tenant.business_name }}
+                            </h3>
+                            <p class="text-sm text-gray-500">
+                                {{ tenant.phone_number }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Revenue</p>
+                            <p class="mt-1 text-lg font-semibold text-green-600">
+                                ${{ "%.2f"|format(tenant.stats.revenue_usd) }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Profit</p>
+                            <p class="mt-1 text-lg font-semibold text-blue-600">
+                                ${{ "%.2f"|format(tenant.stats.profit_usd) }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Products</p>
+                            <p class="mt-1 text-lg font-semibold text-gray-700">
+                                {{ tenant.stats.products_count }}
+                            </p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-500 uppercase tracking-wide">Sales</p>
+                            <p class="mt-1 text-lg font-semibold text-gray-700">
+                                {{ tenant.stats.sales_count }}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="mt-6">
+                        <a
+                            href="/tenants/{{ tenant.phone_number }}"
+                            class="block w-full text-center px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                            View Details
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-12">
+            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">No tenants</h3>
+            <p class="mt-1 text-sm text-gray-500">
+                Get started by creating a new tenant.
+            </p>
+            <div class="mt-6">
+                <button
+                    type="button"
+                    class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-amber-600 hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500">
+                    + New Tenant
+                </button>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
