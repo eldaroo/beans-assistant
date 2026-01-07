@@ -51,6 +51,27 @@ cp .env.example .env
 # Add GOOGLE_API_KEY to .env
 ```
 
+### Running the Servers
+
+**Quick Start** - Start both WhatsApp and Backend servers:
+```bash
+./start_server.sh
+```
+
+This will start:
+- **WhatsApp Server**: Multi-tenant business assistant
+- **Backend API**: REST API + Admin UI at http://localhost:8000
+
+**Check Status**:
+```bash
+./check_server.sh
+```
+
+**Stop Servers**:
+```bash
+./stop_server.sh
+```
+
 ### Running Tests
 ```bash
 # Run all tests
@@ -84,6 +105,16 @@ configs/
 ```
 
 ## Recent Updates (Jan 2025)
+
+### ✅ Backend Admin Panel (NEW!)
+- **Interactive Dashboard**: Full CRUD operations with real-time updates
+- **Data Tables**: Products, Stock, Sales, Expenses with live refresh
+- **Inline Editing**: Edit stock quantities directly in table rows (NEW!)
+- **Bulk Operations**: Multi-select and bulk delete functionality
+- **Modals**: Add/Edit forms with validation
+- **Auto-refresh**: Data updates every 30 seconds
+- **Modern UI**: Built with Tailwind CSS + Alpine.js
+- **Keyboard Shortcuts**: Enter to save, Escape to cancel
 
 ### ✅ Product Management
 - Added `DEACTIVATE_PRODUCT` operation

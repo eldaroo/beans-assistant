@@ -46,7 +46,15 @@
       "Bash(git push)",
       "Bash(findstr:*)",
       "Bash(git log:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebFetch(domain:green-api.com)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(bash:*)",
+      "Bash(tasklist:*)"
     ]
   }
 }

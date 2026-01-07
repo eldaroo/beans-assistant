@@ -1,8 +1,8 @@
 #!/bin/bash
-# Script de inicio rápido para el servidor de WhatsApp
+# Script de inicio rápido para el servidor de WhatsApp y Backend API
 
 echo "=========================================="
-echo "Starting WhatsApp Server"
+echo "Starting WhatsApp Server + Backend API"
 echo "=========================================="
 echo ""
 
@@ -35,12 +35,16 @@ echo "✅ Environment activated"
 echo ""
 
 # Verificar si ya está corriendo
-if pgrep -f "whatsapp_server.py" > /dev/null; then
-    echo "⚠️  Server is already running!"
-    echo "   PID: $(pgrep -f whatsapp_server.py)"
+WHATSAPP_RUNNING=$(pgrep -f "whatsapp_server.py")
+BACKEND_RUNNING=$(pgrep -f "uvicorn backend.app:app")
+
+if [ -n "$WHATSAPP_RUNNING" ] || [ -n "$BACKEND_RUNNING" ]; then
+    echo "⚠️  Servers already running!"
+    [ -n "$WHATSAPP_RUNNING" ] && echo "   WhatsApp PID: $WHATSAPP_RUNNING"
+    [ -n "$BACKEND_RUNNING" ] && echo "   Backend PID: $BACKEND_RUNNING"
     echo ""
     echo "Options:"
-    echo "  1. Stop it first: kill $(pgrep -f whatsapp_server.py)"
+    echo "  1. Stop them: kill $WHATSAPP_RUNNING $BACKEND_RUNNING"
     echo "  2. View logs: ./check_server.sh"
     exit 1
 fi
@@ -66,39 +70,68 @@ fi
 if ! command -v screen &> /dev/null; then
     echo "⚠️  'screen' is not installed"
     echo "   Starting with nohup instead..."
-    nohup python whatsapp_server.py > whatsapp.log 2>&1 &
+
+    # Start backend
+    echo "Starting Backend API..."
+    nohup python -m uvicorn backend.app:app --port 8000 > backend.log 2>&1 &
+    BACKEND_PID=$!
     sleep 2
+
+    # Start WhatsApp server
+    echo "Starting WhatsApp Server..."
+    nohup python whatsapp_server.py > whatsapp.log 2>&1 &
+    WHATSAPP_PID=$!
+    sleep 2
+
     echo ""
-    echo "✅ Server started in background (nohup)"
-    echo "   PID: $!"
+    echo "✅ Servers started in background (nohup)"
+    echo "   Backend PID:  $BACKEND_PID (http://localhost:8000)"
+    echo "   WhatsApp PID: $WHATSAPP_PID"
     echo ""
     echo "Commands:"
-    echo "  View logs:    tail -f whatsapp.log"
-    echo "  Stop server:  kill $(pgrep -f whatsapp_server.py)"
+    echo "  View Backend logs:  tail -f backend.log"
+    echo "  View WhatsApp logs: tail -f whatsapp.log"
+    echo "  Stop servers:       kill $BACKEND_PID $WHATSAPP_PID"
     exit 0
 fi
 
 # Iniciar con screen
 echo "🖥️  Starting with screen..."
 echo ""
-echo "Creating screen session 'whatsapp'..."
 
-screen -dmS whatsapp bash -c "source .venv/bin/activate && python whatsapp_server.py"
-
+# Start backend in screen
+echo "Creating screen session 'backend'..."
+screen -dmS backend bash -c "source .venv/bin/activate && python -m uvicorn backend.app:app --port 8000"
 sleep 2
 
-if screen -ls | grep -q "whatsapp"; then
-    echo "✅ Server started in screen session"
+# Start WhatsApp in screen
+echo "Creating screen session 'whatsapp'..."
+screen -dmS whatsapp bash -c "source .venv/bin/activate && python whatsapp_server.py"
+sleep 2
+
+# Check if both are running
+BACKEND_OK=$(screen -ls | grep -c "backend")
+WHATSAPP_OK=$(screen -ls | grep -c "whatsapp")
+
+if [ "$BACKEND_OK" -gt 0 ] && [ "$WHATSAPP_OK" -gt 0 ]; then
+    echo "✅ Servers started in screen sessions"
+    echo ""
+    echo "   Backend:  http://localhost:8000"
+    echo "   WhatsApp: Running"
     echo ""
     echo "Commands:"
-    echo "  View logs:       screen -r whatsapp"
-    echo "  Detach:          Press Ctrl+A, then D"
-    echo "  Stop server:     screen -r whatsapp, then Ctrl+C"
-    echo "  Check status:    ./check_server.sh"
+    echo "  View Backend logs:  screen -r backend"
+    echo "  View WhatsApp logs: screen -r whatsapp"
+    echo "  Detach:             Press Ctrl+A, then D"
+    echo "  Stop servers:       screen -X -S backend quit && screen -X -S whatsapp quit"
+    echo "  Check status:       ./check_server.sh"
     echo ""
-    echo "Tip: To view logs now, run: screen -r whatsapp"
-else
-    echo "❌ Failed to start screen session"
+    echo "Tip: To view WhatsApp logs now, run: screen -r whatsapp"
+elif [ "$BACKEND_OK" -eq 0 ]; then
+    echo "❌ Failed to start backend screen session"
+    exit 1
+elif [ "$WHATSAPP_OK" -eq 0 ]; then
+    echo "❌ Failed to start whatsapp screen session"
     exit 1
 fi
 

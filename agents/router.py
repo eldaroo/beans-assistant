@@ -19,7 +19,7 @@ from .state import AgentState
 
 class IntentClassification(BaseModel):
     """Structured output for intent classification."""
-    intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, or AMBIGUOUS")
+    intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, GREETING, or AMBIGUOUS")
     operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, DEACTIVATE_PRODUCT, or UNKNOWN")
     confidence: float = Field(description="Confidence score between 0 and 1")
     missing_fields: list[str] = Field(description="List of missing required fields")
@@ -88,7 +88,20 @@ INTENT CATEGORIES:
      * "vendí 2 pulseras black, ¿cómo queda el stock?"
      * "registra la venta y dime el nuevo revenue"
 
-4. AMBIGUOUS
+4. GREETING
+   - Casual greetings, small talk, gratitude, farewells
+   - No business intent, just social interaction
+   - Keywords: hola, hey, hi, hello, buenos días, buenas tardes, qué tal, cómo estás, gracias, thank you, chau, adiós, bye
+   - Examples:
+     * "hola!"
+     * "buenos días"
+     * "hey, cómo andas?"
+     * "gracias!"
+     * "chau"
+     * "hi there"
+   - IMPORTANT: Respond naturally and friendly, keep it brief
+
+5. AMBIGUOUS
    - Missing critical information
    - Unclear intent
    - Examples:
@@ -294,6 +307,10 @@ def route_to_next_node(state: AgentState) -> str:
 
     # If there's an error, go to final answer
     if state.get("error"):
+        return "final_answer"
+
+    # If greeting, respond immediately with friendly message
+    if intent == "GREETING":
         return "final_answer"
 
     # If ambiguous or missing fields, ask for clarification
