@@ -16,7 +16,7 @@ from backend.models.schemas import (
     ExpenseResponse,
     SuccessResponse
 )
-import database
+from database_config import db as database
 
 router = APIRouter()
 
