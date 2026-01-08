@@ -60,7 +60,11 @@
       "Bash(ping:*)",
       "Bash(telnet:*)",
       "Bash(.venv/Scripts/python.exe:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(time curl:*)",
+      "Bash(time .venv/Scripts/python.exe:*)",
+      "Bash(test:*)"
     ]
   }
 }

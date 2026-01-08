@@ -3,6 +3,7 @@ PostgreSQL Database Layer
 Same interface as database.py but uses PostgreSQL instead of SQLite.
 """
 import psycopg2
+from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import os
@@ -19,6 +20,27 @@ DB_USER = os.getenv("POSTGRES_USER", "beansco")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "changeme123")
 DB_SCHEMA = os.getenv("POSTGRES_SCHEMA", "public")  # For multi-tenant
 
+# Connection pool - initialized once, reused across all requests
+_connection_pool = None
+
+
+def get_connection_pool():
+    """Get or create the connection pool."""
+    global _connection_pool
+    if _connection_pool is None:
+        _connection_pool = pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=10,  # Adjust based on your needs
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            cursor_factory=RealDictCursor
+        )
+        print(f"[DB] Connection pool created (1-10 connections)")
+    return _connection_pool
+
 
 def get_connection_string():
     """Build PostgreSQL connection string."""
@@ -27,15 +49,9 @@ def get_connection_string():
 
 @contextmanager
 def get_conn():
-    """Context manager for PostgreSQL connections."""
-    conn = psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        cursor_factory=RealDictCursor  # Return rows as dicts
-    )
+    """Context manager for PostgreSQL connections using pool."""
+    conn_pool = get_connection_pool()
+    conn = conn_pool.getconn()
     try:
         # Set search_path for multi-tenant support
         with conn.cursor() as cur:
@@ -46,26 +62,33 @@ def get_conn():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        # Return connection to pool instead of closing it
+        conn_pool.putconn(conn)
 
 
 # =========================
 # READ HELPERS
 # =========================
 
-def fetch_one(query, params=()):
+def fetch_one(query, params=None):
     """Fetch a single row."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, params)
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
             return cur.fetchone()
 
 
-def fetch_all(query, params=()):
+def fetch_all(query, params=None):
     """Fetch all rows."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, params)
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
             return cur.fetchall()
 
 

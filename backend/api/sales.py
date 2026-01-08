@@ -5,12 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from typing import List
 import sys
 from pathlib import Path
-import sqlite3
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from tenant_manager import TenantManager
 from backend.models.schemas import (
     SaleCreate,
     SaleResponse,
@@ -18,25 +17,24 @@ from backend.models.schemas import (
     SuccessResponse
 )
 from database_config import db as database
+from backend import cache
 
 router = APIRouter()
 
 
-def _get_tenant_db_uri(phone: str) -> str:
-    """Get database URI for a tenant."""
-    tenant_manager = TenantManager()
-    if not tenant_manager.tenant_exists(phone):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tenant {phone} not found"
-        )
-    return tenant_manager.get_tenant_db_path(phone)
-
-
-def _sale_row_to_response(sale_row: sqlite3.Row, items: List[sqlite3.Row]) -> SaleResponse:
+def _sale_row_to_response(sale_row: dict, items: List[dict]) -> SaleResponse:
     """Convert database rows to SaleResponse."""
     # Convert Row to dict to handle NULL values properly
     sale_dict = dict(sale_row)
+
+    # Convert datetime to string if needed (PostgreSQL returns datetime objects)
+    created_at = sale_dict["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
+
+    paid_at = sale_dict.get("paid_at")
+    if isinstance(paid_at, datetime):
+        paid_at = paid_at.isoformat()
 
     return SaleResponse(
         id=sale_dict["id"],
@@ -44,8 +42,8 @@ def _sale_row_to_response(sale_row: sqlite3.Row, items: List[sqlite3.Row]) -> Sa
         status=sale_dict["status"],
         total_amount_cents=sale_dict["total_amount_cents"],
         customer_name=sale_dict.get("customer_name"),
-        created_at=sale_dict["created_at"],
-        paid_at=sale_dict.get("paid_at"),
+        created_at=created_at,
+        paid_at=paid_at,
         total_amount_usd=round(sale_dict["total_amount_cents"] / 100.0, 2),
         items=[
             SaleItemResponse(
@@ -82,38 +80,29 @@ async def list_sales(phone: str, limit: int = 50, offset: int = 0):
     Raises:
         404: Tenant not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    # Fetch sales
+    sales_query = """
+        SELECT * FROM sales
+        ORDER BY created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    sales_rows = database.fetch_all(sales_query, (limit, offset))
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
-    try:
-        # Fetch sales
-        sales_query = """
-            SELECT * FROM sales
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
+    # Fetch items for each sale
+    result = []
+    for sale_row in sales_rows:
+        items_query = """
+            SELECT si.*,
+                   p.name AS product_name,
+                   p.sku AS product_sku
+            FROM sale_items si
+            LEFT JOIN products p ON si.product_id = p.id
+            WHERE si.sale_id = %s
         """
-        sales_rows = database.fetch_all(sales_query, (limit, offset))
+        items_rows = database.fetch_all(items_query, (sale_row["id"],))
+        result.append(_sale_row_to_response(sale_row, items_rows))
 
-        # Fetch items for each sale
-        result = []
-        for sale_row in sales_rows:
-            items_query = """
-                SELECT si.*,
-                       p.name AS product_name,
-                       p.sku AS product_sku
-                FROM sale_items si
-                LEFT JOIN products p ON si.product_id = p.id
-                WHERE si.sale_id = ?
-            """
-            items_rows = database.fetch_all(items_query, (sale_row["id"],))
-            result.append(_sale_row_to_response(sale_row, items_rows))
-
-        return result
-
-    finally:
-        database.DB_PATH = original_db
+    return result
 
 
 @router.get("/{phone}/sales/{sale_id}", response_model=SaleResponse)
@@ -131,35 +120,26 @@ async def get_sale(phone: str, sale_id: int):
     Raises:
         404: Tenant or sale not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    sale_query = "SELECT * FROM sales WHERE id = %s"
+    sale_row = database.fetch_one(sale_query, (sale_id,))
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
+    if not sale_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Sale {sale_id} not found"
+        )
 
-    try:
-        sale_query = "SELECT * FROM sales WHERE id = ?"
-        sale_row = database.fetch_one(sale_query, (sale_id,))
+    items_query = """
+        SELECT si.*,
+               p.name AS product_name,
+               p.sku AS product_sku
+        FROM sale_items si
+        LEFT JOIN products p ON si.product_id = p.id
+        WHERE si.sale_id = %s
+    """
+    items_rows = database.fetch_all(items_query, (sale_id,))
 
-        if not sale_row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Sale {sale_id} not found"
-            )
-
-        items_query = """
-            SELECT si.*,
-                   p.name AS product_name,
-                   p.sku AS product_sku
-            FROM sale_items si
-            LEFT JOIN products p ON si.product_id = p.id
-            WHERE si.sale_id = ?
-        """
-        items_rows = database.fetch_all(items_query, (sale_id,))
-
-        return _sale_row_to_response(sale_row, items_rows)
-
-    finally:
-        database.DB_PATH = original_db
+    return _sale_row_to_response(sale_row, items_rows)
 
 
 @router.post("/{phone}/sales", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
@@ -179,11 +159,6 @@ async def create_sale(phone: str, sale: SaleCreate):
         400: Insufficient stock or invalid data
         500: Failed to create sale
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Convert SaleCreate to database format
         items_data = [
@@ -213,7 +188,7 @@ async def create_sale(phone: str, sale: SaleCreate):
         sale_id = result["sale_id"]
 
         # Fetch created sale
-        sale_query = "SELECT * FROM sales WHERE id = ?"
+        sale_query = "SELECT * FROM sales WHERE id = %s"
         sale_row = database.fetch_one(sale_query, (sale_id,))
 
         items_query = """
@@ -222,9 +197,13 @@ async def create_sale(phone: str, sale: SaleCreate):
                    p.sku AS product_sku
             FROM sale_items si
             LEFT JOIN products p ON si.product_id = p.id
-            WHERE si.sale_id = ?
+            WHERE si.sale_id = %s
         """
         items_rows = database.fetch_all(items_query, (sale_id,))
+        
+        # Invalidate cache (sales affect stock and stats)
+        cache.invalidate_stock(phone)
+        cache.invalidate_stats(phone)
 
         return _sale_row_to_response(sale_row, items_rows)
 
@@ -240,9 +219,6 @@ async def create_sale(phone: str, sale: SaleCreate):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create sale: {str(e)}"
         )
-
-    finally:
-        database.DB_PATH = original_db
 
 
 @router.delete("/{phone}/sales/{sale_id}", response_model=SuccessResponse)
@@ -261,11 +237,6 @@ async def cancel_sale(phone: str, sale_id: int):
         404: Tenant or sale not found
         500: Failed to cancel sale
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Use database.py function
         result = database.cancel_sale(sale_id)
@@ -275,6 +246,10 @@ async def cancel_sale(phone: str, sale_id: int):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result.get("message", "Failed to cancel sale")
             )
+        
+        # Invalidate cache (cancelling sales affects stock and stats)
+        cache.invalidate_stock(phone)
+        cache.invalidate_stats(phone)
 
         return SuccessResponse(
             status="ok",
@@ -292,6 +267,3 @@ async def cancel_sale(phone: str, sale_id: int):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cancel sale: {str(e)}"
         )
-
-    finally:
-        database.DB_PATH = original_db

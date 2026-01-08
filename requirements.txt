@@ -22,3 +22,6 @@ ffmpeg-python>=0.2.0
 
 # Optional (for development and testing)
 pytest>=7.4.0
+
+# Cache
+redis>=5.0.0
