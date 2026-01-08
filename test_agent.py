@@ -40,11 +40,13 @@ def test_agent(message: str, phone: str = "+5491112345678"):
     # Create graph
     graph = create_business_agent_graph()
 
-    # Initial state
+    # Initial state (same format as WhatsApp server)
     initial_state = {
-        "messages": [message],
+        "messages": [],
+        "user_input": message,
         "phone": phone,
         "sender": phone,
+        "normalized_entities": {},
         "metadata": {}
     }
 
@@ -71,7 +73,9 @@ def test_agent(message: str, phone: str = "+5491112345678"):
 
             print("[OK] Response:")
             print("-" * 60)
-            print(response)
+            # Remove emojis for Windows console compatibility
+            response_clean = response.encode('ascii', 'ignore').decode('ascii')
+            print(response_clean if response_clean.strip() else response)
             print("-" * 60)
         else:
             print("[WARNING] No response generated")
