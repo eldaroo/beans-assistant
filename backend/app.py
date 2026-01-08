@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -54,6 +54,7 @@ app.include_router(sales.router, prefix="/api/tenants", tags=["Sales"])
 app.include_router(expenses.router, prefix="/api/tenants", tags=["Expenses"])
 app.include_router(stock.router, prefix="/api/tenants", tags=["Stock"])
 app.include_router(analytics.router, prefix="/api/tenants", tags=["Analytics"])
+app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"])
 
 
 # HTML Routes (Admin UI)
