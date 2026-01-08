@@ -16,8 +16,8 @@ echo "================================================"
 echo ""
 
 # Configuración (edita estos valores)
-VPS_USER="usuario"          # Tu usuario SSH en el VPS
-VPS_HOST="tu-vps.com"       # IP o dominio de tu VPS
+VPS_USER="root"             # Tu usuario SSH en el VPS
+VPS_HOST="31.97.100.1"      # IP o dominio de tu VPS
 VPS_PORT="22"               # Puerto SSH (normalmente 22)
 LOCAL_PORT="5432"           # Puerto local para el túnel
 REMOTE_PORT="5432"          # Puerto de PostgreSQL en el VPS

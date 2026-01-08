@@ -54,7 +54,12 @@
       "Bash(netstat:*)",
       "Bash(taskkill:*)",
       "Bash(bash:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(python test_postgres_connection.py:*)",
+      "Bash(ssh:*)",
+      "Bash(ping:*)",
+      "Bash(telnet:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ]
   }
 }
