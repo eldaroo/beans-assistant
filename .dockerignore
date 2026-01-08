@@ -38,6 +38,18 @@ data/clients/
 logs/
 *.log
 
+# WhatsApp session (se monta como volume)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# PostgreSQL data
+postgres/
+
 # Documentation
 *.md
 docs/

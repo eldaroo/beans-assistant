@@ -5,12 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from typing import List
 import sys
 from pathlib import Path
-import sqlite3
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from tenant_manager import TenantManager
 from backend.models.schemas import (
     StockAddInput,
     StockMovementResponse,
@@ -18,25 +17,24 @@ from backend.models.schemas import (
     SuccessResponse
 )
 from database_config import db as database
+from backend import cache
 
 router = APIRouter()
 
 
-def _get_tenant_db_uri(phone: str) -> str:
-    """Get database URI for a tenant."""
-    tenant_manager = TenantManager()
-    if not tenant_manager.tenant_exists(phone):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tenant {phone} not found"
-        )
-    return tenant_manager.get_tenant_db_path(phone)
-
-
-def _movement_row_to_response(row: sqlite3.Row) -> StockMovementResponse:
+def _movement_row_to_response(row: dict) -> StockMovementResponse:
     """Convert database row to StockMovementResponse."""
     # Convert Row to dict to handle NULL values properly
     row_dict = dict(row)
+
+    # Convert datetime to string if needed (PostgreSQL returns datetime objects)
+    occurred_at = row_dict["occurred_at"]
+    if isinstance(occurred_at, datetime):
+        occurred_at = occurred_at.isoformat()
+
+    created_at = row_dict["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
 
     return StockMovementResponse(
         id=row_dict["id"],
@@ -45,14 +43,14 @@ def _movement_row_to_response(row: sqlite3.Row) -> StockMovementResponse:
         quantity=row_dict["quantity"],
         reason=row_dict.get("reason"),
         reference=row_dict.get("reference"),
-        occurred_at=row_dict["occurred_at"],
-        created_at=row_dict["created_at"],
+        occurred_at=occurred_at,
+        created_at=created_at,
         product_name=row_dict.get("product_name"),
         product_sku=row_dict.get("product_sku")
     )
 
 
-def _stock_current_row_to_response(row: sqlite3.Row) -> StockCurrentResponse:
+def _stock_current_row_to_response(row: dict) -> StockCurrentResponse:
     """Convert database row to StockCurrentResponse."""
     # Convert Row to dict to handle NULL values properly
     row_dict = dict(row)
@@ -83,25 +81,25 @@ async def get_current_stock(phone: str):
     Raises:
         404: Tenant not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    # Try to get from cache
+    cached_stock = cache.get_cached_stock(phone)
+    if cached_stock is not None:
+        return cached_stock
+    
+    # Cache miss - query database
+    query = """
+        SELECT sc.*, p.unit_price_cents
+        FROM stock_current sc
+        LEFT JOIN products p ON sc.product_id = p.id
+        ORDER BY sc.name
+    """
+    rows = database.fetch_all(query)
+    stock = [_stock_current_row_to_response(row) for row in rows]
+    
+    # Cache the results
+    cache.cache_stock(phone, stock)
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
-    try:
-        query = """
-            SELECT sc.*, p.unit_price_cents
-            FROM stock_current sc
-            LEFT JOIN products p ON sc.product_id = p.id
-            ORDER BY sc.name
-        """
-        rows = database.fetch_all(query)
-        stock = [_stock_current_row_to_response(row) for row in rows]
-
-        return stock
-
-    finally:
-        database.DB_PATH = original_db
+    return stock
 
 
 @router.post("/{phone}/stock/add", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
@@ -121,11 +119,6 @@ async def add_stock(phone: str, stock_input: StockAddInput):
         400: Invalid data
         500: Failed to add stock
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Convert StockAddInput to database format
         stock_data = {
@@ -143,6 +136,9 @@ async def add_stock(phone: str, stock_input: StockAddInput):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result.get("message", "Failed to add stock")
             )
+        
+        # Invalidate stock cache
+        cache.invalidate_stock(phone)
 
         return SuccessResponse(
             status="ok",
@@ -167,9 +163,6 @@ async def add_stock(phone: str, stock_input: StockAddInput):
             detail=f"Failed to add stock: {str(e)}"
         )
 
-    finally:
-        database.DB_PATH = original_db
-
 
 @router.post("/{phone}/stock/adjust", response_model=SuccessResponse)
 async def adjust_stock(phone: str, adjustment: dict):
@@ -188,11 +181,6 @@ async def adjust_stock(phone: str, adjustment: dict):
         400: Invalid data
         500: Failed to adjust stock
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         product_id = adjustment.get("product_id")
         quantity = adjustment.get("quantity", 0)
@@ -230,6 +218,9 @@ async def adjust_stock(phone: str, adjustment: dict):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result.get("message", "Failed to adjust stock")
             )
+        
+        # Invalidate stock cache
+        cache.invalidate_stock(phone)
 
         return SuccessResponse(
             status="ok",
@@ -254,9 +245,6 @@ async def adjust_stock(phone: str, adjustment: dict):
             detail=f"Failed to adjust stock: {str(e)}"
         )
 
-    finally:
-        database.DB_PATH = original_db
-
 
 @router.get("/{phone}/stock/movements", response_model=List[StockMovementResponse])
 async def get_stock_movements(phone: str, limit: int = 100, offset: int = 0):
@@ -274,25 +262,16 @@ async def get_stock_movements(phone: str, limit: int = 100, offset: int = 0):
     Raises:
         404: Tenant not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    query = """
+        SELECT sm.*,
+               p.name AS product_name,
+               p.sku AS product_sku
+        FROM stock_movements sm
+        LEFT JOIN products p ON sm.product_id = p.id
+        ORDER BY sm.occurred_at DESC, sm.created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = database.fetch_all(query, (limit, offset))
+    movements = [_movement_row_to_response(row) for row in rows]
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
-    try:
-        query = """
-            SELECT sm.*,
-                   p.name AS product_name,
-                   p.sku AS product_sku
-            FROM stock_movements sm
-            LEFT JOIN products p ON sm.product_id = p.id
-            ORDER BY sm.occurred_at DESC, sm.created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = database.fetch_all(query, (limit, offset))
-        movements = [_movement_row_to_response(row) for row in rows]
-
-        return movements
-
-    finally:
-        database.DB_PATH = original_db
+    return movements
