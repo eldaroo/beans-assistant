@@ -5,12 +5,10 @@ from fastapi import APIRouter, HTTPException, status
 from typing import List
 import sys
 from pathlib import Path
-import sqlite3
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from tenant_manager import TenantManager
 from backend.models.schemas import (
     ProductCreate,
     ProductUpdate,
@@ -18,25 +16,22 @@ from backend.models.schemas import (
     SuccessResponse
 )
 from database_config import db as database
+from backend import cache
 
 router = APIRouter()
 
 
-def _get_tenant_db_uri(phone: str) -> str:
-    """Get database URI for a tenant."""
-    tenant_manager = TenantManager()
-    if not tenant_manager.tenant_exists(phone):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tenant {phone} not found"
-        )
-    return tenant_manager.get_tenant_db_path(phone)
-
-
-def _product_row_to_response(row: sqlite3.Row) -> ProductResponse:
+def _product_row_to_response(row: dict) -> ProductResponse:
     """Convert database row to ProductResponse."""
+    from datetime import datetime
+
     # Convert Row to dict to handle NULL values properly
     row_dict = dict(row)
+
+    # Convert datetime to string if needed (PostgreSQL returns datetime objects)
+    created_at = row_dict["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
 
     return ProductResponse(
         id=row_dict["id"],
@@ -46,7 +41,7 @@ def _product_row_to_response(row: sqlite3.Row) -> ProductResponse:
         unit_cost_cents=row_dict["unit_cost_cents"],
         unit_price_cents=row_dict["unit_price_cents"],
         is_active=row_dict["is_active"],
-        created_at=row_dict["created_at"],
+        created_at=created_at,
         unit_cost_usd=round(row_dict["unit_cost_cents"] / 100.0, 2),
         unit_price_usd=round(row_dict["unit_price_cents"] / 100.0, 2)
     )
@@ -70,25 +65,25 @@ async def list_products(phone: str, include_inactive: bool = False):
     import traceback
 
     try:
-        db_uri = _get_tenant_db_uri(phone)
+        # Try to get from cache
+        cached_products = cache.get_cached_products(phone, active_only=not include_inactive)
+        if cached_products is not None:
+            return cached_products
+        
+        # Cache miss - query database
+        if include_inactive:
+            query = "SELECT * FROM products ORDER BY created_at DESC"
+        else:
+            query = "SELECT * FROM products WHERE is_active = TRUE ORDER BY created_at DESC"
 
-        # Temporarily set database URI
-        original_db = database.DB_PATH
-        database.DB_PATH = db_uri
+        rows = database.fetch_all(query)
+        products = [_product_row_to_response(row) for row in rows]
+        
+        # Cache the results
+        cache.cache_products(phone, products, active_only=not include_inactive)
 
-        try:
-            if include_inactive:
-                query = "SELECT * FROM products ORDER BY created_at DESC"
-            else:
-                query = "SELECT * FROM products WHERE is_active = 1 ORDER BY created_at DESC"
+        return products
 
-            rows = database.fetch_all(query)
-            products = [_product_row_to_response(row) for row in rows]
-
-            return products
-
-        finally:
-            database.DB_PATH = original_db
     except Exception as e:
         print(f"ERROR in list_products: {str(e)}")
         print(traceback.format_exc())
@@ -110,25 +105,27 @@ async def get_product(phone: str, product_id: int):
     Raises:
         404: Tenant or product not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    # Try to get from cache
+    cached_product = cache.get_cached_product(phone, product_id)
+    if cached_product is not None:
+        return cached_product
+    
+    # Cache miss - query database
+    query = "SELECT * FROM products WHERE id = %s"
+    row = database.fetch_one(query, (product_id,))
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Product {product_id} not found"
+        )
 
-    try:
-        query = "SELECT * FROM products WHERE id = ?"
-        row = database.fetch_one(query, (product_id,))
-
-        if not row:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {product_id} not found"
-            )
-
-        return _product_row_to_response(row)
-
-    finally:
-        database.DB_PATH = original_db
+    product = _product_row_to_response(row)
+    
+    # Cache the result
+    cache.cache_product(phone, product_id, product)
+    
+    return product
 
 
 @router.post("/{phone}/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -148,11 +145,6 @@ async def create_product(phone: str, product: ProductCreate):
         400: Product with same SKU already exists
         500: Failed to create product
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Create product using database.py function
         result = database.register_product({
@@ -170,30 +162,25 @@ async def create_product(phone: str, product: ProductCreate):
             )
 
         # Fetch created product
-        query = "SELECT * FROM products WHERE sku = ?"
+        query = "SELECT * FROM products WHERE sku = %s"
         row = database.fetch_one(query, (product.sku,))
+        
+        # Invalidate products cache
+        cache.invalidate_products(phone)
 
         return _product_row_to_response(row)
 
-    except sqlite3.IntegrityError as e:
-        if "UNIQUE constraint failed: products.sku" in str(e):
+    except Exception as e:
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique constraint" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Product with SKU '{product.sku}' already exists"
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail=f"Failed to create product: {error_msg}"
         )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create product: {str(e)}"
-        )
-
-    finally:
-        database.DB_PATH = original_db
 
 
 @router.put("/{phone}/products/{product_id}", response_model=ProductResponse)
@@ -213,14 +200,9 @@ async def update_product(phone: str, product_id: int, product: ProductUpdate):
         404: Tenant or product not found
         500: Failed to update product
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Check if product exists
-        query = "SELECT * FROM products WHERE id = ?"
+        query = "SELECT * FROM products WHERE id = %s"
         row = database.fetch_one(query, (product_id,))
 
         if not row:
@@ -234,19 +216,19 @@ async def update_product(phone: str, product_id: int, product: ProductUpdate):
         params = []
 
         if product.sku is not None:
-            updates.append("sku = ?")
+            updates.append("sku = %s")
             params.append(product.sku)
         if product.name is not None:
-            updates.append("name = ?")
+            updates.append("name = %s")
             params.append(product.name)
         if product.description is not None:
-            updates.append("description = ?")
+            updates.append("description = %s")
             params.append(product.description)
         if product.unit_cost_cents is not None:
-            updates.append("unit_cost_cents = ?")
+            updates.append("unit_cost_cents = %s")
             params.append(product.unit_cost_cents)
         if product.unit_price_cents is not None:
-            updates.append("unit_price_cents = ?")
+            updates.append("unit_price_cents = %s")
             params.append(product.unit_price_cents)
 
         if not updates:
@@ -255,34 +237,31 @@ async def update_product(phone: str, product_id: int, product: ProductUpdate):
 
         # Execute update
         params.append(product_id)
-        update_query = f"UPDATE products SET {', '.join(updates)} WHERE id = ?"
+        update_query = f"UPDATE products SET {', '.join(updates)} WHERE id = %s"
 
         with database.get_conn() as conn:
-            conn.execute(update_query, params)
+            with conn.cursor() as cur:
+                cur.execute(update_query, params)
 
         # Fetch updated product
         row = database.fetch_one(query, (product_id,))
+        
+        # Invalidate cache
+        cache.invalidate_products(phone)
+        
         return _product_row_to_response(row)
 
-    except sqlite3.IntegrityError as e:
-        if "UNIQUE constraint failed: products.sku" in str(e):
+    except Exception as e:
+        error_msg = str(e)
+        if "duplicate key" in error_msg.lower() or "unique constraint" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Product with SKU '{product.sku}' already exists"
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
+            detail=f"Failed to update product: {error_msg}"
         )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update product: {str(e)}"
-        )
-
-    finally:
-        database.DB_PATH = original_db
 
 
 @router.delete("/{phone}/products/{product_id}", response_model=SuccessResponse)
@@ -301,11 +280,6 @@ async def deactivate_product(phone: str, product_id: int):
         404: Tenant or product not found
         500: Failed to deactivate product
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Use database.py function
         result = database.deactivate_product(product_id)
@@ -315,6 +289,9 @@ async def deactivate_product(phone: str, product_id: int):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result.get("message", "Failed to deactivate product")
             )
+        
+        # Invalidate cache
+        cache.invalidate_products(phone)
 
         return SuccessResponse(
             status="ok",
@@ -332,6 +309,3 @@ async def deactivate_product(phone: str, product_id: int):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to deactivate product: {str(e)}"
         )
-
-    finally:
-        database.DB_PATH = original_db

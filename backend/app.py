@@ -12,11 +12,12 @@ from fastapi.responses import HTMLResponse
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import tenant_manager and database
+# Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant
+from backend import cache
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -55,22 +56,75 @@ app.include_router(expenses.router, prefix="/api/tenants", tags=["Expenses"])
 app.include_router(stock.router, prefix="/api/tenants", tags=["Stock"])
 app.include_router(analytics.router, prefix="/api/tenants", tags=["Analytics"])
 app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"])
+app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat"])
+
 
 
 # HTML Routes (Admin UI)
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Home page - list of all tenants."""
-    from tenant_manager import TenantManager
+    from database_config import db as database
+    import json
 
-    tenant_manager = TenantManager()
-    tenants_list = tenant_manager.list_tenants()
+    # Load tenant registry (if exists) for tenant metadata
+    registry_path = Path("configs/tenant_registry.json")
+    tenants_list = []
 
-    # Get stats for each tenant
+    if registry_path.exists():
+        with open(registry_path, 'r', encoding='utf-8') as f:
+            registry = json.load(f)
+            tenants_list = [
+                {
+                    "phone_number": phone,
+                    **data
+                }
+                for phone, data in registry.items()
+            ]
+
+    # Get stats for each tenant from PostgreSQL
     tenants_with_stats = []
     for tenant in tenants_list:
         phone = tenant["phone_number"]
-        stats = tenant_manager.get_tenant_stats(phone)
+
+        # Get stats from PostgreSQL (with caching)
+        try:
+            # Try to get from cache
+            stats = cache.get_cached_stats(phone)
+            if stats is None:
+                # Cache miss - query database
+                # Product count
+                products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+
+                # Sales count
+                sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+
+                # Revenue
+                revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+                revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+
+                # Profit
+                profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+                profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+
+                stats = {
+                    "products": products_count["count"] if products_count else 0,
+                    "sales": sales_count["count"] if sales_count else 0,
+                    "revenue_usd": revenue_cents / 100.0,
+                    "profit_usd": profit_usd
+                }
+                
+                # Cache the stats
+                cache.cache_stats(phone, stats)
+        except Exception as e:
+            print(f"Error getting stats for {phone}: {e}")
+            stats = {
+                "products": 0,
+                "sales": 0,
+                "revenue_usd": 0.0,
+                "profit_usd": 0.0
+            }
+
         tenants_with_stats.append({
             **tenant,
             "stats": stats
@@ -88,22 +142,62 @@ async def home(request: Request):
 @app.get("/tenants/{phone}", response_class=HTMLResponse)
 async def tenant_detail(request: Request, phone: str):
     """Tenant detail page - dashboard with tabs."""
-    from tenant_manager import TenantManager
+    from database_config import db as database
+    import json
 
-    tenant_manager = TenantManager()
+    # Load tenant config from registry
+    registry_path = Path("configs/tenant_registry.json")
+    tenant_config = {
+        "business_name": "Unknown",
+        "language": "es",
+        "currency": "USD"
+    }
 
-    if not tenant_manager.tenant_exists(phone):
-        return templates.TemplateResponse(
-            "error.html",
-            {
-                "request": request,
-                "error": f"Tenant {phone} not found"
-            },
-            status_code=404
-        )
+    if registry_path.exists():
+        with open(registry_path, 'r', encoding='utf-8') as f:
+            registry = json.load(f)
+            if phone in registry:
+                tenant_config["business_name"] = registry[phone].get("business_name", "Unknown")
+            else:
+                return templates.TemplateResponse(
+                    "error.html",
+                    {
+                        "request": request,
+                        "error": f"Tenant {phone} not found"
+                    },
+                    status_code=404
+                )
 
-    tenant_config = tenant_manager.get_tenant_config(phone)
-    stats = tenant_manager.get_tenant_stats(phone)
+    # Get stats from PostgreSQL
+    try:
+        # Product count
+        products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+
+        # Sales count
+        sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+
+        # Revenue
+        revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+        revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+
+        # Profit
+        profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+        profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+
+        stats = {
+            "products": products_count["count"] if products_count else 0,
+            "sales": sales_count["count"] if sales_count else 0,
+            "revenue_usd": revenue_cents / 100.0,
+            "profit_usd": profit_usd
+        }
+    except Exception as e:
+        print(f"Error getting stats: {e}")
+        stats = {
+            "products": 0,
+            "sales": 0,
+            "revenue_usd": 0.0,
+            "profit_usd": 0.0
+        }
 
     return templates.TemplateResponse(
         "tenant_detail.html",

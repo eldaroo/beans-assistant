@@ -1,6 +1,8 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database (desarrollo local)
+  # En AWS usarías RDS y NO este container
   postgres:
     image: postgres:16-alpine
     container_name: beansco-postgres
@@ -20,6 +22,65 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - beansco-network
+
+  # Backend FastAPI (Container 1)
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: beansco-backend
+    restart: unless-stopped
+    environment:
+      USE_POSTGRES: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: beansco_main
+      POSTGRES_USER: beansco
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      - ./configs:/app/configs
+      - ./data:/app/data
+      # Hot reload para desarrollo (descomentar si necesitas)
+      # - ./backend:/app/backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - beansco-network
+
+  # WhatsApp Client (Container 2)
+  whatsapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.whatsapp
+    container_name: beansco-whatsapp
+    restart: unless-stopped
+    environment:
+      USE_POSTGRES: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: beansco_main
+      POSTGRES_USER: beansco
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+      BACKEND_URL: http://backend:8000
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    volumes:
+      # CRÍTICO: sesión de WhatsApp debe persistir
+      - whatsapp_auth:/app/.wwebjs_auth
+      - ./configs:/app/configs
+      # Hot reload para desarrollo (descomentar si necesitas)
+      # - ./agents:/app/agents
+      # - ./whatsapp_server_multitenant.py:/app/whatsapp_server_multitenant.py
+    depends_on:
+      - backend
+      - postgres
+    networks:
+      - beansco-network
 
   # Opcional: PgAdmin para gestión visual
   pgadmin:
@@ -36,6 +97,8 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - postgres
+    networks:
+      - beansco-network
     profiles:
       - tools  # Solo se inicia con: docker-compose --profile tools up
 
@@ -44,7 +107,9 @@ volumes:
     driver: local
   pgadmin_data:
     driver: local
+  whatsapp_auth:
+    driver: local  # IMPORTANTE: no perder esto o hay que re-escanear QR
 
 networks:
-  default:
-    name: beansco-network
+  beansco-network:
+    driver: bridge

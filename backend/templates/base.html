@@ -18,7 +18,10 @@
         [x-cloak] { display: none !important; }
     </style>
 
-    {% block extra_head %}{% endblock %}
+    {% block extra_head %}
+    <!-- Chat Widget Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/chat_widget.css') }}">
+    {% endblock %}
 </head>
 <body class="bg-gray-50">
     <!-- Navigation -->

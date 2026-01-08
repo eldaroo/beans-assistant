@@ -5,12 +5,11 @@ from fastapi import APIRouter, HTTPException, status
 from typing import List
 import sys
 from pathlib import Path
-import sqlite3
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from tenant_manager import TenantManager
 from backend.models.schemas import (
     ExpenseCreate,
     ExpenseResponse,
@@ -21,28 +20,32 @@ from database_config import db as database
 router = APIRouter()
 
 
-def _get_tenant_db_uri(phone: str) -> str:
-    """Get database URI for a tenant."""
-    tenant_manager = TenantManager()
-    if not tenant_manager.tenant_exists(phone):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tenant {phone} not found"
-        )
-    return tenant_manager.get_tenant_db_path(phone)
-
-
-def _expense_row_to_response(row: sqlite3.Row) -> ExpenseResponse:
+def _expense_row_to_response(row: dict) -> ExpenseResponse:
     """Convert database row to ExpenseResponse."""
+    from datetime import date
+
+    row_dict = dict(row)
+
+    # Convert datetime/date to string if needed (PostgreSQL returns datetime/date objects)
+    expense_date = row_dict["expense_date"]
+    if isinstance(expense_date, datetime):
+        expense_date = expense_date.date().isoformat()  # Date only
+    elif isinstance(expense_date, date):
+        expense_date = expense_date.isoformat()
+
+    created_at = row_dict["created_at"]
+    if isinstance(created_at, datetime):
+        created_at = created_at.isoformat()
+
     return ExpenseResponse(
-        id=row["id"],
-        expense_date=row["expense_date"],
-        category=row["category"],
-        description=row["description"],
-        amount_cents=row["amount_cents"],
-        currency=row["currency"],
-        created_at=row["created_at"],
-        amount_usd=round(row["amount_cents"] / 100.0, 2)
+        id=row_dict["id"],
+        expense_date=expense_date,
+        category=row_dict["category"],
+        description=row_dict["description"],
+        amount_cents=row_dict["amount_cents"],
+        currency=row_dict["currency"],
+        created_at=created_at,
+        amount_usd=round(row_dict["amount_cents"] / 100.0, 2)
     )
 
 
@@ -62,24 +65,15 @@ async def list_expenses(phone: str, limit: int = 50, offset: int = 0):
     Raises:
         404: Tenant not found
     """
-    db_uri = _get_tenant_db_uri(phone)
+    query = """
+        SELECT * FROM expenses
+        ORDER BY expense_date DESC, created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    rows = database.fetch_all(query, (limit, offset))
+    expenses = [_expense_row_to_response(row) for row in rows]
 
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
-    try:
-        query = """
-            SELECT * FROM expenses
-            ORDER BY expense_date DESC, created_at DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = database.fetch_all(query, (limit, offset))
-        expenses = [_expense_row_to_response(row) for row in rows]
-
-        return expenses
-
-    finally:
-        database.DB_PATH = original_db
+    return expenses
 
 
 @router.post("/{phone}/expenses", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
@@ -99,11 +93,6 @@ async def create_expense(phone: str, expense: ExpenseCreate):
         400: Invalid data
         500: Failed to create expense
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Convert ExpenseCreate to database format
         expense_data = {
@@ -126,7 +115,7 @@ async def create_expense(phone: str, expense: ExpenseCreate):
         expense_id = result["expense_id"]
 
         # Fetch created expense
-        query = "SELECT * FROM expenses WHERE id = ?"
+        query = "SELECT * FROM expenses WHERE id = %s"
         row = database.fetch_one(query, (expense_id,))
 
         return _expense_row_to_response(row)
@@ -142,9 +131,6 @@ async def create_expense(phone: str, expense: ExpenseCreate):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create expense: {str(e)}"
         )
-
-    finally:
-        database.DB_PATH = original_db
 
 
 @router.delete("/{phone}/expenses/{expense_id}", response_model=SuccessResponse)
@@ -163,11 +149,6 @@ async def cancel_expense(phone: str, expense_id: int):
         404: Tenant or expense not found
         500: Failed to cancel expense
     """
-    db_uri = _get_tenant_db_uri(phone)
-
-    original_db = database.DB_PATH
-    database.DB_PATH = db_uri
-
     try:
         # Use database.py function
         result = database.cancel_expense(expense_id)
@@ -194,6 +175,3 @@ async def cancel_expense(phone: str, expense_id: int):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to cancel expense: {str(e)}"
         )
-
-    finally:
-        database.DB_PATH = original_db
