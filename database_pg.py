@@ -36,7 +36,10 @@ def get_connection_pool():
             dbname=DB_NAME,
             user=DB_USER,
             password=DB_PASSWORD,
-            cursor_factory=RealDictCursor
+            cursor_factory=RealDictCursor,
+            # Explicit encoding configuration to avoid UTF-8 issues
+            client_encoding='UTF8',
+            options='-c client_encoding=UTF8'
         )
         print(f"[DB] Connection pool created (1-10 connections)")
     return _connection_pool

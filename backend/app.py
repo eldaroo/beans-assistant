@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 import sys
+import os
 from pathlib import Path
 
 # Add parent directory to path
@@ -82,53 +83,108 @@ async def home(request: Request):
                 for phone, data in registry.items()
             ]
 
-    # Get stats for each tenant from PostgreSQL
+    # Get stats for all tenants in ONE query (optimized)
     tenants_with_stats = []
-    for tenant in tenants_list:
-        phone = tenant["phone_number"]
 
-        # Get stats from PostgreSQL (with caching)
+    # Check if we're using PostgreSQL with the optimized function
+    use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"
+
+    if use_postgres:
+        # PostgreSQL: Use optimized get_all_tenant_stats() function
         try:
-            # Try to get from cache
-            stats = cache.get_cached_stats(phone)
-            if stats is None:
-                # Cache miss - query database
-                # Product count
-                products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+            # Query all tenant stats in a single call
+            all_stats = database.fetch_all("SELECT * FROM get_all_tenant_stats()")
 
-                # Sales count
-                sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+            # Create a mapping of phone_number to stats for quick lookup
+            # Schema name format is typically: tenant_+541153695627
+            stats_map = {}
+            for row in all_stats:
+                # Extract phone from schema name (e.g., "tenant_+541153695627" -> "+541153695627")
+                schema_name = row["schema_name"]
+                if schema_name == "public":
+                    continue
 
-                # Revenue
-                revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
-                revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
-
-                # Profit
-                profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
-                profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
-
-                stats = {
-                    "products": products_count["count"] if products_count else 0,
-                    "sales": sales_count["count"] if sales_count else 0,
-                    "revenue_usd": revenue_cents / 100.0,
-                    "profit_usd": profit_usd
+                # Remove "tenant_" prefix
+                phone = schema_name.replace("tenant_", "")
+                stats_map[phone] = {
+                    "products": int(row["products_count"]) if row["products_count"] else 0,
+                    "sales": int(row["sales_count"]) if row["sales_count"] else 0,
+                    "revenue_usd": float(row["revenue_cents"]) / 100.0 if row["revenue_cents"] else 0.0,
+                    "profit_usd": float(row["profit_usd"]) if row["profit_usd"] else 0.0
                 }
-                
-                # Cache the stats
-                cache.cache_stats(phone, stats)
-        except Exception as e:
-            print(f"Error getting stats for {phone}: {e}")
-            stats = {
-                "products": 0,
-                "sales": 0,
-                "revenue_usd": 0.0,
-                "profit_usd": 0.0
-            }
 
-        tenants_with_stats.append({
-            **tenant,
-            "stats": stats
-        })
+                # Cache the stats for individual tenant queries
+                cache.cache_stats(phone, stats_map[phone])
+
+            # Merge tenant info with stats
+            for tenant in tenants_list:
+                phone = tenant["phone_number"]
+                stats = stats_map.get(phone, {
+                    "products": 0,
+                    "sales": 0,
+                    "revenue_usd": 0.0,
+                    "profit_usd": 0.0
+                })
+
+                tenants_with_stats.append({
+                    **tenant,
+                    "stats": stats
+                })
+
+        except Exception as e:
+            print(f"Error getting all tenant stats: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback: return tenants with empty stats
+            for tenant in tenants_list:
+                tenants_with_stats.append({
+                    **tenant,
+                    "stats": {
+                        "products": 0,
+                        "sales": 0,
+                        "revenue_usd": 0.0,
+                        "profit_usd": 0.0
+                    }
+                })
+    else:
+        # SQLite: Keep original logic (N+1 queries, but acceptable for single tenant)
+        for tenant in tenants_list:
+            phone = tenant["phone_number"]
+
+            try:
+                # Try to get from cache
+                stats = cache.get_cached_stats(phone)
+                if stats is None:
+                    # Cache miss - query database
+                    products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+                    sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+                    revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+                    revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+                    profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+                    profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+
+                    stats = {
+                        "products": products_count["count"] if products_count else 0,
+                        "sales": sales_count["count"] if sales_count else 0,
+                        "revenue_usd": revenue_cents / 100.0,
+                        "profit_usd": profit_usd
+                    }
+
+                    # Cache the stats
+                    cache.cache_stats(phone, stats)
+            except Exception as e:
+                print(f"Error getting stats for {phone}: {e}")
+                stats = {
+                    "products": 0,
+                    "sales": 0,
+                    "revenue_usd": 0.0,
+                    "profit_usd": 0.0
+                }
+
+            tenants_with_stats.append({
+                **tenant,
+                "stats": stats
+            })
 
     return templates.TemplateResponse(
         "tenants.html",
