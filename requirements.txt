@@ -16,12 +16,11 @@ python-dotenv>=1.0.0
 pydantic>=2.0.0
 requests>=2.31.0
 
-# Audio transcription
-openai-whisper>=20231117
-ffmpeg-python>=0.2.0
-
 # Optional (for development and testing)
 pytest>=7.4.0
 
 # Cache
 redis>=5.0.0
+
+# Note: Audio transcription (openai-whisper, ffmpeg-python) removed to reduce image size
+# If needed in the future, use OpenAI Whisper API instead of local model
