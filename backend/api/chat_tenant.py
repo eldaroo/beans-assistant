@@ -17,6 +17,18 @@ import database
 
 router = APIRouter()
 
+# Cache the agent graph to avoid recreating it on every request
+# This significantly improves response time
+_agent_graph_cache = None
+
+def get_agent_graph():
+    """Get cached agent graph or create new one if not exists."""
+    global _agent_graph_cache
+    if _agent_graph_cache is None:
+        _agent_graph_cache = create_business_agent_graph()
+    return _agent_graph_cache
+
+
 
 class TenantChatMessage(BaseModel):
     """Chat message input for tenant-specific chat."""
@@ -82,8 +94,8 @@ async def chat_with_tenant(phone: str, chat: TenantChatMessage):
         # This ensures all database operations use the correct tenant's database
         database.DB_PATH = db_path
 
-        # Create graph
-        graph = create_business_agent_graph()
+        # Get cached graph (much faster than creating new one each time)
+        graph = get_agent_graph()
 
         # Initial state (similar to WhatsApp server)
         initial_state = {
@@ -98,24 +110,47 @@ async def chat_with_tenant(phone: str, chat: TenantChatMessage):
         # Invoke graph
         result = graph.invoke(initial_state)
 
-        # Extract response
+        # Extract response - need to get the FINAL user-facing message, not router internals
         bot_response = ""
-        if "messages" in result and len(result["messages"]) > 0:
-            last_message = result["messages"][-1]
-
-            # Handle different message formats
-            if hasattr(last_message, 'content'):
-                bot_response = last_message.content
-            elif isinstance(last_message, dict) and 'content' in last_message:
-                bot_response = last_message['content']
-            elif isinstance(last_message, str):
-                bot_response = last_message
-            else:
-                bot_response = str(last_message)
-
-        # If no message in messages array, try final_answer
-        if not bot_response and "final_answer" in result:
+        
+        # First, try to get final_answer which is the user-facing response
+        if "final_answer" in result and result["final_answer"]:
             bot_response = result["final_answer"]
+        
+        # If no final_answer, look through messages for user-facing content
+        elif "messages" in result and len(result["messages"]) > 0:
+            # Filter out internal router/agent messages (those starting with [Router], [Read], etc.)
+            user_facing_messages = []
+            for msg in result["messages"]:
+                content = ""
+                if hasattr(msg, 'content'):
+                    content = msg.content
+                elif isinstance(msg, dict) and 'content' in msg:
+                    content = msg['content']
+                elif isinstance(msg, str):
+                    content = msg
+                else:
+                    content = str(msg)
+                
+                # Skip internal agent messages
+                if not content.startswith('[Router]') and not content.startswith('[Read]') and \
+                   not content.startswith('[Write]') and not content.startswith('[Resolver]'):
+                    user_facing_messages.append(content)
+            
+            # Get the last user-facing message
+            if user_facing_messages:
+                bot_response = user_facing_messages[-1]
+            else:
+                # Fallback to last message if no user-facing found
+                last_message = result["messages"][-1]
+                if hasattr(last_message, 'content'):
+                    bot_response = last_message.content
+                elif isinstance(last_message, dict) and 'content' in last_message:
+                    bot_response = last_message['content']
+                elif isinstance(last_message, str):
+                    bot_response = last_message
+                else:
+                    bot_response = str(last_message)
 
         # Extract metadata
         metadata = {

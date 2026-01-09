@@ -64,7 +64,10 @@
       "Bash(git checkout:*)",
       "Bash(time curl:*)",
       "Bash(time .venv/Scripts/python.exe:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(psql:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker-compose up:*)"
     ]
   }
 }

@@ -1,71 +1,23 @@
-# Git
+﻿__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
 .git
 .gitignore
-.gitattributes
-
-# Python
-__pycache__
-*.py[cod]
-*$py.class
-*.so
-.Python
-.venv
-venv/
-ENV/
-env/
-*.egg-info
-dist/
-build/
-
-# IDEs
 .vscode
 .idea
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-*.bak
-
-# Project specific
-*.db
+*.log
+.env.local
+venv
+env
 *.db-journal
 *.db-wal
 *.db-shm
-data/clients/
-logs/
-*.log
-
-# WhatsApp session (se monta como volume)
-.wwebjs_auth/
-.wwebjs_cache/
-
-# Docker files
-Dockerfile*
-docker-compose*.yml
-.dockerignore
-
-# PostgreSQL data
-postgres/
-
-# Documentation
-*.md
-docs/
-
-# Tests
-tests/
-pytest_cache/
-.coverage
-htmlcov/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Temporary files
-tmp/
-temp/
-*.tmp
+node_modules
+.DS_Store

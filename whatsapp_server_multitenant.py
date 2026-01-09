@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from whatsapp_client import GreenAPIWhatsAppClient, format_message_for_whatsapp
 from graph import create_business_agent_graph
-from audio_transcriber import transcribe_audio_from_url
+# Audio transcription disabled to reduce Docker image size
+# from audio_transcriber import transcribe_audio_from_url
 from tenant_manager import get_tenant_manager
 from onboarding_agent import (
     get_onboarding_session,
@@ -290,76 +291,19 @@ def run_whatsapp_server():
 
                     # Handle audio messages
                     if message_type == "audio":
-                        audio_url = message_data.get("audio_url")
-
-                        print(f"\n{'='*60}")
-                        print(f"    [AUDIO] Audio message detected")
-                        print(f"    [AUDIO] URL present: {bool(audio_url)}")
-                        if audio_url:
-                            print(f"    [AUDIO] URL: {audio_url[:100]}...")
-                        else:
-                            print(f"    [AUDIO ERROR] No audio URL provided!")
-                            print(f"    [AUDIO] Full message_data: {message_data}")
-                        print(f"{'='*60}\n")
-
-                        if not audio_url:
-                            print(f"    [ERROR] Cannot transcribe - no audio URL")
-                            client.send_message(
-                                chat_id,
-                                "Lo siento, no pude obtener el archivo de audio. Por favor intenta de nuevo."
-                            )
-                            receipt_id = notification.get("receiptId")
-                            if receipt_id:
-                                client.delete_notification(receipt_id)
-                            continue
-
-                        print(f"    [AUDIO] Starting transcription process...")
-                        transcription_start = time.time()
-
-                        try:
-                            transcription = transcribe_audio_from_url(audio_url)
-                            transcription_time = time.time() - transcription_start
-
-                            if transcription:
-                                user_message = transcription
-                                print(f"\n{'='*60}")
-                                print(f"    [AUDIO SUCCESS] Transcription completed in {transcription_time:.2f}s")
-                                print(f"    [TRANSCRIPTION] \"{user_message}\"")
-                                print(f"{'='*60}\n")
-                            else:
-                                print(f"\n{'='*60}")
-                                print(f"    [AUDIO ERROR] Transcription returned None")
-                                print(f"    [AUDIO ERROR] Time elapsed: {transcription_time:.2f}s")
-                                print(f"{'='*60}\n")
-
-                                # Send error message to user
-                                client.send_message(
-                                    chat_id,
-                                    "Lo siento, no pude transcribir el mensaje de audio. Por favor intenta de nuevo o envía un mensaje de texto."
-                                )
-                                # Delete notification and continue
-                                receipt_id = notification.get("receiptId")
-                                if receipt_id:
-                                    client.delete_notification(receipt_id)
-                                continue
-
-                        except Exception as e:
-                            print(f"\n{'='*60}")
-                            print(f"    [AUDIO ERROR] Exception during transcription: {e}")
-                            import traceback
-                            traceback.print_exc()
-                            print(f"{'='*60}\n")
-
-                            # Send error message to user
-                            client.send_message(
-                                chat_id,
-                                "Lo siento, ocurrió un error al procesar el audio. Por favor intenta de nuevo."
-                            )
-                            # Delete notification and continue
-                            receipt_id = notification.get("receiptId")
-                            if receipt_id:
-                                client.delete_notification(receipt_id)
-                            continue
+                        print(f"    [AUDIO] Audio message received but transcription is disabled")
+                        
+                        # Send not-supported message to user
+                        client.send_message(
+                            chat_id,
+                            "Lo siento, actualmente no puedo procesar mensajes de audio. Por favor envía un mensaje de texto."
+                        )
+                        
+                        # Delete notification and continue
+                        receipt_id = notification.get("receiptId")
+                        if receipt_id:
+                            client.delete_notification(receipt_id)
+                        continue
                     else:
                         print(f"    [IN] \"{user_message}\"")
 
