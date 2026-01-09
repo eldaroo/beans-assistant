@@ -3,8 +3,10 @@ version: '3.8'
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: beansco-postgres
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-beansco_main}
       POSTGRES_USER: ${POSTGRES_USER:-beansco}
@@ -15,7 +17,7 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-beansco}"]
+      test: ["CMD-SHELL", "pg_isready -U beansco"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -45,6 +47,8 @@ services:
     image: darioegea/whatsapp-assistant:latest
     container_name: beansco-backend
     command: ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env
     environment:
       # Database
       USE_POSTGRES: "true"
@@ -92,6 +96,8 @@ services:
     image: darioegea/whatsapp-assistant:latest
     container_name: beansco-whatsapp
     command: ["python", "whatsapp_server_multitenant.py"]
+    env_file:
+      - .env
     environment:
       # Database (same as backend)
       USE_POSTGRES: "true"
