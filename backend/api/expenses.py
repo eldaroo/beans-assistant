@@ -1,177 +1,109 @@
-"""
-Expenses Management API Endpoints.
-"""
-from fastapi import APIRouter, HTTPException, status
-from typing import List
+"""Expenses Management API Endpoints."""
+
+import logging
+from pathlib import Path as FilePath
 import sys
-from pathlib import Path
-from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 # Add parent directory to path
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(FilePath(__file__).parent.parent.parent))
 
-from backend.models.schemas import (
-    ExpenseCreate,
-    ExpenseResponse,
-    SuccessResponse
+from backend.api.tenant_scope import tenant_scope
+from backend.models.schemas import ExpenseCreate, ExpenseResponse, SuccessResponse
+from backend.services.expenses_service import (
+    ExpenseConflictError,
+    ExpenseNotFoundError,
+    ExpenseValidationError,
+    ExpensesService,
 )
-from database_config import db as database
 
 router = APIRouter()
-
-
-def _expense_row_to_response(row: dict) -> ExpenseResponse:
-    """Convert database row to ExpenseResponse."""
-    from datetime import date
-
-    row_dict = dict(row)
-
-    # Convert datetime/date to string if needed (PostgreSQL returns datetime/date objects)
-    expense_date = row_dict["expense_date"]
-    if isinstance(expense_date, datetime):
-        expense_date = expense_date.date().isoformat()  # Date only
-    elif isinstance(expense_date, date):
-        expense_date = expense_date.isoformat()
-
-    created_at = row_dict["created_at"]
-    if isinstance(created_at, datetime):
-        created_at = created_at.isoformat()
-
-    return ExpenseResponse(
-        id=row_dict["id"],
-        expense_date=expense_date,
-        category=row_dict["category"],
-        description=row_dict["description"],
-        amount_cents=row_dict["amount_cents"],
-        currency=row_dict["currency"],
-        created_at=created_at,
-        amount_usd=round(row_dict["amount_cents"] / 100.0, 2)
-    )
+logger = logging.getLogger(__name__)
+expenses_service = ExpensesService()
 
 
 @router.get("/{phone}/expenses", response_model=List[ExpenseResponse])
-async def list_expenses(phone: str, limit: int = 50, offset: int = 0):
-    """
-    List expenses for a tenant.
-
-    Args:
-        phone: Phone number in international format
-        limit: Maximum number of expenses to return (default: 50)
-        offset: Number of expenses to skip (default: 0)
-
-    Returns:
-        List of expenses
-
-    Raises:
-        404: Tenant not found
-    """
-    query = """
-        SELECT * FROM expenses
-        ORDER BY expense_date DESC, created_at DESC
-        LIMIT %s OFFSET %s
-    """
-    rows = database.fetch_all(query, (limit, offset))
-    expenses = [_expense_row_to_response(row) for row in rows]
-
-    return expenses
+async def list_expenses(
+    phone: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """List expenses for a tenant."""
+    try:
+        with tenant_scope(phone):
+            return expenses_service.list_expenses(phone=phone, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to list expenses for tenant %s", phone)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list expenses",
+        )
 
 
 @router.post("/{phone}/expenses", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
 async def create_expense(phone: str, expense: ExpenseCreate):
-    """
-    Register a new expense.
-
-    Args:
-        phone: Phone number in international format
-        expense: Expense data
-
-    Returns:
-        Created expense
-
-    Raises:
-        404: Tenant not found
-        400: Invalid data
-        500: Failed to create expense
-    """
+    """Register a new expense."""
     try:
-        # Convert ExpenseCreate to database format
-        expense_data = {
-            "amount_cents": expense.amount_cents,
-            "description": expense.description,
-            "category": expense.category,
-            "currency": expense.currency,
-            **({"expense_date": expense.expense_date} if expense.expense_date else {})
-        }
-
-        # Create expense using database.py function
-        result = database.register_expense(expense_data)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to create expense")
-            )
-
-        expense_id = result["expense_id"]
-
-        # Fetch created expense
-        query = "SELECT * FROM expenses WHERE id = %s"
-        row = database.fetch_one(query, (expense_id,))
-
-        return _expense_row_to_response(row)
-
-    except ValueError as e:
+        with tenant_scope(phone):
+            return expenses_service.create_expense(phone=phone, payload=expense)
+    except ExpenseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ExpenseValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-    except Exception as e:
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to create expense for tenant %s", phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create expense: {str(e)}"
+            detail="Failed to create expense",
         )
 
 
 @router.delete("/{phone}/expenses/{expense_id}", response_model=SuccessResponse)
-async def cancel_expense(phone: str, expense_id: int):
-    """
-    Cancel an expense (delete it).
-
-    Args:
-        phone: Phone number in international format
-        expense_id: Expense ID
-
-    Returns:
-        Success message with updated profit
-
-    Raises:
-        404: Tenant or expense not found
-        500: Failed to cancel expense
-    """
+async def cancel_expense(
+    phone: str,
+    expense_id: int = Path(..., gt=0),
+):
+    """Cancel an expense (delete it)."""
     try:
-        # Use database.py function
-        result = database.cancel_expense(expense_id)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to cancel expense")
+        with tenant_scope(phone):
+            result = expenses_service.cancel_expense(phone=phone, expense_id=expense_id)
+            return SuccessResponse(
+                status="ok",
+                message=f"Expense {expense_id} cancelled successfully",
+                data=result,
             )
-
-        return SuccessResponse(
-            status="ok",
-            message=f"Expense {expense_id} cancelled successfully",
-            data=result
-        )
-
-    except Exception as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Expense {expense_id} not found"
-            )
+    except ExpenseNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except ExpenseConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ExpenseValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to cancel expense %s for tenant %s", expense_id, phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to cancel expense: {str(e)}"
+            detail="Failed to cancel expense",
         )

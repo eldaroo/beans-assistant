@@ -1,269 +1,133 @@
-"""
-Sales Management API Endpoints.
-"""
-from fastapi import APIRouter, HTTPException, status
-from typing import List
+"""Sales Management API Endpoints."""
+
+import logging
+from pathlib import Path as FilePath
 import sys
-from pathlib import Path
-from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 # Add parent directory to path
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.append(str(FilePath(__file__).parent.parent.parent))
 
-from backend.models.schemas import (
-    SaleCreate,
-    SaleResponse,
-    SaleItemResponse,
-    SuccessResponse
+from backend.api.tenant_scope import tenant_scope
+from backend.models.schemas import SaleCreate, SaleResponse, SuccessResponse
+from backend.services.sales_service import (
+    SaleConflictError,
+    SaleNotFoundError,
+    SaleValidationError,
+    SalesService,
 )
-from database_config import db as database
-from backend import cache
 
 router = APIRouter()
-
-
-def _sale_row_to_response(sale_row: dict, items: List[dict]) -> SaleResponse:
-    """Convert database rows to SaleResponse."""
-    # Convert Row to dict to handle NULL values properly
-    sale_dict = dict(sale_row)
-
-    # Convert datetime to string if needed (PostgreSQL returns datetime objects)
-    created_at = sale_dict["created_at"]
-    if isinstance(created_at, datetime):
-        created_at = created_at.isoformat()
-
-    paid_at = sale_dict.get("paid_at")
-    if isinstance(paid_at, datetime):
-        paid_at = paid_at.isoformat()
-
-    return SaleResponse(
-        id=sale_dict["id"],
-        sale_number=sale_dict["sale_number"],
-        status=sale_dict["status"],
-        total_amount_cents=sale_dict["total_amount_cents"],
-        customer_name=sale_dict.get("customer_name"),
-        created_at=created_at,
-        paid_at=paid_at,
-        total_amount_usd=round(sale_dict["total_amount_cents"] / 100.0, 2),
-        items=[
-            SaleItemResponse(
-                id=item_dict["id"],
-                sale_id=item_dict["sale_id"],
-                product_id=item_dict["product_id"],
-                quantity=item_dict["quantity"],
-                unit_price_cents=item_dict["unit_price_cents"],
-                line_total_cents=item_dict["line_total_cents"],
-                unit_price_usd=round(item_dict["unit_price_cents"] / 100.0, 2),
-                line_total_usd=round(item_dict["line_total_cents"] / 100.0, 2),
-                product_name=item_dict.get("product_name"),
-                product_sku=item_dict.get("product_sku")
-            )
-            for item in items
-            for item_dict in [dict(item)]  # Convert Row to dict
-        ]
-    )
+logger = logging.getLogger(__name__)
+sales_service = SalesService()
 
 
 @router.get("/{phone}/sales", response_model=List[SaleResponse])
-async def list_sales(phone: str, limit: int = 50, offset: int = 0):
-    """
-    List sales for a tenant.
-
-    Args:
-        phone: Phone number in international format
-        limit: Maximum number of sales to return (default: 50)
-        offset: Number of sales to skip (default: 0)
-
-    Returns:
-        List of sales with items
-
-    Raises:
-        404: Tenant not found
-    """
-    # Fetch sales
-    sales_query = """
-        SELECT * FROM sales
-        ORDER BY created_at DESC
-        LIMIT %s OFFSET %s
-    """
-    sales_rows = database.fetch_all(sales_query, (limit, offset))
-
-    # Fetch items for each sale
-    result = []
-    for sale_row in sales_rows:
-        items_query = """
-            SELECT si.*,
-                   p.name AS product_name,
-                   p.sku AS product_sku
-            FROM sale_items si
-            LEFT JOIN products p ON si.product_id = p.id
-            WHERE si.sale_id = %s
-        """
-        items_rows = database.fetch_all(items_query, (sale_row["id"],))
-        result.append(_sale_row_to_response(sale_row, items_rows))
-
-    return result
+async def list_sales(
+    phone: str,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """List sales for a tenant."""
+    try:
+        with tenant_scope(phone):
+            return sales_service.list_sales(phone=phone, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to list sales for tenant %s", phone)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list sales",
+        )
 
 
 @router.get("/{phone}/sales/{sale_id}", response_model=SaleResponse)
-async def get_sale(phone: str, sale_id: int):
-    """
-    Get sale details.
-
-    Args:
-        phone: Phone number in international format
-        sale_id: Sale ID
-
-    Returns:
-        Sale details with items
-
-    Raises:
-        404: Tenant or sale not found
-    """
-    sale_query = "SELECT * FROM sales WHERE id = %s"
-    sale_row = database.fetch_one(sale_query, (sale_id,))
-
-    if not sale_row:
+async def get_sale(
+    phone: str,
+    sale_id: int = Path(..., gt=0),
+):
+    """Get sale details."""
+    try:
+        with tenant_scope(phone):
+            return sales_service.get_sale(phone=phone, sale_id=sale_id)
+    except SaleNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Sale {sale_id} not found"
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to fetch sale %s for tenant %s", sale_id, phone)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch sale",
         )
-
-    items_query = """
-        SELECT si.*,
-               p.name AS product_name,
-               p.sku AS product_sku
-        FROM sale_items si
-        LEFT JOIN products p ON si.product_id = p.id
-        WHERE si.sale_id = %s
-    """
-    items_rows = database.fetch_all(items_query, (sale_id,))
-
-    return _sale_row_to_response(sale_row, items_rows)
 
 
 @router.post("/{phone}/sales", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
 async def create_sale(phone: str, sale: SaleCreate):
-    """
-    Register a new sale.
-
-    Args:
-        phone: Phone number in international format
-        sale: Sale data with items
-
-    Returns:
-        Created sale with updated revenue and profit
-
-    Raises:
-        404: Tenant not found
-        400: Insufficient stock or invalid data
-        500: Failed to create sale
-    """
+    """Register a new sale."""
     try:
-        # Convert SaleCreate to database format
-        items_data = [
-            {
-                "product_id": item.product_id,
-                "quantity": item.quantity,
-                **({"unit_price_cents": item.unit_price_cents} if item.unit_price_cents else {})
-            }
-            for item in sale.items
-        ]
-
-        sale_data = {
-            "status": sale.status,
-            "items": items_data,
-            **({"customer_name": sale.customer_name} if sale.customer_name else {})
-        }
-
-        # Create sale using database.py function
-        result = database.register_sale(sale_data)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to create sale")
-            )
-
-        sale_id = result["sale_id"]
-
-        # Fetch created sale
-        sale_query = "SELECT * FROM sales WHERE id = %s"
-        sale_row = database.fetch_one(sale_query, (sale_id,))
-
-        items_query = """
-            SELECT si.*,
-                   p.name AS product_name,
-                   p.sku AS product_sku
-            FROM sale_items si
-            LEFT JOIN products p ON si.product_id = p.id
-            WHERE si.sale_id = %s
-        """
-        items_rows = database.fetch_all(items_query, (sale_id,))
-        
-        # Invalidate cache (sales affect stock and stats)
-        cache.invalidate_stock(phone)
-        cache.invalidate_stats(phone)
-
-        return _sale_row_to_response(sale_row, items_rows)
-
-    except ValueError as e:
-        # Insufficient stock or validation error
+        with tenant_scope(phone):
+            return sales_service.create_sale(phone=phone, payload=sale)
+    except SaleNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except SaleValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-    except Exception as e:
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to create sale for tenant %s", phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create sale: {str(e)}"
+            detail="Failed to create sale",
         )
 
 
 @router.delete("/{phone}/sales/{sale_id}", response_model=SuccessResponse)
-async def cancel_sale(phone: str, sale_id: int):
-    """
-    Cancel a sale (restores stock if it was PAID).
-
-    Args:
-        phone: Phone number in international format
-        sale_id: Sale ID
-
-    Returns:
-        Success message with updated revenue/profit
-
-    Raises:
-        404: Tenant or sale not found
-        500: Failed to cancel sale
-    """
+async def cancel_sale(
+    phone: str,
+    sale_id: int = Path(..., gt=0),
+):
+    """Cancel a sale (restores stock if it was PAID)."""
     try:
-        # Use database.py function
-        result = database.cancel_sale(sale_id)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to cancel sale")
+        with tenant_scope(phone):
+            result = sales_service.cancel_sale(phone=phone, sale_id=sale_id)
+            return SuccessResponse(
+                status="ok",
+                message=f"Sale {sale_id} cancelled successfully",
+                data=result,
             )
-        
-        # Invalidate cache (cancelling sales affects stock and stats)
-        cache.invalidate_stock(phone)
-        cache.invalidate_stats(phone)
-
-        return SuccessResponse(
-            status="ok",
-            message=f"Sale {sale_id} cancelled successfully",
-            data=result
-        )
-
-    except Exception as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Sale {sale_id} not found"
-            )
+    except SaleNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except SaleConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except SaleValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to cancel sale %s for tenant %s", sale_id, phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to cancel sale: {str(e)}"
+            detail="Failed to cancel sale",
         )

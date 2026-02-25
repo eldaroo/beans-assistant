@@ -22,10 +22,21 @@ Environment Variables:
 """
 import os
 import sys
+from contextlib import contextmanager
 from dotenv import load_dotenv
+from tenant_manager import TenantManager, phone_to_schema_name
 
 # Load environment variables
 load_dotenv()
+USE_POSTGRES = os.getenv("USE_POSTGRES", "false").lower() == "true"
+
+
+class TenantContextError(RuntimeError):
+    """Base exception for tenant DB context errors."""
+
+
+class TenantNotFoundError(TenantContextError):
+    """Raised when tenant is not registered."""
 
 
 def get_database_module():
@@ -35,9 +46,7 @@ def get_database_module():
     Returns:
         module: Either database (SQLite) or database_pg (PostgreSQL)
     """
-    use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"
-
-    if use_postgres:
+    if USE_POSTGRES:
         print("[DB CONFIG] Using PostgreSQL")
         try:
             import database_pg as db_module
@@ -55,9 +64,47 @@ def get_database_module():
 # Export the selected database module
 db = get_database_module()
 
+
+@contextmanager
+def tenant_context(phone_number: str, must_exist: bool = True):
+    """
+    Bind DB context to a tenant for the current request.
+
+    SQLite:
+      - Switches to tenant's business.db file.
+    PostgreSQL:
+      - Switches search_path to tenant_<phone_sanitized> schema.
+    """
+    tenant_manager = TenantManager()
+
+    if must_exist and not tenant_manager.tenant_exists(phone_number):
+        raise TenantNotFoundError(f"Tenant {phone_number} not found")
+
+    if USE_POSTGRES:
+        schema_name = phone_to_schema_name(phone_number)
+        if not hasattr(db, "set_tenant_schema") or not hasattr(db, "reset_tenant_schema"):
+            raise TenantContextError("PostgreSQL module does not support tenant schema context")
+
+        token = db.set_tenant_schema(schema_name)
+        try:
+            yield
+        finally:
+            db.reset_tenant_schema(token)
+    else:
+        db_path = tenant_manager.get_tenant_db_path(phone_number)
+        if not hasattr(db, "set_tenant_db_path") or not hasattr(db, "reset_tenant_db_path"):
+            raise TenantContextError("SQLite module does not support tenant DB path context")
+
+        token = db.set_tenant_db_path(db_path)
+        try:
+            yield
+        finally:
+            db.reset_tenant_db_path(token)
+
 # Re-export all functions for convenience
 fetch_one = db.fetch_one
 fetch_all = db.fetch_all
+execute = db.execute
 register_product = db.register_product
 add_stock = db.add_stock
 remove_stock = db.remove_stock

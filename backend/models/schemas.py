@@ -70,7 +70,7 @@ class ProductResponse(BaseModel):
     description: Optional[str]
     unit_cost_cents: int
     unit_price_cents: int
-    is_active: int
+    is_active: bool
     created_at: str
 
     # Computed fields
