@@ -1,277 +1,131 @@
-"""
-Stock Management API Endpoints.
-"""
-from fastapi import APIRouter, HTTPException, status
-from typing import List
-import sys
+"""Stock Management API Endpoints."""
+
+import logging
 from pathlib import Path
-from datetime import datetime
+import sys
+from typing import List
+
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from backend.models.schemas import (
-    StockAddInput,
-    StockMovementResponse,
-    StockCurrentResponse,
-    SuccessResponse
-)
-from database_config import db as database
-from backend import cache
+from backend.api.tenant_scope import tenant_scope
+from backend.models.schemas import StockAddInput, StockCurrentResponse, StockMovementResponse, SuccessResponse
+from backend.services.stock_service import StockNotFoundError, StockService, StockValidationError
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+stock_service = StockService()
 
 
-def _movement_row_to_response(row: dict) -> StockMovementResponse:
-    """Convert database row to StockMovementResponse."""
-    # Convert Row to dict to handle NULL values properly
-    row_dict = dict(row)
+class StockAdjustInput(BaseModel):
+    """Payload for manual stock adjustments."""
 
-    # Convert datetime to string if needed (PostgreSQL returns datetime objects)
-    occurred_at = row_dict["occurred_at"]
-    if isinstance(occurred_at, datetime):
-        occurred_at = occurred_at.isoformat()
-
-    created_at = row_dict["created_at"]
-    if isinstance(created_at, datetime):
-        created_at = created_at.isoformat()
-
-    return StockMovementResponse(
-        id=row_dict["id"],
-        product_id=row_dict["product_id"],
-        movement_type=row_dict["movement_type"],
-        quantity=row_dict["quantity"],
-        reason=row_dict.get("reason"),
-        reference=row_dict.get("reference"),
-        occurred_at=occurred_at,
-        created_at=created_at,
-        product_name=row_dict.get("product_name"),
-        product_sku=row_dict.get("product_sku")
-    )
-
-
-def _stock_current_row_to_response(row: dict) -> StockCurrentResponse:
-    """Convert database row to StockCurrentResponse."""
-    # Convert Row to dict to handle NULL values properly
-    row_dict = dict(row)
-    unit_price_cents = row_dict.get("unit_price_cents")
-    unit_price_usd = round(unit_price_cents / 100.0, 2) if unit_price_cents is not None else None
-
-    return StockCurrentResponse(
-        product_id=row_dict["product_id"],
-        sku=row_dict["sku"],
-        name=row_dict["name"],
-        stock_qty=row_dict["stock_qty"],
-        unit_price_cents=unit_price_cents,
-        unit_price_usd=unit_price_usd
-    )
+    product_id: int = Field(..., gt=0)
+    quantity: int = Field(..., description="Can be positive or negative; 0 means no-op")
+    reason: str = Field(default="Manual adjustment")
 
 
 @router.get("/{phone}/stock", response_model=List[StockCurrentResponse])
-async def get_current_stock(phone: str):
-    """
-    Get current stock for all products.
-
-    Args:
-        phone: Phone number in international format
-
-    Returns:
-        List of products with current stock quantity
-
-    Raises:
-        404: Tenant not found
-    """
-    # Try to get from cache
-    cached_stock = cache.get_cached_stock(phone)
-    if cached_stock is not None:
-        return cached_stock
-    
-    # Cache miss - query database
-    query = """
-        SELECT sc.*, p.unit_price_cents
-        FROM stock_current sc
-        LEFT JOIN products p ON sc.product_id = p.id
-        ORDER BY sc.name
-    """
-    rows = database.fetch_all(query)
-    stock = [_stock_current_row_to_response(row) for row in rows]
-    
-    # Cache the results
-    cache.cache_stock(phone, stock)
-
-    return stock
+async def get_current_stock(
+    phone: str,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    """Get current stock for all products."""
+    try:
+        with tenant_scope(phone):
+            return stock_service.get_current_stock(phone=phone, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to fetch current stock for tenant %s", phone)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch current stock",
+        )
 
 
 @router.post("/{phone}/stock/add", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
 async def add_stock(phone: str, stock_input: StockAddInput):
-    """
-    Add stock to a product.
-
-    Args:
-        phone: Phone number in international format
-        stock_input: Stock addition data
-
-    Returns:
-        Success message with updated stock quantity
-
-    Raises:
-        404: Tenant or product not found
-        400: Invalid data
-        500: Failed to add stock
-    """
+    """Add stock to a product."""
     try:
-        # Convert StockAddInput to database format
-        stock_data = {
-            "product_id": stock_input.product_id,
-            "quantity": stock_input.quantity,
-            "reason": stock_input.reason,
-            "movement_type": stock_input.movement_type
-        }
-
-        # Add stock using database.py function
-        result = database.add_stock(stock_data)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to add stock")
+        with tenant_scope(phone):
+            result = stock_service.add_stock(phone=phone, stock_input=stock_input)
+            return SuccessResponse(
+                status="ok",
+                message="Stock added successfully",
+                data=result,
             )
-        
-        # Invalidate stock cache
-        cache.invalidate_stock(phone)
-
-        return SuccessResponse(
-            status="ok",
-            message="Stock added successfully",
-            data=result
-        )
-
-    except ValueError as e:
+    except StockNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except StockValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-    except Exception as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {stock_input.product_id} not found"
-            )
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to add stock for tenant %s", phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add stock: {str(e)}"
+            detail="Failed to add stock",
         )
 
 
 @router.post("/{phone}/stock/adjust", response_model=SuccessResponse)
-async def adjust_stock(phone: str, adjustment: dict):
-    """
-    Adjust stock quantity for a product (can increase or decrease).
-
-    Args:
-        phone: Phone number in international format
-        adjustment: Dict with product_id, quantity (can be negative), and reason
-
-    Returns:
-        Success message with updated stock quantity
-
-    Raises:
-        404: Tenant or product not found
-        400: Invalid data
-        500: Failed to adjust stock
-    """
+async def adjust_stock(phone: str, adjustment: StockAdjustInput):
+    """Adjust stock quantity for a product (can increase or decrease)."""
     try:
-        product_id = adjustment.get("product_id")
-        quantity = adjustment.get("quantity", 0)
-        reason = adjustment.get("reason", "Manual adjustment")
-
-        if quantity == 0:
-            return SuccessResponse(
-                status="ok",
-                message="No adjustment needed",
-                data={"quantity": 0}
+        with tenant_scope(phone):
+            message, data = stock_service.adjust_stock(
+                phone=phone,
+                product_id=adjustment.product_id,
+                quantity=adjustment.quantity,
+                reason=adjustment.reason,
             )
-
-        # Determine movement type based on quantity
-        if quantity > 0:
-            movement_type = "IN"
-            stock_data = {
-                "product_id": product_id,
-                "quantity": abs(quantity),
-                "reason": reason,
-                "movement_type": movement_type
-            }
-            result = database.add_stock(stock_data)
-        else:
-            movement_type = "OUT"
-            stock_data = {
-                "product_id": product_id,
-                "quantity": abs(quantity),
-                "reason": reason,
-                "movement_type": movement_type
-            }
-            result = database.remove_stock(stock_data)
-
-        if result["status"] != "ok":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result.get("message", "Failed to adjust stock")
-            )
-        
-        # Invalidate stock cache
-        cache.invalidate_stock(phone)
-
-        return SuccessResponse(
-            status="ok",
-            message=f"Stock adjusted successfully ({'+' if quantity > 0 else ''}{quantity})",
-            data=result
-        )
-
-    except ValueError as e:
+            return SuccessResponse(status="ok", message=message, data=data)
+    except StockNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except StockValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
-
-    except Exception as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {product_id} not found"
-            )
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to adjust stock for tenant %s", phone)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to adjust stock: {str(e)}"
+            detail="Failed to adjust stock",
         )
 
 
 @router.get("/{phone}/stock/movements", response_model=List[StockMovementResponse])
-async def get_stock_movements(phone: str, limit: int = 100, offset: int = 0):
-    """
-    Get stock movement history.
-
-    Args:
-        phone: Phone number in international format
-        limit: Maximum number of movements to return (default: 100)
-        offset: Number of movements to skip (default: 0)
-
-    Returns:
-        List of stock movements
-
-    Raises:
-        404: Tenant not found
-    """
-    query = """
-        SELECT sm.*,
-               p.name AS product_name,
-               p.sku AS product_sku
-        FROM stock_movements sm
-        LEFT JOIN products p ON sm.product_id = p.id
-        ORDER BY sm.occurred_at DESC, sm.created_at DESC
-        LIMIT %s OFFSET %s
-    """
-    rows = database.fetch_all(query, (limit, offset))
-    movements = [_movement_row_to_response(row) for row in rows]
-
-    return movements
+async def get_stock_movements(
+    phone: str,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    """Get stock movement history."""
+    try:
+        with tenant_scope(phone):
+            return stock_service.get_stock_movements(phone=phone, limit=limit, offset=offset)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to fetch stock movements for tenant %s", phone)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch stock movements",
+        )

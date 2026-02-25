@@ -8,7 +8,7 @@ load_dotenv()
 def get_llm() -> ChatGoogleGenerativeAI:
     """
     Configure a Gemini chat model using a Google API key.
-    Defaults to a supported model (gemini-1.5-flash) and low temperature.
+    Defaults to a supported model (gemini-2.5-flash) and low temperature.
     """
     api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -17,19 +17,15 @@ def get_llm() -> ChatGoogleGenerativeAI:
     requested_model = (
         os.getenv("OPENAI_MODEL")
         or os.getenv("GEMINI_MODEL")
-        or "gemini-2.0-flash-exp"
+        or "gemini-2.5-flash"
     )
     # Supported chat models for the Google Generative AI API (generateContent).
-    # Note: gemini-1.5-* models have been deprecated in v1beta API as of 2025
     supported_models = {
-        "gemini-2.0-flash-exp",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
-        "gemini-1.5-flash",  # Legacy support, may not work
-        "gemini-1.5-pro",    # Legacy support, may not work
-        "gemini-1.5-flash-8b",  # Legacy support, may not work
+        "gemini-2.0-flash-exp",  # Legacy support, may not work in some API versions
     }
-    model = requested_model if requested_model in supported_models else "gemini-2.0-flash-exp"
+    model = requested_model if requested_model in supported_models else "gemini-2.5-flash"
 
     print(f"DEBUG: Requested model: {requested_model}")
     print(f"DEBUG: Using model: {model}")
@@ -49,8 +45,8 @@ def get_llm() -> ChatGoogleGenerativeAI:
 
 def get_llm_cheap() -> ChatGoogleGenerativeAI:
     """
-    Get a cheaper/faster LLM for simple tasks like disambiguation.
-    Uses gemini-1.5-flash-8b (cheapest) or falls back to flash-exp.
+    Get a fast LLM for simple tasks like disambiguation.
+    Defaults to gemini-2.5-flash unless GEMINI_CHEAP_MODEL is set.
 
     Returns:
         ChatGoogleGenerativeAI configured for cheap operations
@@ -59,8 +55,8 @@ def get_llm_cheap() -> ChatGoogleGenerativeAI:
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY (or OPENAI_API_KEY) is not set")
 
-    # Use the cheapest model available
-    model = "gemini-1.5-flash-8b"  # Cheapest option
+    # Prefer a broadly available fast model to avoid runtime NOT_FOUND errors.
+    model = os.getenv("GEMINI_CHEAP_MODEL", "gemini-2.5-flash")
 
     return ChatGoogleGenerativeAI(
         model=model,

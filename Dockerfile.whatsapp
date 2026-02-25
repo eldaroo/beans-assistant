@@ -1,64 +1,25 @@
-# WhatsApp Client Container
-FROM python:3.11-slim
+# WhatsApp Connector Container (Baileys)
+FROM node:20-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies for whatsapp-web.js
-# Chrome/Chromium is needed for puppeteer
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    ca-certificates \
-    fonts-liberation \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libatspi2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libdrm2 \
-    libgbm1 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libwayland-client0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
-    libxrandr2 \
-    xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies first for better Docker layer caching
+COPY whatsapp_baileys/package.json ./whatsapp_baileys/package.json
+RUN cd whatsapp_baileys && npm install --omit=dev
 
-# Install Node.js (needed for whatsapp-web.js if you're using it)
-RUN wget -qO- https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Copy connector code
+COPY whatsapp_baileys ./whatsapp_baileys
 
-# Copy requirements
-COPY requirements.txt .
-
-# Install Python dependencies with increased timeout for large packages
-RUN pip install --no-cache-dir --timeout=1000 --retries=5 -r requirements.txt
-
-# Copy application code
-COPY . .
-
-# Create directories for persistent data
-RUN mkdir -p .wwebjs_auth configs data/clients
-
-# Environment variables
-ENV USE_POSTGRES=true
-ENV POSTGRES_HOST=localhost
-ENV POSTGRES_PORT=5432
-ENV POSTGRES_DB=beansco_main
-ENV POSTGRES_USER=beansco
-ENV POSTGRES_PASSWORD=changeme123
+# Runtime defaults (can be overridden by compose/env)
 ENV BACKEND_URL=http://backend:8000
+ENV BAILEYS_SESSION_DIR=/app/.baileys_auth
+ENV BAILEYS_LOG_LEVEL=info
+ENV BAILEYS_RECONNECT_DELAY_MS=5000
+ENV BAILEYS_AUTO_CREATE_TENANT=false
+ENV BAILEYS_DEFAULT_CURRENCY=USD
+ENV BAILEYS_DEFAULT_LANGUAGE=es
 
-# Volume for WhatsApp session data (IMPORTANT: needs to persist!)
-VOLUME [".wwebjs_auth", "configs"]
+# Persist WhatsApp session auth files
+VOLUME ["/app/.baileys_auth"]
 
-# Run WhatsApp server
-CMD ["python", "whatsapp_server_multitenant.py"]
+CMD ["node", "whatsapp_baileys/server.js"]
