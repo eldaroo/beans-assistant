@@ -65,7 +65,8 @@ app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Home page - list of all tenants."""
-    from database_config import db as database
+    from database_config import db as database, tenant_context
+    from tenant_manager import phone_to_schema_name
     import json
 
     # Load tenant registry (if exists) for tenant metadata
@@ -95,36 +96,37 @@ async def home(request: Request):
             # Query all tenant stats in a single call
             all_stats = database.fetch_all("SELECT * FROM get_all_tenant_stats()")
 
-            # Create a mapping of phone_number to stats for quick lookup
-            # Schema name format is typically: tenant_+541153695627
+            # Create a mapping of schema_name to stats for quick lookup
             stats_map = {}
             for row in all_stats:
-                # Extract phone from schema name (e.g., "tenant_+541153695627" -> "+541153695627")
                 schema_name = row["schema_name"]
                 if schema_name == "public":
                     continue
 
-                # Remove "tenant_" prefix
-                phone = schema_name.replace("tenant_", "")
-                stats_map[phone] = {
-                    "products": int(row["products_count"]) if row["products_count"] else 0,
-                    "sales": int(row["sales_count"]) if row["sales_count"] else 0,
+                stats_map[schema_name] = {
+                    "products_count": int(row["products_count"]) if row["products_count"] else 0,
+                    "sales_count": int(row["sales_count"]) if row["sales_count"] else 0,
                     "revenue_usd": float(row["revenue_cents"]) / 100.0 if row["revenue_cents"] else 0.0,
                     "profit_usd": float(row["profit_usd"]) if row["profit_usd"] else 0.0
                 }
 
-                # Cache the stats for individual tenant queries
-                cache.cache_stats(phone, stats_map[phone])
-
             # Merge tenant info with stats
             for tenant in tenants_list:
                 phone = tenant["phone_number"]
-                stats = stats_map.get(phone, {
-                    "products": 0,
-                    "sales": 0,
+                schema_name = phone_to_schema_name(phone)
+                stats = stats_map.get(schema_name, {
+                    "products_count": 0,
+                    "sales_count": 0,
                     "revenue_usd": 0.0,
                     "profit_usd": 0.0
                 })
+
+                # Backward-compatible keys for any old template references
+                stats["products"] = stats["products_count"]
+                stats["sales"] = stats["sales_count"]
+
+                # Cache the stats for individual tenant queries
+                cache.cache_stats(phone, stats)
 
                 tenants_with_stats.append({
                     **tenant,
@@ -140,6 +142,8 @@ async def home(request: Request):
                 tenants_with_stats.append({
                     **tenant,
                     "stats": {
+                        "products_count": 0,
+                        "sales_count": 0,
                         "products": 0,
                         "sales": 0,
                         "revenue_usd": 0.0,
@@ -147,7 +151,7 @@ async def home(request: Request):
                     }
                 })
     else:
-        # SQLite: Keep original logic (N+1 queries, but acceptable for single tenant)
+        # SQLite: Resolve stats per-tenant DB file
         for tenant in tenants_list:
             phone = tenant["phone_number"]
 
@@ -155,26 +159,33 @@ async def home(request: Request):
                 # Try to get from cache
                 stats = cache.get_cached_stats(phone)
                 if stats is None:
-                    # Cache miss - query database
-                    products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
-                    sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
-                    revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
-                    revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
-                    profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
-                    profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+                    # Cache miss - query tenant database
+                    with tenant_context(phone):
+                        products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+                        sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+                        revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+                        revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+                        profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+                        profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
 
-                    stats = {
-                        "products": products_count["count"] if products_count else 0,
-                        "sales": sales_count["count"] if sales_count else 0,
-                        "revenue_usd": revenue_cents / 100.0,
-                        "profit_usd": profit_usd
-                    }
+                        stats = {
+                            "products_count": products_count["count"] if products_count else 0,
+                            "sales_count": sales_count["count"] if sales_count else 0,
+                            "revenue_usd": revenue_cents / 100.0,
+                            "profit_usd": profit_usd
+                        }
+
+                        # Backward-compatible keys
+                        stats["products"] = stats["products_count"]
+                        stats["sales"] = stats["sales_count"]
 
                     # Cache the stats
                     cache.cache_stats(phone, stats)
             except Exception as e:
                 print(f"Error getting stats for {phone}: {e}")
                 stats = {
+                    "products_count": 0,
+                    "sales_count": 0,
                     "products": 0,
                     "sales": 0,
                     "revenue_usd": 0.0,
@@ -198,7 +209,7 @@ async def home(request: Request):
 @app.get("/tenants/{phone}", response_class=HTMLResponse)
 async def tenant_detail(request: Request, phone: str):
     """Tenant detail page - dashboard with tabs."""
-    from database_config import db as database
+    from database_config import db as database, tenant_context
     import json
 
     # Load tenant config from registry
@@ -226,29 +237,36 @@ async def tenant_detail(request: Request, phone: str):
 
     # Get stats from PostgreSQL
     try:
-        # Product count
-        products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+        with tenant_context(phone):
+            # Product count
+            products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
 
-        # Sales count
-        sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+            # Sales count
+            sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
 
-        # Revenue
-        revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
-        revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+            # Revenue
+            revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+            revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
 
-        # Profit
-        profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
-        profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+            # Profit
+            profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+            profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
 
-        stats = {
-            "products": products_count["count"] if products_count else 0,
-            "sales": sales_count["count"] if sales_count else 0,
-            "revenue_usd": revenue_cents / 100.0,
-            "profit_usd": profit_usd
-        }
+            stats = {
+                "products_count": products_count["count"] if products_count else 0,
+                "sales_count": sales_count["count"] if sales_count else 0,
+                "revenue_usd": revenue_cents / 100.0,
+                "profit_usd": profit_usd
+            }
+
+            # Backward-compatible keys
+            stats["products"] = stats["products_count"]
+            stats["sales"] = stats["sales_count"]
     except Exception as e:
         print(f"Error getting stats: {e}")
         stats = {
+            "products_count": 0,
+            "sales_count": 0,
             "products": 0,
             "sales": 0,
             "revenue_usd": 0.0,
@@ -283,7 +301,7 @@ async def test_products():
     import sys
     sys.path.append(str(Path(__file__).parent.parent))
     import database
-    database.DB_PATH = "data/clients/+541153695627/business.db"
+    token = database.set_tenant_db_path("data/clients/+541153695627/business.db")
 
     try:
         rows = database.fetch_all("SELECT * FROM products LIMIT 1")
@@ -298,6 +316,8 @@ async def test_products():
             "error": str(e),
             "traceback": traceback.format_exc()
         }
+    finally:
+        database.reset_tenant_db_path(token)
 
 
 if __name__ == "__main__":

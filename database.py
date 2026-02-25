@@ -3,13 +3,39 @@ from contextlib import contextmanager
 import time
 import json
 import ast
+from contextvars import ContextVar
 
 DB_PATH = "beansco.db"
+_db_path_ctx: ContextVar[str | None] = ContextVar("sqlite_db_path_ctx", default=None)
+
+
+def _adapt_query_for_sqlite(query: str) -> str:
+    """
+    Adapt PostgreSQL-style placeholders to SQLite placeholders.
+
+    SQLite uses '?' while several API modules currently use '%s'.
+    """
+    return query.replace("%s", "?")
+
+
+def set_tenant_db_path(db_path: str):
+    """Set tenant-specific DB path for the current request context."""
+    return _db_path_ctx.set(db_path)
+
+
+def reset_tenant_db_path(token):
+    """Reset tenant DB path for the current request context."""
+    _db_path_ctx.reset(token)
+
+
+def get_current_db_path() -> str:
+    """Get DB path for current context, falling back to global default."""
+    return _db_path_ctx.get() or DB_PATH
 
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_current_db_path())
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -27,14 +53,26 @@ def get_conn():
 
 def fetch_one(query, params=()):
     with get_conn() as conn:
-        cur = conn.execute(query, params)
+        cur = conn.execute(_adapt_query_for_sqlite(query), params)
         return cur.fetchone()
 
 
 def fetch_all(query, params=()):
     with get_conn() as conn:
-        cur = conn.execute(query, params)
+        cur = conn.execute(_adapt_query_for_sqlite(query), params)
         return cur.fetchall()
+
+
+def execute(query, params=()):
+    """
+    Execute INSERT/UPDATE/DELETE statement.
+
+    Returns:
+        int: Number of affected rows.
+    """
+    with get_conn() as conn:
+        cur = conn.execute(_adapt_query_for_sqlite(query), params)
+        return cur.rowcount
 
 
 # =========================

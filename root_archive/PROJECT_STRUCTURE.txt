@@ -1,0 +1,353 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                 BEANS&CO MULTI-AGENT SYSTEM - PROJECT STRUCTURE               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+
+📁 supabase-sql-agent/
+│
+├── 🤖 AGENTS (Multi-Agent System)
+│   ├── agents/
+│   │   ├── __init__.py              ✨ NEW - Package exports
+│   │   ├── state.py                 ✨ NEW - TypedDict state definition
+│   │   ├── router.py                ✨ NEW - Intent Router Agent
+│   │   ├── read_agent.py            ✨ NEW - Read/Analytics Agent
+│   │   ├── write_agent.py           ✨ NEW - Write/Operations Agent
+│   │   └── resolver.py              ✨ NEW - Normalization/Resolver Agent
+│   │
+│   └── graph.py                     ✨ NEW - LangGraph orchestration
+│
+├── 📊 BUSINESS LOGIC
+│   ├── database.py                  🔄 MODIFIED - Added register_expense()
+│   ├── llm.py                       ✓ PRESERVED - LLM configuration
+│   ├── agent.py                     ✓ PRESERVED - Original monolithic agent
+│   └── beansco.db                   ✓ PRESERVED - SQLite database
+│
+├── 🗄️ DATABASE SCHEMA
+│   ├── schema_and_dummy.sql         ✓ PRESERVED - DB schema
+│   ├── views.sql                    ✓ PRESERVED - Business views
+│   ├── init_db.py                   ✓ PRESERVED - DB initialization
+│   └── apply_views.py               ✓ PRESERVED - Create views
+│
+├── 🧪 TESTING & VERIFICATION
+│   ├── example_usage.py             ✨ NEW - Examples and test cases
+│   ├── verify_setup.py              ✨ NEW - Setup verification script
+│   └── test_business_actions.py     ✓ PRESERVED - Business action tests
+│
+├── 📚 DOCUMENTATION
+│   ├── QUICK_START.md               ✨ NEW - 5-minute quick start
+│   ├── README_MULTI_AGENT.md        ✨ NEW - Complete README
+│   ├── ARCHITECTURE.md              ✨ NEW - Deep architecture guide
+│   ├── FLOW_DIAGRAM.txt             ✨ NEW - Visual workflow diagram
+│   ├── IMPLEMENTATION_SUMMARY.md    ✨ NEW - Implementation summary
+│   ├── DOCUMENTATION_INDEX.md       ✨ NEW - Documentation navigator
+│   ├── PROJECT_STRUCTURE.txt        ✨ NEW - This file
+│   ├── README.md                    ✓ PRESERVED - Original README
+│   └── .env.example                 ✓ PRESERVED - Environment template
+│
+├── ⚙️ CONFIGURATION
+│   ├── requirements.txt             ✨ NEW - Python dependencies
+│   ├── .env                         ✓ PRESERVED - Environment variables
+│   └── .gitignore                   ✓ (if exists)
+│
+└── 🗂️ OTHER
+    ├── .venv/                       ✓ Virtual environment
+    ├── __pycache__/                 ✓ Python cache
+    └── .pytest_cache/               ✓ Pytest cache
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🎯 IMPLEMENTATION SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+✨ NEW FILES CREATED: 18
+  - 6 agent files (state, router, read, write, resolver, __init__)
+  - 1 orchestration file (graph.py)
+  - 2 testing files (example_usage.py, verify_setup.py)
+  - 7 documentation files
+  - 1 configuration file (requirements.txt)
+  - 1 structure file (this file)
+
+🔄 MODIFIED FILES: 1
+  - database.py (added register_expense function)
+
+✓ PRESERVED FILES: All original files still work
+  - agent.py (original monolithic agent)
+  - database.py (business actions)
+  - llm.py, schema, views, etc.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+📊 CODE METRICS
+═══════════════════════════════════════════════════════════════════════════════
+
+Total Lines of Code (approx):
+  - agents/state.py:         ~80 lines
+  - agents/router.py:        ~180 lines
+  - agents/read_agent.py:    ~180 lines
+  - agents/write_agent.py:   ~160 lines
+  - agents/resolver.py:      ~170 lines
+  - graph.py:                ~230 lines
+  - example_usage.py:        ~180 lines
+  - verify_setup.py:         ~260 lines
+  ─────────────────────────────────────
+  TOTAL NEW CODE:            ~1,440 lines
+
+Documentation (approx):
+  - ARCHITECTURE.md:         ~800 lines
+  - README_MULTI_AGENT.md:   ~400 lines
+  - FLOW_DIAGRAM.txt:        ~300 lines
+  - QUICK_START.md:          ~200 lines
+  - IMPLEMENTATION_SUMMARY:  ~600 lines
+  - DOCUMENTATION_INDEX:     ~250 lines
+  ─────────────────────────────────────
+  TOTAL DOCUMENTATION:       ~2,550 lines
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🧩 COMPONENT BREAKDOWN
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1️⃣  INTENT ROUTER AGENT (agents/router.py)                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Classifies user intent                                                    │
+│ • Extracts entities from natural language                                   │
+│ • Identifies missing fields                                                 │
+│ • NO execution of tools                                                     │
+│ • Uses structured output (Pydantic)                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2️⃣  READ/ANALYTICS AGENT (agents/read_agent.py)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • SQL SELECT queries only                                                   │
+│ • Uses business views (stock_current, profit_summary, etc.)                │
+│ • Respects strict business rules                                           │
+│ • NO writes to database                                                     │
+│ • Human-readable explanations                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3️⃣  WRITE/OPERATIONS AGENT (agents/write_agent.py)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Executes business operations (Python functions)                           │
+│ • register_sale, register_expense, register_product, add_stock             │
+│ • Validates data before execution                                           │
+│ • NO raw SQL generation                                                     │
+│ • Summarizes business impact                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4️⃣  NORMALIZATION/RESOLVER AGENT (agents/resolver.py)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Resolves human references to database entities                            │
+│ • "pulseras negras" → product_id                                            │
+│ • "ayer" → ISO date                                                         │
+│ • "$30" → cents                                                             │
+│ • Validates required fields                                                 │
+│ • NO writes, NO final decisions                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🔄 WORKFLOW FLOW
+═══════════════════════════════════════════════════════════════════════════════
+
+User Input
+    ↓
+┌─────────────────┐
+│ Intent Router   │  Classify: READ / WRITE / MIXED / AMBIGUOUS
+└────────┬────────┘
+         │
+    ┌────┴────┬──────────┬────────────┐
+    ↓         ↓          ↓            ↓
+  READ     RESOLVER   RESOLVER    AMBIGUOUS
+    │         │          │            │
+    │         ↓          ↓            │
+    │      WRITE      WRITE           │
+    │         │          │            │
+    │         │          ↓            │
+    │         │        READ           │
+    │         │          │            │
+    └─────────┴──────────┴────────────┘
+                   ↓
+            Final Answer
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+💾 STATE MANAGEMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+AgentState (TypedDict):
+  ├── messages: List[Dict]           # Conversation history
+  ├── user_input: str                # Original user input
+  ├── intent: IntentType             # Classification result
+  ├── operation_type: OperationType  # Specific operation
+  ├── confidence: float              # Classification confidence
+  ├── missing_fields: List[str]      # Missing required data
+  ├── normalized_entities: Dict      # Resolved entities
+  ├── sql_result: str                # Read agent output
+  ├── operation_result: Dict         # Write agent output
+  ├── final_answer: str              # Final response
+  ├── error: str                     # Error if any
+  └── next_action: str               # Flow control
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🎨 SUPPORTED OPERATIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+READ_ANALYTICS:
+  • "¿cuántas pulseras tengo?"
+  • "what's my total revenue?"
+  • "show me current profit"
+
+WRITE_OPERATION:
+  ├── REGISTER_SALE
+  │   └── "vendí 20 pulseras negras"
+  ├── REGISTER_EXPENSE
+  │   └── "gasté 30 dólares en envíos ayer"
+  ├── REGISTER_PRODUCT
+  │   └── "crear producto BC-TEST"
+  └── ADD_STOCK
+      └── "agregar 100 unidades"
+
+MIXED:
+  • "vendí 2 pulseras black, ¿cómo queda el stock?"
+  • "register sale and show revenue"
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🚀 HOW TO USE
+═══════════════════════════════════════════════════════════════════════════════
+
+Setup:
+  1. pip install -r requirements.txt
+  2. Set GOOGLE_API_KEY in .env
+  3. python init_db.py
+  4. python apply_views.py
+
+Verify:
+  python verify_setup.py
+
+Run:
+  python graph.py                    # Interactive mode
+  python graph.py -q "question"      # Single query
+  python example_usage.py            # Examples
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+📖 DOCUMENTATION GUIDE
+═══════════════════════════════════════════════════════════════════════════════
+
+Start Here:
+  → QUICK_START.md              (5-minute setup)
+
+Learn Architecture:
+  → ARCHITECTURE.md             (deep dive)
+  → FLOW_DIAGRAM.txt            (visual workflow)
+
+Usage Guide:
+  → README_MULTI_AGENT.md       (complete guide)
+
+Reference:
+  → IMPLEMENTATION_SUMMARY.md   (what was built)
+  → DOCUMENTATION_INDEX.md      (navigation)
+  → PROJECT_STRUCTURE.txt       (this file)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+✅ QUALITY CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+Architecture:
+  ✓ Separation of concerns (4 specialized agents)
+  ✓ No overlapping responsibilities
+  ✓ Explicit intent classification
+  ✓ Typed state management (TypedDict)
+  ✓ Clean routing logic
+
+Implementation:
+  ✓ Read agent: SQL SELECT only
+  ✓ Write agent: Python functions only
+  ✓ Router: No tool execution
+  ✓ Resolver: Entity normalization
+  ✓ Error handling per agent
+
+Testing:
+  ✓ Verification script (verify_setup.py)
+  ✓ Example test cases (example_usage.py)
+  ✓ Multiple test scenarios
+
+Documentation:
+  ✓ Quick start guide
+  ✓ Complete README
+  ✓ Architecture deep dive
+  ✓ Visual diagrams
+  ✓ Implementation summary
+  ✓ Navigation index
+
+Extensibility:
+  ✓ Easy to add new agents
+  ✓ Easy to add new operations
+  ✓ Modular design
+  ✓ Clear extension points
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+🎯 SUCCESS METRICS
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ 4 specialized agents implemented
+✓ 0 overlapping responsibilities
+✓ Bilingual support (Spanish + English)
+✓ 4 operation types supported
+✓ 1,440+ lines of production code
+✓ 2,550+ lines of documentation
+✓ 18 new files created
+✓ 100% backward compatible (old agent.py still works)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+
+📞 SUPPORT
+═══════════════════════════════════════════════════════════════════════════════
+
+Troubleshooting:
+  1. Run: python verify_setup.py
+  2. Read: QUICK_START.md → Troubleshooting
+  3. Read: ARCHITECTURE.md → Troubleshooting
+
+Questions:
+  → See DOCUMENTATION_INDEX.md for topic-specific docs
+
+Examples:
+  → Run: python example_usage.py
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+                          ✨ PROJECT COMPLETE ✨
+
+═══════════════════════════════════════════════════════════════════════════════

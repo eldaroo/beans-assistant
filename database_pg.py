@@ -5,12 +5,14 @@ Same interface as database.py but uses PostgreSQL instead of SQLite.
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
+from psycopg2 import sql
 from contextlib import contextmanager
 import os
 import time
 import json
 import ast
 from typing import Optional
+from contextvars import ContextVar
 
 # PostgreSQL connection parameters from environment
 DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
@@ -19,9 +21,25 @@ DB_NAME = os.getenv("POSTGRES_DB", "beansco_main")
 DB_USER = os.getenv("POSTGRES_USER", "beansco")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "changeme123")
 DB_SCHEMA = os.getenv("POSTGRES_SCHEMA", "public")  # For multi-tenant
+_schema_ctx: ContextVar[str | None] = ContextVar("pg_schema_ctx", default=None)
 
 # Connection pool - initialized once, reused across all requests
 _connection_pool = None
+
+
+def set_tenant_schema(schema_name: str):
+    """Set tenant schema for current request context."""
+    return _schema_ctx.set(schema_name)
+
+
+def reset_tenant_schema(token):
+    """Reset tenant schema for current request context."""
+    _schema_ctx.reset(token)
+
+
+def get_current_schema() -> str:
+    """Get schema for current context, falling back to environment default."""
+    return _schema_ctx.get() or DB_SCHEMA
 
 
 def get_connection_pool():
@@ -57,8 +75,13 @@ def get_conn():
     conn = conn_pool.getconn()
     try:
         # Set search_path for multi-tenant support
+        schema_name = get_current_schema()
         with conn.cursor() as cur:
-            cur.execute(f"SET search_path TO {DB_SCHEMA}, public")
+            cur.execute(
+                sql.SQL("SET search_path TO {}, public").format(
+                    sql.Identifier(schema_name)
+                )
+            )
         yield conn
         conn.commit()
     except Exception:
@@ -93,6 +116,201 @@ def fetch_all(query, params=None):
             else:
                 cur.execute(query)
             return cur.fetchall()
+
+
+def execute(query, params=None):
+    """Execute INSERT/UPDATE/DELETE statement and return affected rowcount."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if params:
+                cur.execute(query, params)
+            else:
+                cur.execute(query)
+            return cur.rowcount
+
+
+def create_tenant_schema(schema_name: str):
+    """
+    Create tenant schema and core tables/views if they don't exist.
+
+    This enables one-schema-per-tenant mode in PostgreSQL.
+    """
+    conn_pool = get_connection_pool()
+    conn = conn_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                    sql.Identifier(schema_name)
+                )
+            )
+            cur.execute(
+                sql.SQL("SET search_path TO {}, public").format(
+                    sql.Identifier(schema_name)
+                )
+            )
+
+            # Core tables
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS products (
+                    id BIGSERIAL PRIMARY KEY,
+                    sku VARCHAR(100) NOT NULL UNIQUE,
+                    name VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    unit_cost_cents INTEGER NOT NULL DEFAULT 0,
+                    unit_price_cents INTEGER NOT NULL,
+                    is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    CONSTRAINT check_unit_cost_positive CHECK (unit_cost_cents >= 0),
+                    CONSTRAINT check_unit_price_positive CHECK (unit_price_cents >= 0)
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sales (
+                    id BIGSERIAL PRIMARY KEY,
+                    sale_number VARCHAR(50) NOT NULL UNIQUE,
+                    customer_name VARCHAR(255),
+                    status VARCHAR(20) NOT NULL CHECK (status IN ('PAID','PENDING','CANCELLED')),
+                    currency VARCHAR(3) DEFAULT 'USD' NOT NULL,
+                    total_amount_cents INTEGER NOT NULL CHECK (total_amount_cents >= 0),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    paid_at TIMESTAMP
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sale_items (
+                    id BIGSERIAL PRIMARY KEY,
+                    sale_id BIGINT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    quantity INTEGER NOT NULL CHECK (quantity > 0),
+                    unit_price_cents INTEGER NOT NULL,
+                    line_total_cents INTEGER NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS stock_movements (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    movement_type VARCHAR(20) NOT NULL CHECK (movement_type IN ('IN','OUT','ADJUSTMENT')),
+                    quantity INTEGER NOT NULL CHECK (quantity <> 0),
+                    reason TEXT,
+                    reference VARCHAR(100),
+                    occurred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id BIGSERIAL PRIMARY KEY,
+                    expense_date DATE DEFAULT CURRENT_DATE NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    description TEXT,
+                    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+                    currency VARCHAR(3) DEFAULT 'USD' NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            # Core views
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW revenue_paid AS
+                SELECT COALESCE(SUM(total_amount_cents), 0) AS total_revenue_cents
+                FROM sales WHERE status = 'PAID'
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW expenses_total AS
+                SELECT COALESCE(SUM(amount_cents), 0) AS total_expenses_cents
+                FROM expenses
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW profit_summary AS
+                SELECT (r.total_revenue_cents - e.total_expenses_cents) / 100.0 AS profit_usd
+                FROM revenue_paid r, expenses_total e
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW stock_current AS
+                SELECT
+                  p.id AS product_id,
+                  p.sku,
+                  p.name,
+                  COALESCE(
+                    SUM(
+                      CASE
+                        WHEN sm.movement_type IN ('IN', 'ADJUSTMENT') THEN sm.quantity
+                        WHEN sm.movement_type = 'OUT' THEN -sm.quantity
+                        ELSE 0
+                      END
+                    ),
+                    0
+                  ) AS stock_qty
+                FROM products p
+                LEFT JOIN stock_movements sm ON p.id = sm.product_id
+                WHERE p.is_active = TRUE
+                GROUP BY p.id, p.sku, p.name
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE OR REPLACE VIEW sales_summary AS
+                SELECT
+                  DATE(created_at) AS day,
+                  COUNT(*) FILTER (WHERE status = 'PAID') AS paid_sales_count,
+                  COALESCE(SUM(total_amount_cents) FILTER (WHERE status = 'PAID'), 0) AS paid_revenue_cents
+                FROM sales
+                GROUP BY DATE(created_at)
+                """
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn_pool.putconn(conn)
+
+
+def drop_tenant_schema(schema_name: str):
+    """Drop tenant schema and all its objects."""
+    conn_pool = get_connection_pool()
+    conn = conn_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                    sql.Identifier(schema_name)
+                )
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn_pool.putconn(conn)
 
 
 # =========================
