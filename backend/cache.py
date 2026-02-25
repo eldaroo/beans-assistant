@@ -14,6 +14,7 @@ import redis
 from typing import Optional, Any
 from functools import wraps
 import logging
+from datetime import date, datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,7 @@ TTL_PRODUCTS = 300  # 5 minutes
 TTL_STOCK = 60      # 1 minute
 TTL_STATS = 120     # 2 minutes
 TTL_SALES = 120     # 2 minutes
+TTL_RESOURCE_VERSION = 86400  # 24 hours
 
 # Global Redis client
 _redis_client: Optional[redis.Redis] = None
@@ -90,6 +92,48 @@ def get_tenant_key(phone: str, resource: str, identifier: str = "") -> str:
     return f"tenant:{phone}:{resource}"
 
 
+def get_resource_version(phone: str, resource: str) -> int:
+    """
+    Get cache version for a tenant resource.
+
+    Falls back to 1 when Redis is unavailable.
+    """
+    client = get_redis_client()
+    if not client:
+        return 1
+
+    key = get_tenant_key(phone, resource, "__v")
+    try:
+        raw = client.get(key)
+        if raw is None:
+            client.setex(key, TTL_RESOURCE_VERSION, "1")
+            return 1
+        return int(raw)
+    except Exception as e:
+        logger.error(f"[CACHE] Error getting resource version {key}: {e}")
+        return 1
+
+
+def bump_resource_version(phone: str, resource: str) -> int:
+    """
+    Increment cache version for a tenant resource.
+
+    This invalidates stale keys without full pattern deletion.
+    """
+    client = get_redis_client()
+    if not client:
+        return 1
+
+    key = get_tenant_key(phone, resource, "__v")
+    try:
+        value = int(client.incr(key))
+        client.expire(key, TTL_RESOURCE_VERSION)
+        return value
+    except Exception as e:
+        logger.error(f"[CACHE] Error bumping resource version {key}: {e}")
+        return 1
+
+
 def get_cache(key: str) -> Optional[Any]:
     """
     Get value from cache.
@@ -133,7 +177,14 @@ def set_cache(key: str, value: Any, ttl: int = 300) -> bool:
         return False
     
     try:
-        serialized = json.dumps(value)
+        def _json_default(obj):
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+        serialized = json.dumps(value, default=_json_default)
         client.setex(key, ttl, serialized)
         logger.debug(f"[CACHE] SET: {key} (TTL: {ttl}s)")
         return True
@@ -180,12 +231,20 @@ def delete_pattern(pattern: str) -> int:
         return 0
     
     try:
-        keys = client.keys(pattern)
-        if keys:
-            deleted = client.delete(*keys)
+        deleted = 0
+        batch = []
+        for key in client.scan_iter(match=pattern, count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                deleted += client.delete(*batch)
+                batch.clear()
+
+        if batch:
+            deleted += client.delete(*batch)
+
+        if deleted:
             logger.debug(f"[CACHE] DELETE PATTERN: {pattern} ({deleted} keys)")
-            return deleted
-        return 0
+        return deleted
     except Exception as e:
         logger.error(f"[CACHE] Error deleting pattern {pattern}: {e}")
         return 0
@@ -253,41 +312,83 @@ def cached(ttl: int = 300, key_func=None):
 
 # Convenience functions for common cache operations
 
-def cache_products(phone: str, products: list, active_only: bool = False) -> bool:
+def cache_products(
+    phone: str,
+    products: list,
+    active_only: bool = False,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+    version: Optional[int] = None,
+) -> bool:
     """Cache products list."""
     identifier = "active" if active_only else "all"
+    if version is not None:
+        identifier = f"v{version}:{identifier}"
+    if limit is not None and offset is not None:
+        identifier = f"{identifier}:l{limit}:o{offset}"
     key = get_tenant_key(phone, "products", identifier)
     return set_cache(key, products, TTL_PRODUCTS)
 
 
-def get_cached_products(phone: str, active_only: bool = False) -> Optional[list]:
+def get_cached_products(
+    phone: str,
+    active_only: bool = False,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+    version: Optional[int] = None,
+) -> Optional[list]:
     """Get cached products list."""
     identifier = "active" if active_only else "all"
+    if version is not None:
+        identifier = f"v{version}:{identifier}"
+    if limit is not None and offset is not None:
+        identifier = f"{identifier}:l{limit}:o{offset}"
     key = get_tenant_key(phone, "products", identifier)
     return get_cache(key)
 
 
-def cache_product(phone: str, product_id: int, product: dict) -> bool:
+def cache_product(phone: str, product_id: int, product: dict, version: Optional[int] = None) -> bool:
     """Cache a single product."""
-    key = get_tenant_key(phone, "product", str(product_id))
+    identifier = str(product_id)
+    if version is not None:
+        identifier = f"v{version}:{identifier}"
+    key = get_tenant_key(phone, "product", identifier)
     return set_cache(key, product, TTL_PRODUCTS)
 
 
-def get_cached_product(phone: str, product_id: int) -> Optional[dict]:
+def get_cached_product(phone: str, product_id: int, version: Optional[int] = None) -> Optional[dict]:
     """Get cached product."""
-    key = get_tenant_key(phone, "product", str(product_id))
+    identifier = str(product_id)
+    if version is not None:
+        identifier = f"v{version}:{identifier}"
+    key = get_tenant_key(phone, "product", identifier)
     return get_cache(key)
 
 
-def cache_stock(phone: str, stock: list) -> bool:
+def cache_stock(
+    phone: str,
+    stock: list,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> bool:
     """Cache stock data."""
-    key = get_tenant_key(phone, "stock", "current")
+    identifier = "current"
+    if limit is not None and offset is not None:
+        identifier = f"{identifier}:l{limit}:o{offset}"
+    key = get_tenant_key(phone, "stock", identifier)
     return set_cache(key, stock, TTL_STOCK)
 
 
-def get_cached_stock(phone: str) -> Optional[list]:
+def get_cached_stock(
+    phone: str,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> Optional[list]:
     """Get cached stock data."""
-    key = get_tenant_key(phone, "stock", "current")
+    identifier = "current"
+    if limit is not None and offset is not None:
+        identifier = f"{identifier}:l{limit}:o{offset}"
+    key = get_tenant_key(phone, "stock", identifier)
     return get_cache(key)
 
 
@@ -307,6 +408,7 @@ def get_cached_stats(phone: str) -> Optional[dict]:
 
 def invalidate_products(phone: str):
     """Invalidate all product caches for a tenant."""
+    bump_resource_version(phone, "products")
     invalidate_tenant_cache(phone, "products")
     invalidate_tenant_cache(phone, "product")
 

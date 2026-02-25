@@ -68,10 +68,6 @@ services:
       # AI APIs
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      
-      # Green API WhatsApp
-      GREEN_API_INSTANCE_ID: ${GREEN_API_INSTANCE_ID}
-      GREEN_API_TOKEN: ${GREEN_API_TOKEN}
     volumes:
       - ./data:/app/data
       - ./configs:/app/configs
@@ -91,39 +87,22 @@ services:
     networks:
       - beansco-network
 
-  # WhatsApp Bot (same image, different command)
+  # WhatsApp Connector (Baileys)
   whatsapp-bot:
-    image: darioegea/whatsapp-assistant:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.whatsapp
     container_name: beansco-whatsapp
-    command: ["python", "whatsapp_server_multitenant.py"]
     env_file:
       - .env
     environment:
-      # Database (same as backend)
-      USE_POSTGRES: "true"
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-beansco_main}
-      POSTGRES_USER: ${POSTGRES_USER:-beansco}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
-      POSTGRES_SCHEMA: public
-      
-      # AI APIs
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      
-      # Green API WhatsApp
-      GREEN_API_INSTANCE_ID: ${GREEN_API_INSTANCE_ID}
-      GREEN_API_TOKEN: ${GREEN_API_TOKEN}
-      
-      # Backend URL
       BACKEND_URL: http://backend:8000
+      BAILEYS_SESSION_DIR: /app/.baileys_auth
+      BAILEYS_LOG_LEVEL: info
+      BAILEYS_AUTO_CREATE_TENANT: "false"
     volumes:
-      - ./data:/app/data
-      - ./configs:/app/configs
+      - whatsapp_auth:/app/.baileys_auth
     depends_on:
-      postgres:
-        condition: service_healthy
       backend:
         condition: service_healthy
     restart: unless-stopped
@@ -150,6 +129,8 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  whatsapp_auth:
     driver: local
 
 networks:

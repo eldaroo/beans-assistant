@@ -9,6 +9,7 @@ Cada cliente tiene:
 import os
 import json
 import sqlite3
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -305,11 +306,15 @@ GROUP BY p.id, p.sku, p.name;
 
             # Product count
             result = conn.execute("SELECT COUNT(*) as count FROM products").fetchone()
-            stats["products"] = result["count"]
+            products_count = result["count"]
+            stats["products"] = products_count
+            stats["products_count"] = products_count
 
             # Sales count
             result = conn.execute("SELECT COUNT(*) as count FROM sales").fetchone()
-            stats["sales"] = result["count"]
+            sales_count = result["count"]
+            stats["sales"] = sales_count
+            stats["sales_count"] = sales_count
 
             # Revenue
             result = conn.execute("SELECT total_revenue_cents FROM revenue_paid").fetchone()
@@ -320,10 +325,28 @@ GROUP BY p.id, p.sku, p.name;
             result = conn.execute("SELECT profit_usd FROM profit_summary").fetchone()
             stats["profit_usd"] = result["profit_usd"] if result and result["profit_usd"] is not None else 0
 
+            # Total stock
+            result = conn.execute("SELECT COALESCE(SUM(stock_qty), 0) as total FROM stock_current").fetchone()
+            stats["stock_total"] = result["total"] if result and result["total"] is not None else 0
+
             return stats
 
         finally:
             conn.close()
+
+
+def phone_to_schema_name(phone_number: str) -> str:
+    """
+    Convert a tenant phone number into a PostgreSQL schema name.
+
+    Examples:
+        +5491153695627 -> tenant_5491153695627
+        +1-555-1234     -> tenant_1_555_1234
+    """
+    sanitized = re.sub(r"[^0-9A-Za-z]+", "_", phone_number.lstrip("+")).strip("_")
+    if not sanitized:
+        sanitized = "default"
+    return f"tenant_{sanitized}"
 
 
 # Global instance
