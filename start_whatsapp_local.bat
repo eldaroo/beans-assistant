@@ -36,7 +36,8 @@ if not exist node_modules (
 )
 
 set "BACKEND_URL=%BACKEND_URL_ARG%"
-set "BAILEYS_AUTO_CREATE_TENANT=true"
+set "BAILEYS_AUTO_CREATE_TENANT=false"
+set "BAILEYS_ADMIN_PHONE=+541153695627"
 
 echo [WhatsApp] Starting Baileys connector...
 echo [WhatsApp] BACKEND_URL=%BACKEND_URL%
