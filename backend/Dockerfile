@@ -1,41 +1,62 @@
-# Backend FastAPI Container
-FROM python:3.11-slim
+# Build with: docker build -f backend/Dockerfile -t beans-backend .
+FROM python:3.11-slim AS builder
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /build
+
+RUN python -m venv "${VIRTUAL_ENV}"
+
+COPY requirements.txt ./requirements.txt
+COPY backend/requirements.txt ./backend-requirements.txt
+
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install -r requirements.txt -r backend-requirements.txt
+
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONPATH=/app \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    UVICORN_WORKERS=1
+
+RUN groupadd --system app \
+    && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/venv /opt/venv
+COPY backend /app/backend
+COPY agents /app/agents
+COPY database.py /app/database.py
+COPY database_pg.py /app/database_pg.py
+COPY database_config.py /app/database_config.py
+COPY graph.py /app/graph.py
+COPY llm.py /app/llm.py
+COPY tenant_manager.py /app/tenant_manager.py
+COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-# Copy requirements
-COPY requirements.txt .
+RUN mkdir -p /app/configs /app/data/clients \
+    && chmod 755 /usr/local/bin/docker-entrypoint.sh \
+    && chown -R app:app /app /opt/venv /usr/local/bin/docker-entrypoint.sh
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+USER app
 
-# Copy application code
-COPY . .
-
-# Create necessary directories
-RUN mkdir -p configs data/clients
-
-# Environment variables (will be overridden by docker-compose or ECS)
-ENV USE_POSTGRES=true
-ENV POSTGRES_HOST=localhost
-ENV POSTGRES_PORT=5432
-ENV POSTGRES_DB=beansco_main
-ENV POSTGRES_USER=beansco
-ENV POSTGRES_PASSWORD=changeme123
-
-# Expose port
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\", \"8000\")}/health', timeout=3)" || exit 1
 
-# Run backend
-CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["docker-entrypoint.sh"]

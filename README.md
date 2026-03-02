@@ -51,6 +51,11 @@ cp .env.example .env
 # Add GOOGLE_API_KEY to .env
 ```
 
+### Production
+```bash
+docker compose -f deploy/prod/docker-compose.yml up -d --build
+```
+
 ### Running the Servers
 
 **Quick Start** - Start both WhatsApp and Backend servers:

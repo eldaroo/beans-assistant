@@ -1,0 +1,52 @@
+# Canonical production stack. Use this file for production deployments.
+name: prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../postgres/init/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - prod-network
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env
+    environment:
+      USE_POSTGRES: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    ports:
+      - "${BACKEND_PUBLISHED_PORT:-8001}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - prod-network
+
+volumes:
+  postgres_data:
+
+networks:
+  prod-network:
+    driver: bridge

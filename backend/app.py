@@ -137,11 +137,35 @@ async def home(request: Request):
             print(f"Error getting all tenant stats: {e}")
             import traceback
             traceback.print_exc()
-            # Fallback: return tenants with empty stats
+            # Fallback: resolve stats per tenant when the bulk SQL function is unavailable
             for tenant in tenants_list:
-                tenants_with_stats.append({
-                    **tenant,
-                    "stats": {
+                phone = tenant["phone_number"]
+
+                try:
+                    stats = cache.get_cached_stats(phone)
+                    if stats is None:
+                        with tenant_context(phone):
+                            products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
+                            sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
+                            revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
+                            revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
+                            profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
+                            profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
+
+                            stats = {
+                                "products_count": products_count["count"] if products_count else 0,
+                                "sales_count": sales_count["count"] if sales_count else 0,
+                                "revenue_usd": revenue_cents / 100.0,
+                                "profit_usd": profit_usd
+                            }
+
+                            stats["products"] = stats["products_count"]
+                            stats["sales"] = stats["sales_count"]
+
+                        cache.cache_stats(phone, stats)
+                except Exception as tenant_error:
+                    print(f"Error getting fallback stats for {phone}: {tenant_error}")
+                    stats = {
                         "products_count": 0,
                         "sales_count": 0,
                         "products": 0,
@@ -149,6 +173,10 @@ async def home(request: Request):
                         "revenue_usd": 0.0,
                         "profit_usd": 0.0
                     }
+
+                tenants_with_stats.append({
+                    **tenant,
+                    "stats": stats
                 })
     else:
         # SQLite: Resolve stats per-tenant DB file
