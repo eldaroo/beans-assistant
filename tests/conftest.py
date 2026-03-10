@@ -29,7 +29,7 @@ def test_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test_beansco.db"
 
     # Read schema from init_complete_database.sql
-    schema_path = Path(__file__).parent.parent / "init_complete_database.sql"
+    schema_path = Path(__file__).parent.parent / "root_archive" / "init_complete_database.sql"
     with open(schema_path, "r", encoding="utf-8") as f:
         schema_sql = f.read()
 
