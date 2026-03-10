@@ -3,6 +3,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache git
+
 # Install dependencies first for better Docker layer caching
 COPY whatsapp_baileys/package.json ./whatsapp_baileys/package.json
 RUN cd whatsapp_baileys && npm install --omit=dev
