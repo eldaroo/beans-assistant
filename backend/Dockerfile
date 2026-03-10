@@ -7,6 +7,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    curl \
     postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,20 +23,20 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p configs data/clients
 
-# Environment variables (will be overridden by docker-compose or ECS)
+# Non-sensitive defaults (secrets injected at runtime via Nomad)
 ENV USE_POSTGRES=true
-ENV POSTGRES_HOST=localhost
 ENV POSTGRES_PORT=5432
 ENV POSTGRES_DB=beansco_main
 ENV POSTGRES_USER=beansco
-ENV POSTGRES_PASSWORD=changeme123
+ENV POSTGRES_SCHEMA=public
+ENV REDIS_ENABLED=false
 
 # Expose port
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run backend
-CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
