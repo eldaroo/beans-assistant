@@ -32,8 +32,7 @@ jobs:
       - uses: ./_infra/.github/actions/nomad-deploy
         with:
           project_name:  beans-assistant
-          build_context: backend
-          dockerfile:    backend/Dockerfile
+          dockerfile:    Dockerfile
           nomad_token:   ${{ secrets.NOMAD_TOKEN }}
           nomad_addr:    ${{ vars.NOMAD_ADDR }}
           ghcr_token:    ${{ secrets.GHCR_READ_TOKEN }}
