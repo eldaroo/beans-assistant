@@ -1,0 +1,73 @@
+name: Build and Deploy Beans Assistant
+
+# Required GitHub secrets:
+#   INFRA_READ_TOKEN  – Fine-grained PAT with read access to neozero86/infrastructure
+#   NOMAD_TOKEN       – Nomad management token
+#   ANTHROPIC_API_KEY
+#   OPENAI_API_KEY
+#   POSTGRES_HOST
+#   POSTGRES_PASSWORD
+#   REDIS_HOST
+#   REDIS_PASSWORD
+#   BREVO_API_KEY
+#
+# Required GitHub variables (Settings → Variables):
+#   NOMAD_ADDR  – Nomad server URL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: neozero86/infrastructure
+          path: _infra
+          token: ${{ secrets.INFRA_READ_TOKEN }}
+
+      - uses: ./_infra/.github/actions/nomad-deploy
+        with:
+          project_name:  beans-assistant
+          build_context: backend
+          dockerfile:    backend/Dockerfile
+          nomad_token:   ${{ secrets.NOMAD_TOKEN }}
+          nomad_addr:    ${{ vars.NOMAD_ADDR }}
+          project_secrets: |
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            REDIS_HOST=${{ secrets.REDIS_HOST }}
+            REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+            BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
+
+  deploy-whatsapp:
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: neozero86/infrastructure
+          path: _infra
+          token: ${{ secrets.INFRA_READ_TOKEN }}
+
+      - uses: ./_infra/.github/actions/nomad-deploy
+        with:
+          project_name: beans-assistant-whatsapp
+          dockerfile:   Dockerfile.whatsapp
+          nomad_token:  ${{ secrets.NOMAD_TOKEN }}
+          nomad_addr:   ${{ vars.NOMAD_ADDR }}
