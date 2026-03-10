@@ -40,6 +40,7 @@ jobs:
             GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
+            AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
 
   deploy-whatsapp:
     needs: deploy-backend
