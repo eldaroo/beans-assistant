@@ -3,8 +3,7 @@ name: Build and Deploy Beans Assistant
 # Required GitHub secrets:
 #   INFRA_READ_TOKEN  – Fine-grained PAT with read access to neozero86/infrastructure
 #   NOMAD_TOKEN       – Nomad management token
-#   ANTHROPIC_API_KEY
-#   OPENAI_API_KEY
+#   GOOGLE_API_KEY
 #   POSTGRES_HOST
 #   POSTGRES_PASSWORD
 #   REDIS_HOST
@@ -41,8 +40,7 @@ jobs:
           nomad_token:   ${{ secrets.NOMAD_TOKEN }}
           nomad_addr:    ${{ vars.NOMAD_ADDR }}
           project_secrets: |
-            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
             POSTGRES_HOST=${{ secrets.POSTGRES_HOST }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             REDIS_HOST=${{ secrets.REDIS_HOST }}
