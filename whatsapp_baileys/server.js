@@ -1,4 +1,5 @@
 const fs = require('fs');
+const http = require('http');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const {
@@ -15,8 +16,26 @@ const AUTO_CREATE_TENANT = (process.env.BAILEYS_AUTO_CREATE_TENANT || 'false').t
 const DEFAULT_TENANT_CURRENCY = process.env.BAILEYS_DEFAULT_CURRENCY || 'USD';
 const DEFAULT_TENANT_LANGUAGE = process.env.BAILEYS_DEFAULT_LANGUAGE || 'es';
 const RECONNECT_DELAY_MS = Number(process.env.BAILEYS_RECONNECT_DELAY_MS || 5000);
+const HEALTH_PORT = Number(process.env.BAILEYS_HEALTH_PORT || 3000);
 
 const logger = pino({ level: LOG_LEVEL });
+
+// WhatsApp connection state exposed for health checks
+let waStatus = 'starting'; // starting | connected | disconnected | logged_out
+
+const healthServer = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/health') {
+    const healthy = waStatus === 'connected';
+    res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: healthy ? 'healthy' : 'unhealthy', whatsapp: waStatus }));
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+healthServer.listen(HEALTH_PORT, () => {
+  logger.info({ port: HEALTH_PORT }, '[HEALTH] HTTP server listening');
+});
 
 function ensureSessionDir() {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
@@ -149,6 +168,7 @@ async function startWhatsApp() {
     }
 
     if (connection === 'open') {
+      waStatus = 'connected';
       logger.info('[BAILEYS] WhatsApp connected');
       return;
     }
@@ -160,12 +180,14 @@ async function startWhatsApp() {
       logger.warn({ statusCode, shouldReconnect }, '[BAILEYS] Connection closed');
 
       if (shouldReconnect) {
+        waStatus = 'disconnected';
         setTimeout(() => {
           startWhatsApp().catch((err) => {
             logger.error({ err }, '[BAILEYS] Reconnect failed');
           });
         }, RECONNECT_DELAY_MS);
       } else {
+        waStatus = 'logged_out';
         logger.error('[BAILEYS] Logged out. Delete session and re-scan QR.');
       }
     }

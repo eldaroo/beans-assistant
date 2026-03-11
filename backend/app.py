@@ -8,9 +8,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import sys
 import os
+import time
 from pathlib import Path
 
 # Add parent directory to path
@@ -288,11 +289,82 @@ async def tenant_detail(request: Request, phone: str):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "ok",
-        "service": "Beans&Co Multi-Tenant API"
-    }
+    """Health check endpoint for Consul service monitoring."""
+    checks = {}
+    overall = "healthy"
+
+    # --- PostgreSQL ---
+    use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"
+    if use_postgres:
+        try:
+            import psycopg2
+            t0 = time.monotonic()
+            conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOST", "localhost"),
+                port=os.getenv("POSTGRES_PORT", "5432"),
+                dbname=os.getenv("POSTGRES_DB", "beansco_main"),
+                user=os.getenv("POSTGRES_USER", "beansco"),
+                password=os.getenv("POSTGRES_PASSWORD", ""),
+                connect_timeout=3,
+            )
+            conn.cursor().execute("SELECT 1")
+            conn.close()
+            checks["database"] = {"status": "healthy", "latency_ms": round((time.monotonic() - t0) * 1000)}
+        except Exception as e:
+            checks["database"] = {"status": "unhealthy", "error": str(e)}
+            overall = "unhealthy"
+    else:
+        checks["database"] = {"status": "healthy", "engine": "sqlite"}
+
+    # --- Redis ---
+    redis_enabled = os.getenv("REDIS_ENABLED", "false").lower() == "true"
+    if redis_enabled:
+        try:
+            t0 = time.monotonic()
+            client = cache.get_redis_client()
+            if client:
+                client.ping()
+                checks["redis"] = {"status": "healthy", "latency_ms": round((time.monotonic() - t0) * 1000)}
+            else:
+                checks["redis"] = {"status": "unhealthy", "error": "client unavailable"}
+                if overall == "healthy":
+                    overall = "degraded"
+        except Exception as e:
+            checks["redis"] = {"status": "unhealthy", "error": str(e)}
+            if overall == "healthy":
+                overall = "degraded"
+    else:
+        checks["redis"] = {"status": "disabled"}
+
+    # --- Google Gemini API key ---
+    google_key = os.getenv("GOOGLE_API_KEY", "")
+    checks["gemini_api"] = {"status": "healthy" if google_key else "unhealthy", "configured": bool(google_key)}
+    if not google_key:
+        overall = "unhealthy"
+
+    # --- WhatsApp (Baileys) ---
+    whatsapp_url = os.getenv("WHATSAPP_URL", "http://whatsapp:3000")
+    try:
+        import urllib.request
+        t0 = time.monotonic()
+        with urllib.request.urlopen(f"{whatsapp_url}/health", timeout=3) as resp:
+            import json as _json
+            wa_data = _json.loads(resp.read())
+            checks["whatsapp"] = {"status": wa_data.get("status", "unknown"), "whatsapp": wa_data.get("whatsapp"), "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        checks["whatsapp"] = {"status": "unhealthy", "error": str(e)}
+        if overall == "healthy":
+            overall = "degraded"
+
+    status_code = 200 if overall in ("healthy", "degraded") else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": overall,
+            "service": "Beans&Co Multi-Tenant API",
+            "checks": checks,
+        },
+    )
 
 
 @app.get("/test-products")

@@ -22,4 +22,6 @@ ENV BAILEYS_DEFAULT_LANGUAGE=es
 # Persist WhatsApp session auth files
 VOLUME ["/app/.baileys_auth"]
 
+EXPOSE 3000
+
 CMD ["node", "whatsapp_baileys/server.js"]
