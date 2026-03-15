@@ -29,6 +29,16 @@ jobs:
           path: _infra
           token: ${{ secrets.INFRA_READ_TOKEN }}
 
+      - name: Collect deploy metadata
+        id: meta
+        run: |
+          echo "value<<__META_EOF__" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "deployed_by=${{ github.actor }}" >> "$GITHUB_OUTPUT"
+          echo "__META_EOF__" >> "$GITHUB_OUTPUT"
+
       - uses: ./_infra/.github/actions/nomad-deploy
         with:
           project_name:  beans-assistant
@@ -41,6 +51,7 @@ jobs:
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
             AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
+          deploy_meta: ${{ steps.meta.outputs.value }}
 
   deploy-whatsapp:
     needs: deploy-backend
@@ -58,6 +69,16 @@ jobs:
           path: _infra
           token: ${{ secrets.INFRA_READ_TOKEN }}
 
+      - name: Collect deploy metadata
+        id: meta
+        run: |
+          echo "value<<__META_EOF__" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "deployed_by=${{ github.actor }}" >> "$GITHUB_OUTPUT"
+          echo "__META_EOF__" >> "$GITHUB_OUTPUT"
+
       - uses: ./_infra/.github/actions/nomad-deploy
         with:
           project_name: beans-assistant-whatsapp
@@ -65,3 +86,4 @@ jobs:
           nomad_token:  ${{ secrets.NOMAD_TOKEN }}
           nomad_addr:   ${{ vars.NOMAD_ADDR }}
           ghcr_token:   ${{ secrets.GHCR_READ_TOKEN }}
+          deploy_meta: ${{ steps.meta.outputs.value }}
