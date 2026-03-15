@@ -48,6 +48,7 @@ class TenantManager:
         """Save tenant registry to disk."""
         with open(self.registry_path, 'w', encoding='utf-8') as f:
             json.dump(self.registry, f, indent=2, ensure_ascii=False)
+        self.registry = self._load_registry()
 
     def tenant_exists(self, phone_number: str) -> bool:
         """
@@ -59,7 +60,7 @@ class TenantManager:
         Returns:
             True if tenant exists
         """
-        return phone_number in self.registry
+        return phone_number in self._load_registry()
 
     def get_tenant_path(self, phone_number: str) -> Path:
         """Get the directory path for a tenant."""
@@ -131,7 +132,8 @@ class TenantManager:
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
 
-        # Register tenant
+        # Register tenant (reload from disk first to avoid overwriting concurrent writes)
+        self.registry = self._load_registry()
         self.registry[phone_number] = {
             "business_name": business_name,
             "created_at": datetime.now().isoformat(),
@@ -284,12 +286,13 @@ GROUP BY p.id, p.sku, p.name;
 
     def list_tenants(self) -> list:
         """List all registered tenants."""
+        registry = self._load_registry()
         return [
             {
                 "phone_number": phone,
                 **data
             }
-            for phone, data in self.registry.items()
+            for phone, data in registry.items()
         ]
 
     def get_tenant_stats(self, phone_number: str) -> Optional[Dict[str, Any]]:
