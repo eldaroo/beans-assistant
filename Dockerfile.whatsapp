@@ -12,6 +12,7 @@ RUN cd whatsapp_baileys && npm install --omit=dev
 # Copy connector code
 COPY whatsapp_baileys ./whatsapp_baileys
 
+
 # Runtime defaults (can be overridden by compose/env)
 ENV BACKEND_URL=http://backend:8000
 ENV BAILEYS_SESSION_DIR=/app/.baileys_auth
@@ -23,5 +24,7 @@ ENV BAILEYS_DEFAULT_LANGUAGE=es
 
 # Persist WhatsApp session auth files
 VOLUME ["/app/.baileys_auth"]
+
+EXPOSE 3000
 
 CMD ["node", "whatsapp_baileys/server.js"]

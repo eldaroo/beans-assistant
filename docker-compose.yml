@@ -40,6 +40,7 @@ services:
       POSTGRES_USER: beansco
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      WHATSAPP_URL: http://whatsapp:3000
     volumes:
       - ./configs:/app/configs
       - ./data:/app/data
@@ -65,6 +66,7 @@ services:
       BAILEYS_SESSION_DIR: /app/.baileys_auth
       BAILEYS_LOG_LEVEL: info
       BAILEYS_AUTO_CREATE_TENANT: "false"
+      BAILEYS_HEALTH_PORT: "3000"
     volumes:
       # CRÍTICO: la sesión de WhatsApp debe persistir
       - whatsapp_auth:/app/.baileys_auth
