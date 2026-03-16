@@ -37,6 +37,7 @@ healthServer.listen(HEALTH_PORT, () => {
   logger.info({ port: HEALTH_PORT }, '[HEALTH] HTTP server listening');
 });
 
+
 function ensureSessionDir() {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
 }

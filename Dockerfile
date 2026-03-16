@@ -11,10 +11,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for better caching)
-COPY requirements.txt .
+COPY requirements.txt requirements.txt
+COPY backend/requirements.txt backend-requirements.txt
 
 # Install Python dependencies with increased timeout for large packages
-RUN pip install --no-cache-dir --timeout=1000 --retries=5 -r requirements.txt
+RUN pip install --no-cache-dir --timeout=1000 --retries=5 -r requirements.txt -r backend-requirements.txt
 
 # Copy application code
 COPY . .
