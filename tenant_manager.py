@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
 
+USE_POSTGRES = os.getenv("USE_POSTGRES", "false").lower() == "true"
+
 
 class TenantManager:
     """Gestiona múltiples clientes (tenants) con bases de datos separadas."""
@@ -34,21 +36,110 @@ class TenantManager:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         self.templates_path.mkdir(parents=True, exist_ok=True)
 
-        # Load tenant registry
+        if USE_POSTGRES:
+            self._ensure_tenants_table()
+
+        # Load tenant registry (in-memory cache for JSON mode)
         self.registry = self._load_registry()
 
+    # ------------------------------------------------------------------
+    # PostgreSQL helpers
+    # ------------------------------------------------------------------
+
+    def _get_pg_conn(self):
+        """Open a direct PostgreSQL connection (independent of the pool)."""
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        return psycopg2.connect(
+            host=os.getenv("POSTGRES_HOST", "localhost"),
+            port=int(os.getenv("POSTGRES_PORT", "5432")),
+            dbname=os.getenv("POSTGRES_DB", "beansco_main"),
+            user=os.getenv("POSTGRES_USER", "beansco"),
+            password=os.getenv("POSTGRES_PASSWORD", "changeme123"),
+            cursor_factory=RealDictCursor,
+            options="-c client_encoding=UTF8",
+        )
+
+    def _ensure_tenants_table(self):
+        """Create public.tenants table if not exists, then migrate from JSON."""
+        conn = self._get_pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS public.tenants (
+                        phone_number TEXT PRIMARY KEY,
+                        business_name TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        config JSONB
+                    )
+                """)
+            conn.commit()
+            self._migrate_json_to_pg(conn)
+        finally:
+            conn.close()
+
+    def _migrate_json_to_pg(self, conn):
+        """One-time migration: import JSON registry into PostgreSQL if table is empty."""
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS count FROM public.tenants")
+            row = cur.fetchone()
+            count = row["count"] if row else 0
+
+        if count == 0 and self.registry_path.exists():
+            print("[TENANT] Migrating tenant registry from JSON to PostgreSQL...")
+            with open(self.registry_path, "r", encoding="utf-8") as f:
+                json_registry = json.load(f)
+
+            with conn.cursor() as cur:
+                for phone, data in json_registry.items():
+                    cur.execute(
+                        """
+                        INSERT INTO public.tenants (phone_number, business_name, created_at, status)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (phone_number) DO NOTHING
+                        """,
+                        (phone, data["business_name"], data["created_at"], data.get("status", "active")),
+                    )
+            conn.commit()
+            print(f"[TENANT] Migrated {len(json_registry)} tenants to PostgreSQL")
+
+    # ------------------------------------------------------------------
+    # Registry read/write
+    # ------------------------------------------------------------------
+
     def _load_registry(self) -> Dict[str, Any]:
-        """Load tenant registry from disk."""
+        """Load tenant registry — from PostgreSQL or disk depending on config."""
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT phone_number, business_name, created_at, status FROM public.tenants"
+                    )
+                    rows = cur.fetchall()
+                return {
+                    r["phone_number"]: {
+                        "business_name": r["business_name"],
+                        "created_at": r["created_at"],
+                        "status": r["status"],
+                    }
+                    for r in rows
+                }
+            finally:
+                conn.close()
+
         if self.registry_path.exists():
-            with open(self.registry_path, 'r', encoding='utf-8') as f:
+            with open(self.registry_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return {}
 
     def _save_registry(self):
-        """Save tenant registry to disk."""
-        with open(self.registry_path, 'w', encoding='utf-8') as f:
-            json.dump(self.registry, f, indent=2, ensure_ascii=False)
-        self.registry = self._load_registry()
+        """Persist registry to disk (JSON mode only; PG writes are done inline)."""
+        if not USE_POSTGRES:
+            with open(self.registry_path, "w", encoding="utf-8") as f:
+                json.dump(self.registry, f, indent=2, ensure_ascii=False)
+            self.registry = self._load_registry()
 
     def tenant_exists(self, phone_number: str) -> bool:
         """
@@ -60,6 +151,17 @@ class TenantManager:
         Returns:
             True if tenant exists
         """
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM public.tenants WHERE phone_number = %s", (phone_number,)
+                    )
+                    return cur.fetchone() is not None
+            finally:
+                conn.close()
+
         return phone_number in self._load_registry()
 
     def get_tenant_path(self, phone_number: str) -> Path:
@@ -83,9 +185,29 @@ class TenantManager:
         if not self.tenant_exists(phone_number):
             return None
 
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT phone_number, business_name, created_at, config FROM public.tenants WHERE phone_number = %s",
+                        (phone_number,),
+                    )
+                    row = cur.fetchone()
+                if row is None:
+                    return None
+                cfg = row["config"] if isinstance(row["config"], dict) else (json.loads(row["config"]) if row["config"] else {})
+                cfg = dict(cfg)
+                cfg["business_name"] = row["business_name"]
+                cfg["phone_number"] = row["phone_number"]
+                cfg["created_at"] = row["created_at"]
+                return cfg
+            finally:
+                conn.close()
+
         config_path = self.get_tenant_path(phone_number) / "config.json"
         if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return None
 
@@ -112,15 +234,6 @@ class TenantManager:
 
         print(f"[TENANT] Creating new tenant: {phone_number} ({business_name})")
 
-        # Create tenant directory
-        tenant_path = self.get_tenant_path(phone_number)
-        tenant_path.mkdir(parents=True, exist_ok=True)
-
-        # Create database
-        db_path = self.get_tenant_db_path(phone_number)
-        self._create_database(db_path)
-
-        # Create config
         if config is None:
             config = self._get_default_config()
 
@@ -128,18 +241,41 @@ class TenantManager:
         config["phone_number"] = phone_number
         config["created_at"] = datetime.now().isoformat()
 
-        config_path = tenant_path / "config.json"
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        if USE_POSTGRES:
+            # In postgres mode the tenant schema holds the data — no local SQLite needed.
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO public.tenants (phone_number, business_name, created_at, status, config)
+                        VALUES (%s, %s, %s, 'active', %s)
+                        """,
+                        (phone_number, business_name, config["created_at"], json.dumps(config)),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
+        else:
+            # SQLite path: create directory, database file and config.json
+            tenant_path = self.get_tenant_path(phone_number)
+            tenant_path.mkdir(parents=True, exist_ok=True)
 
-        # Register tenant (reload from disk first to avoid overwriting concurrent writes)
-        self.registry = self._load_registry()
-        self.registry[phone_number] = {
-            "business_name": business_name,
-            "created_at": datetime.now().isoformat(),
-            "status": "active"
-        }
-        self._save_registry()
+            db_path = self.get_tenant_db_path(phone_number)
+            self._create_database(db_path)
+
+            config_path = tenant_path / "config.json"
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            # Register in JSON (reload first to avoid concurrent-write races)
+            self.registry = self._load_registry()
+            self.registry[phone_number] = {
+                "business_name": business_name,
+                "created_at": config["created_at"],
+                "status": "active",
+            }
+            self._save_registry()
 
         print(f"[TENANT] [OK] Tenant created successfully")
         return True
@@ -286,14 +422,32 @@ GROUP BY p.id, p.sku, p.name;
 
     def list_tenants(self) -> list:
         """List all registered tenants."""
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT phone_number, business_name, created_at, status, config FROM public.tenants ORDER BY created_at DESC"
+                    )
+                    rows = cur.fetchall()
+                result = []
+                for r in rows:
+                    entry = {
+                        "phone_number": r["phone_number"],
+                        "business_name": r["business_name"],
+                        "created_at": r["created_at"],
+                        "status": r["status"],
+                    }
+                    if r["config"]:
+                        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+                        entry.update(cfg)
+                    result.append(entry)
+                return result
+            finally:
+                conn.close()
+
         registry = self._load_registry()
-        return [
-            {
-                "phone_number": phone,
-                **data
-            }
-            for phone, data in registry.items()
-        ]
+        return [{"phone_number": phone, **data} for phone, data in registry.items()]
 
     def get_tenant_stats(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get statistics for a tenant."""

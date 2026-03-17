@@ -47,6 +47,16 @@ class TenantsRepository:
         return Path(__file__).resolve().parent.parent.parent / "configs" / "tenant_registry.json"
 
     def remove_tenant_from_registry(self, phone: str):
+        if USE_POSTGRES:
+            conn = self.tenant_manager._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM public.tenants WHERE phone_number = %s", (phone,))
+                conn.commit()
+            finally:
+                conn.close()
+            return
+
         registry_path = self._registry_path()
 
         with open(registry_path, "r", encoding="utf-8") as f:
