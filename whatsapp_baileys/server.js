@@ -241,6 +241,12 @@ async function startWhatsApp() {
       waStatus = 'connected';
       latestQR = null;
       logger.info('[BAILEYS] WhatsApp connected');
+      
+      // Log the phone number this session is bound to
+      if (sock.user) {
+        const userPhone = sock.user.id ? sock.user.id.split(':')[0] : 'unknown';
+        logger.info({ boundToPhone: `+${userPhone}`, user: sock.user }, '[BAILEYS] ===== SESSION BOUND TO: +${userPhone} =====');
+      }
       return;
     }
 
@@ -265,13 +271,30 @@ async function startWhatsApp() {
   });
 
   sock.ev.on('messages.upsert', async ({ type, messages }) => {
-    if (type !== 'notify') return;
+    logger.debug({ type, messageCount: messages.length }, '[BAILEYS] ===== MESSAGES UPSERT EVENT =====');
+    
+    if (type !== 'notify') {
+      logger.debug({ type }, '[BAILEYS] Ignoring non-notify message type');
+      return;
+    }
 
     for (const msg of messages) {
-      if (!isSupportedIncomingMessage(msg)) continue;
-
       const jid = msg.key.remoteJid;
       const participant = msg.key.participant;
+      
+      logger.debug({
+        jid,
+        participant,
+        fromMe: msg.key.fromMe,
+        type: msg.key.type,
+        messageType: Object.keys(msg.message || {})[0],
+      }, '[BAILEYS] === RAW MESSAGE DEBUG ===');
+
+      if (!isSupportedIncomingMessage(msg)) {
+        logger.debug({ jid }, '[BAILEYS] Message type not supported, skipping');
+        continue;
+      }
+
       const phone = phoneFromJid(jid);
       const text = extractText(msg.message);
 
