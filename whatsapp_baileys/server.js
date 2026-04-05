@@ -19,7 +19,7 @@ const DEFAULT_TENANT_LANGUAGE = process.env.BAILEYS_DEFAULT_LANGUAGE || 'es';
 const RECONNECT_DELAY_MS = Number(process.env.BAILEYS_RECONNECT_DELAY_MS || 5000);
 const HEALTH_PORT = Number(process.env.BAILEYS_HEALTH_PORT || 3000);
 
-const logger = pino({ level: LOG_LEVEL });
+logger.info({ AUTO_CREATE_TENANT }, '[BAILEYS] Auto-create tenant setting');
 
 // WhatsApp connection state exposed for health checks
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
