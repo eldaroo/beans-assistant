@@ -19,8 +19,9 @@ const DEFAULT_TENANT_LANGUAGE = process.env.BAILEYS_DEFAULT_LANGUAGE || 'es';
 const RECONNECT_DELAY_MS = Number(process.env.BAILEYS_RECONNECT_DELAY_MS || 5000);
 const HEALTH_PORT = Number(process.env.BAILEYS_HEALTH_PORT || 3000);
 const SCAN_PASSWORD = process.env.BAILEYS_SCAN_PASSWORD || 'beans123';
+const BAILEYS_FALLBACK_VERSION = process.env.BAILEYS_FALLBACK_VERSION || '2,3000,1035194821';
 
-logger.info({ AUTO_CREATE_TENANT }, '[BAILEYS] Auto-create tenant setting');
+logger.info({ AUTO_CREATE_TENANT, BAILEYS_FALLBACK_VERSION }, '[BAILEYS] Connector configuration');
 
 // WhatsApp connection state exposed for health checks
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
@@ -90,6 +91,32 @@ function ensureSessionDir() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseVersionString(versionString) {
+  return versionString.split(',').map((part) => Number(part.trim()));
+}
+
+async function getBaileysVersion() {
+  const maxAttempts = 3;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const version = await fetchLatestBaileysVersion();
+      logger.info({ version }, '[BAILEYS] Using fetched Baileys version');
+      return version;
+    } catch (err) {
+      lastError = err;
+      logger.warn({ attempt, err: err?.message || err }, '[BAILEYS] Failed to fetch latest Baileys version');
+      if (attempt < maxAttempts) {
+        await sleep(5000);
+      }
+    }
+  }
+
+  logger.warn({ fallback: BAILEYS_FALLBACK_VERSION }, '[BAILEYS] Falling back to pinched Baileys version');
+  return { version: parseVersionString(BAILEYS_FALLBACK_VERSION) };
 }
 
 function phoneFromJid(jid) {
@@ -227,9 +254,9 @@ async function startWhatsApp() {
   ensureSessionDir();
 
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const { version } = await getBaileysVersion();
 
-  logger.info({ version, backend: BACKEND_URL }, '[BAILEYS] Starting WhatsApp connector');
+  logger.info({ sessionDir: SESSION_DIR, version, backend: BACKEND_URL }, '[BAILEYS] Starting WhatsApp connector');
 
   const sock = makeWASocket({
     auth: state,
