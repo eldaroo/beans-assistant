@@ -69,6 +69,7 @@ services:
       BAILEYS_DEFAULT_CURRENCY: USD
       BAILEYS_DEFAULT_LANGUAGE: es
       BAILEYS_HEALTH_PORT: "3000"
+      BAILEYS_SCAN_PASSWORD: ${SCAN_PASSWORD:-beans123}
     volumes:
       # CRÍTICO: la sesión de WhatsApp debe persistir
       - whatsapp_auth:/app/.baileys_auth

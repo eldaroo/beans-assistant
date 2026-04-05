@@ -18,6 +18,7 @@ const DEFAULT_TENANT_CURRENCY = process.env.BAILEYS_DEFAULT_CURRENCY || 'USD';
 const DEFAULT_TENANT_LANGUAGE = process.env.BAILEYS_DEFAULT_LANGUAGE || 'es';
 const RECONNECT_DELAY_MS = Number(process.env.BAILEYS_RECONNECT_DELAY_MS || 5000);
 const HEALTH_PORT = Number(process.env.BAILEYS_HEALTH_PORT || 3000);
+const SCAN_PASSWORD = process.env.BAILEYS_SCAN_PASSWORD || 'beans123';
 
 logger.info({ AUTO_CREATE_TENANT }, '[BAILEYS] Auto-create tenant setting');
 
@@ -30,7 +31,17 @@ const healthServer = http.createServer(async (req, res) => {
     // Always return 200 — the server is running. WhatsApp status is in the body.
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', whatsapp: waStatus }));
-  } else if (req.method === 'GET' && req.url === '/scan') {
+  } else if (req.method === 'GET' && req.url.startsWith('/scan')) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const password = url.searchParams.get('password');
+    if (!password || password !== SCAN_PASSWORD) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp QR - Password Required</title>
+        <style>body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}</style>
+        </head><body><h2>🔒 Password Required</h2><form method="get"><input type="password" name="password" placeholder="Enter password" required><button type="submit">Submit</button></form></body></html>`);
+      return;
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
     if (waStatus === 'connected') {
