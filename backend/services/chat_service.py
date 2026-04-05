@@ -122,7 +122,7 @@ class ChatService:
         db_path = tenant_manager.get_tenant_db_path(normalized_phone)
         token = database.set_tenant_db_path(db_path)
         try:
-            result = cls._invoke_graph(phone=phone, message=message)
+            result = cls._invoke_graph(phone=normalized_phone, message=message)
 
             bot_response = ""
             if result.get("final_answer"):
@@ -145,7 +145,7 @@ class ChatService:
                 "operation_type": result.get("operation_type"),
                 "confidence": result.get("confidence"),
             }
-            cls._append_history(phone=phone, user_message=message, bot_response=bot_response)
+            cls._append_history(phone=normalized_phone, user_message=message, bot_response=bot_response)
             return bot_response, metadata
         finally:
             database.reset_tenant_db_path(token)
