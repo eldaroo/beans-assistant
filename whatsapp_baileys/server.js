@@ -2,6 +2,7 @@ const fs = require('fs');
 const http = require('http');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const {
   default: makeWASocket,
   DisconnectReason,
@@ -22,12 +23,46 @@ const logger = pino({ level: LOG_LEVEL });
 
 // WhatsApp connection state exposed for health checks
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
+let latestQR = null; // latest QR string from Baileys
 
-const healthServer = http.createServer((req, res) => {
+const healthServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
-    const healthy = waStatus === 'connected';
-    res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: healthy ? 'healthy' : 'unhealthy', whatsapp: waStatus }));
+    // Always return 200 — the server is running. WhatsApp status is in the body.
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', whatsapp: waStatus }));
+  } else if (req.method === 'GET' && req.url === '/scan') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
+    if (waStatus === 'connected') {
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp QR</title>
+        <style>body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}</style>
+        </head><body><h2 style="color:#25d366">✅ WhatsApp conectado</h2><p>No hace falta escanear nada.</p></body></html>`);
+      return;
+    }
+
+    if (!latestQR) {
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp QR</title>
+        <meta http-equiv="refresh" content="3">
+        <style>body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}</style>
+        </head><body><h2>Esperando QR...</h2><p>Esta página se recarga sola. Status: <b>${waStatus}</b></p></body></html>`);
+      return;
+    }
+
+    try {
+      const dataUrl = await QRCode.toDataURL(latestQR, { width: 300, margin: 2 });
+      res.end(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>WhatsApp QR</title>
+        <meta http-equiv="refresh" content="20">
+        <style>body{font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}
+        .card{background:#fff;padding:2rem;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);text-align:center}
+        img{display:block;margin:1rem auto}</style>
+        </head><body><div class="card">
+        <h2 style="color:#25d366">Escaneá con WhatsApp</h2>
+        <img src="${dataUrl}" alt="QR Code" width="300" height="300">
+        <p style="color:#888;font-size:.85rem">El QR expira en ~20 segundos. La página se recarga automáticamente.</p>
+        </div></body></html>`);
+    } catch (err) {
+      res.end(`<html><body><pre>Error generando QR: ${err.message}</pre></body></html>`);
+    }
   } else {
     res.writeHead(404);
     res.end();
@@ -164,12 +199,14 @@ async function startWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      logger.info('[BAILEYS] Scan this QR to login:');
+      latestQR = qr;
+      logger.info('[BAILEYS] QR ready — visit /scan to scan it');
       qrcode.generate(qr, { small: true });
     }
 
     if (connection === 'open') {
       waStatus = 'connected';
+      latestQR = null;
       logger.info('[BAILEYS] WhatsApp connected');
       return;
     }
