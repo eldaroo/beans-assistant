@@ -84,7 +84,10 @@ function sleep(ms) {
 function phoneFromJid(jid) {
   const base = String(jid || '').split('@')[0];
   if (!base) return '';
-  return base.startsWith('+') ? base : `+${base}`;
+
+  const digits = base.replace(/\D/g, '');
+  if (!digits) return '';
+  return `+${digits}`;
 }
 
 function extractText(messageContent = {}) {

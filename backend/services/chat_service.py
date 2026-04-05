@@ -115,10 +115,11 @@ class ChatService:
     @classmethod
     def chat_with_tenant(cls, phone: str, message: str) -> tuple[str, dict]:
         tenant_manager = TenantManager()
-        if not tenant_manager.tenant_exists(phone):
-            raise ChatTenantNotFoundError(f"Tenant {phone} not found")
+        normalized_phone = tenant_manager.normalize_phone_number(phone)
+        if not tenant_manager.tenant_exists(normalized_phone):
+            raise ChatTenantNotFoundError(f"Tenant {normalized_phone} not found")
 
-        db_path = tenant_manager.get_tenant_db_path(phone)
+        db_path = tenant_manager.get_tenant_db_path(normalized_phone)
         token = database.set_tenant_db_path(db_path)
         try:
             result = cls._invoke_graph(phone=phone, message=message)

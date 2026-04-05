@@ -76,9 +76,10 @@ def tenant_context(phone_number: str, must_exist: bool = True):
       - Switches search_path to tenant_<phone_sanitized> schema.
     """
     tenant_manager = TenantManager()
+    normalized_phone = tenant_manager.normalize_phone_number(phone_number)
 
-    if must_exist and not tenant_manager.tenant_exists(phone_number):
-        raise TenantNotFoundError(f"Tenant {phone_number} not found")
+    if must_exist and not tenant_manager.tenant_exists(normalized_phone):
+        raise TenantNotFoundError(f"Tenant {normalized_phone} not found")
 
     if USE_POSTGRES:
         schema_name = phone_to_schema_name(phone_number)

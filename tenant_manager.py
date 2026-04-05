@@ -119,20 +119,46 @@ class TenantManager:
                     )
                     rows = cur.fetchall()
                 return {
-                    r["phone_number"]: {
+                    self.normalize_phone_number(r["phone_number"]): {
                         "business_name": r["business_name"],
                         "created_at": r["created_at"],
                         "status": r["status"],
                     }
                     for r in rows
+                    if self.normalize_phone_number(r["phone_number"])
                 }
             finally:
                 conn.close()
 
         if self.registry_path.exists():
             with open(self.registry_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw_registry = json.load(f)
+            return {
+                self.normalize_phone_number(phone): data
+                for phone, data in raw_registry.items()
+                if self.normalize_phone_number(phone)
+            }
         return {}
+
+    @staticmethod
+    def normalize_phone_number(phone_number: str) -> str:
+        """
+        Normalize a phone number into a canonical international format.
+
+        - Strips whitespace and non-digit characters.
+        - Preserves a leading '+' when present.
+        - Always returns a string starting with '+'.
+        """
+        if not phone_number:
+            return ""
+
+        phone = str(phone_number).strip()
+        if phone.startswith("+"):
+            phone = "+" + "".join(ch for ch in phone[1:] if ch.isdigit())
+        else:
+            phone = "+" + "".join(ch for ch in phone if ch.isdigit())
+
+        return phone if phone != "+" else ""
 
     def _save_registry(self):
         """Persist registry to disk (JSON mode only; PG writes are done inline)."""
@@ -151,22 +177,27 @@ class TenantManager:
         Returns:
             True if tenant exists
         """
+        normalized_phone = self.normalize_phone_number(phone_number)
+        if not normalized_phone:
+            return False
+
         if USE_POSTGRES:
             conn = self._get_pg_conn()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT 1 FROM public.tenants WHERE phone_number = %s", (phone_number,)
+                        "SELECT 1 FROM public.tenants WHERE phone_number = %s", (normalized_phone,)
                     )
                     return cur.fetchone() is not None
             finally:
                 conn.close()
 
-        return phone_number in self._load_registry()
+        return normalized_phone in self._load_registry()
 
     def get_tenant_path(self, phone_number: str) -> Path:
         """Get the directory path for a tenant."""
-        return self.base_path / phone_number
+        normalized_phone = self.normalize_phone_number(phone_number)
+        return self.base_path / normalized_phone
 
     def get_tenant_db_path(self, phone_number: str) -> str:
         """Get the database path for a tenant."""
@@ -182,7 +213,8 @@ class TenantManager:
         Returns:
             Config dict or None if not found
         """
-        if not self.tenant_exists(phone_number):
+        normalized_phone = self.normalize_phone_number(phone_number)
+        if not self.tenant_exists(normalized_phone):
             return None
 
         if USE_POSTGRES:
@@ -191,7 +223,7 @@ class TenantManager:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT phone_number, business_name, created_at, config FROM public.tenants WHERE phone_number = %s",
-                        (phone_number,),
+                        (normalized_phone,),
                     )
                     row = cur.fetchone()
                 if row is None:
@@ -205,7 +237,7 @@ class TenantManager:
             finally:
                 conn.close()
 
-        config_path = self.get_tenant_path(phone_number) / "config.json"
+        config_path = self.get_tenant_path(normalized_phone) / "config.json"
         if config_path.exists():
             with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -228,17 +260,18 @@ class TenantManager:
         Returns:
             True if created successfully
         """
-        if self.tenant_exists(phone_number):
-            print(f"[TENANT] Tenant {phone_number} already exists")
+        normalized_phone = self.normalize_phone_number(phone_number)
+        if self.tenant_exists(normalized_phone):
+            print(f"[TENANT] Tenant {normalized_phone} already exists")
             return False
 
-        print(f"[TENANT] Creating new tenant: {phone_number} ({business_name})")
+        print(f"[TENANT] Creating new tenant: {normalized_phone} ({business_name})")
 
         if config is None:
             config = self._get_default_config()
 
         config["business_name"] = business_name
-        config["phone_number"] = phone_number
+        config["phone_number"] = normalized_phone
         config["created_at"] = datetime.now().isoformat()
 
         if USE_POSTGRES:
@@ -251,17 +284,17 @@ class TenantManager:
                         INSERT INTO public.tenants (phone_number, business_name, created_at, status, config)
                         VALUES (%s, %s, %s, 'active', %s)
                         """,
-                        (phone_number, business_name, config["created_at"], json.dumps(config)),
+                        (normalized_phone, business_name, config["created_at"], json.dumps(config)),
                     )
                 conn.commit()
             finally:
                 conn.close()
         else:
             # SQLite path: create directory, database file and config.json
-            tenant_path = self.get_tenant_path(phone_number)
+            tenant_path = self.get_tenant_path(normalized_phone)
             tenant_path.mkdir(parents=True, exist_ok=True)
 
-            db_path = self.get_tenant_db_path(phone_number)
+            db_path = self.get_tenant_db_path(normalized_phone)
             self._create_database(db_path)
 
             config_path = tenant_path / "config.json"
@@ -270,7 +303,7 @@ class TenantManager:
 
             # Register in JSON (reload first to avoid concurrent-write races)
             self.registry = self._load_registry()
-            self.registry[phone_number] = {
+            self.registry[normalized_phone] = {
                 "business_name": business_name,
                 "created_at": config["created_at"],
                 "status": "active",
@@ -451,10 +484,11 @@ GROUP BY p.id, p.sku, p.name;
 
     def get_tenant_stats(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get statistics for a tenant."""
-        if not self.tenant_exists(phone_number):
+        normalized_phone = self.normalize_phone_number(phone_number)
+        if not self.tenant_exists(normalized_phone):
             return None
 
-        db_path = self.get_tenant_db_path(phone_number)
+        db_path = self.get_tenant_db_path(normalized_phone)
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
 
