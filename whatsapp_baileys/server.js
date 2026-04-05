@@ -116,6 +116,8 @@ function isSupportedIncomingMessage(message) {
 }
 
 async function createTenantIfNeeded(phone) {
+  logger.info({ phone, AUTO_CREATE_TENANT, BACKEND_URL }, '[BAILEYS] createTenantIfNeeded called');
+
   if (!AUTO_CREATE_TENANT) {
     logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] AUTO_CREATE_TENANT disabled, cannot create tenant');
     return false;
@@ -161,7 +163,7 @@ async function createTenantIfNeeded(phone) {
     logger.warn({ phone, status: response.status, detail }, '[BAILEYS] Failed to auto-create tenant');
     return false;
   } catch (err) {
-    logger.error({ phone, err }, '[BAILEYS] Error during tenant auto-creation');
+    logger.error({ phone, err: err.message || err }, '[BAILEYS] Error during tenant auto-creation');
     return false;
   }
 }
@@ -181,8 +183,9 @@ async function requestAgentReply(phone, messageText) {
   logger.info({ phone, status: response.status }, '[BAILEYS] Initial response status');
 
   if (response.status === 404 && AUTO_CREATE_TENANT) {
-    logger.info({ phone }, '[BAILEYS] Got 404, attempting to create tenant');
+    logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] Got 404, attempting to create tenant');
     const created = await createTenantIfNeeded(phone);
+    logger.info({ phone, created }, '[BAILEYS] createTenantIfNeeded result');
     if (created) {
       logger.info({ phone }, '[BAILEYS] Tenant created/exists, retrying chat');
       await sleep(300);
