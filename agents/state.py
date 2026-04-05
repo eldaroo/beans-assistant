@@ -33,6 +33,8 @@ class AgentState(TypedDict):
     Fields:
     - messages: Accumulated conversation messages
     - user_input: Original user input
+    - phone: Tenant phone number
+    - sender: Message sender phone (same as phone for tenant context)
     - intent: Classified intent (READ_ANALYTICS, WRITE_OPERATION, MIXED, AMBIGUOUS)
     - operation_type: Specific operation type if WRITE_OPERATION
     - confidence: Classification confidence score (0-1)
@@ -43,10 +45,13 @@ class AgentState(TypedDict):
     - final_answer: Final response to user
     - error: Error message if any step failed
     - next_action: Next step in the workflow
+    - metadata: Additional metadata dict
     """
     # Core
     messages: Annotated[List[Dict[str, Any]], add_messages]
     user_input: str
+    phone: str
+    sender: str
 
     # Intent classification
     intent: Optional[IntentType]
@@ -67,3 +72,6 @@ class AgentState(TypedDict):
 
     # Flow control
     next_action: Optional[str]
+
+    # Additional metadata
+    metadata: Dict[str, Any]
