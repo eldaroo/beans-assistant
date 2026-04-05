@@ -89,17 +89,34 @@ class ChatService:
 
     @classmethod
     def _invoke_graph(cls, phone: str, message: str) -> dict:
-        graph = cls._get_graph()
-        message_with_context = cls._build_message_with_context(phone, message)
-        initial_state = {
-            "messages": [],
-            "user_input": message_with_context,
-            "phone": phone,
-            "sender": phone,
-            "normalized_entities": {},
-            "metadata": {},
-        }
-        return graph.invoke(initial_state)
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"_invoke_graph: START with phone={phone}, message={message[:50]}...")
+        try:
+            graph = cls._get_graph()
+            logger.info(f"_invoke_graph: got graph")
+            
+            message_with_context = cls._build_message_with_context(phone, message)
+            logger.info(f"_invoke_graph: built message with context, length={len(message_with_context)}")
+            
+            initial_state = {
+                "messages": [],
+                "user_input": message_with_context,
+                "phone": phone,
+                "sender": phone,
+                "normalized_entities": {},
+                "metadata": {},
+            }
+            logger.info(f"_invoke_graph: initial_state keys={list(initial_state.keys())}")
+            
+            logger.info(f"_invoke_graph: calling graph.invoke()...")
+            result = graph.invoke(initial_state)
+            logger.info(f"_invoke_graph: graph.invoke() returned, result keys={list(result.keys())}")
+            return result
+        except Exception as e:
+            logger.error(f"_invoke_graph: ERROR - {type(e).__name__}: {e}", exc_info=True)
+            raise
 
     @classmethod
     def simulate_chat(cls, phone: str, message: str) -> tuple[str, dict]:
@@ -114,20 +131,31 @@ class ChatService:
 
     @classmethod
     def chat_with_tenant(cls, phone: str, message: str) -> tuple[str, dict]:
+        import logging
+        logger = logging.getLogger(__name__)
+        
         tenant_manager = TenantManager()
         normalized_phone = tenant_manager.normalize_phone_number(phone)
+        logger.info(f"chat_with_tenant: phone={phone}, normalized={normalized_phone}")
+        
         if not tenant_manager.tenant_exists(normalized_phone):
             raise ChatTenantNotFoundError(f"Tenant {normalized_phone} not found")
 
         db_path = tenant_manager.get_tenant_db_path(normalized_phone)
+        logger.info(f"chat_with_tenant: using db_path={db_path}")
+        
         token = database.set_tenant_db_path(db_path)
         try:
+            logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
             result = cls._invoke_graph(phone=normalized_phone, message=message)
+            logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")
 
             bot_response = ""
             if result.get("final_answer"):
                 bot_response = result["final_answer"]
+                logger.info(f"chat_with_tenant: using final_answer={bot_response[:50]}...")
             elif "messages" in result and len(result["messages"]) > 0:
+                logger.info(f"chat_with_tenant: processing {len(result['messages'])} messages")
                 user_facing_messages = []
                 for msg in result["messages"]:
                     content = cls._extract_message_content(msg)
@@ -137,15 +165,24 @@ class ChatService:
 
                 if user_facing_messages:
                     bot_response = user_facing_messages[-1]
+                    logger.info(f"chat_with_tenant: using user_facing message={bot_response[:50]}...")
                 else:
                     bot_response = cls._extract_message_content(result["messages"][-1])
+                    logger.info(f"chat_with_tenant: using last message={bot_response[:50]}...")
+            else:
+                logger.warning(f"chat_with_tenant: no final_answer or messages found in result")
 
             metadata = {
                 "intent": result.get("intent"),
                 "operation_type": result.get("operation_type"),
                 "confidence": result.get("confidence"),
             }
+            logger.info(f"chat_with_tenant: appending to history for phone={normalized_phone}")
             cls._append_history(phone=normalized_phone, user_message=message, bot_response=bot_response)
+            logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
             return bot_response, metadata
+        except Exception as e:
+            logger.error(f"chat_with_tenant: ERROR - {type(e).__name__}: {e}", exc_info=True)
+            raise
         finally:
             database.reset_tenant_db_path(token)
