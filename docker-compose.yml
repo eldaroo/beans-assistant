@@ -65,7 +65,9 @@ services:
       BACKEND_URL: http://backend:8000
       BAILEYS_SESSION_DIR: /app/.baileys_auth
       BAILEYS_LOG_LEVEL: info
-      BAILEYS_AUTO_CREATE_TENANT: "false"
+      BAILEYS_AUTO_CREATE_TENANT: "true"
+      BAILEYS_DEFAULT_CURRENCY: USD
+      BAILEYS_DEFAULT_LANGUAGE: es
       BAILEYS_HEALTH_PORT: "3000"
     volumes:
       # CRÍTICO: la sesión de WhatsApp debe persistir

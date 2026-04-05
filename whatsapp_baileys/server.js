@@ -116,7 +116,12 @@ function isSupportedIncomingMessage(message) {
 }
 
 async function createTenantIfNeeded(phone) {
-  if (!AUTO_CREATE_TENANT) return false;
+  if (!AUTO_CREATE_TENANT) {
+    logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] AUTO_CREATE_TENANT disabled, cannot create tenant');
+    return false;
+  }
+
+  logger.info({ phone }, '[BAILEYS] Attempting to auto-create tenant...');
 
   const payload = {
     phone_number: phone,
@@ -125,30 +130,46 @@ async function createTenantIfNeeded(phone) {
     language: DEFAULT_TENANT_LANGUAGE,
   };
 
-  const response = await fetch(`${BACKEND_URL}/api/tenants`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(30000),
-  });
+  try {
+    const url = `${BACKEND_URL}/api/tenants`;
+    logger.info({ phone, url, payload }, '[BAILEYS] Sending tenant creation request');
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
 
-  if (response.ok) {
-    logger.info({ phone }, '[BAILEYS] Tenant auto-created');
-    return true;
+    logger.info({ phone, status: response.status }, '[BAILEYS] Tenant creation response status');
+
+    if (response.ok) {
+      logger.info({ phone }, '[BAILEYS] Tenant auto-created successfully');
+      return true;
+    }
+
+    if (response.status === 400) {
+      const text = await response.text();
+      logger.info({ phone, status: 400, detail: text }, '[BAILEYS] Got 400 response');
+      if (text.toLowerCase().includes('already exists')) {
+        logger.info({ phone }, '[BAILEYS] Tenant already exists (400)');
+        return true;
+      }
+    }
+
+    const detail = await response.text();
+    logger.warn({ phone, status: response.status, detail }, '[BAILEYS] Failed to auto-create tenant');
+    return false;
+  } catch (err) {
+    logger.error({ phone, err }, '[BAILEYS] Error during tenant auto-creation');
+    return false;
   }
-
-  if (response.status === 400) {
-    const text = await response.text();
-    if (text.toLowerCase().includes('already exists')) return true;
-  }
-
-  const detail = await response.text();
-  logger.warn({ phone, status: response.status, detail }, '[BAILEYS] Failed to auto-create tenant');
-  return false;
 }
 
 async function requestAgentReply(phone, messageText) {
   const url = `${BACKEND_URL}/api/tenants/${encodeURIComponent(phone)}/chat`;
+
+  logger.info({ phone, url, messageLength: messageText.length }, '[BAILEYS] Requesting agent reply');
 
   let response = await fetch(url, {
     method: 'POST',
@@ -157,9 +178,13 @@ async function requestAgentReply(phone, messageText) {
     signal: AbortSignal.timeout(45000),
   });
 
+  logger.info({ phone, status: response.status }, '[BAILEYS] Initial response status');
+
   if (response.status === 404 && AUTO_CREATE_TENANT) {
+    logger.info({ phone }, '[BAILEYS] Got 404, attempting to create tenant');
     const created = await createTenantIfNeeded(phone);
     if (created) {
+      logger.info({ phone }, '[BAILEYS] Tenant created/exists, retrying chat');
       await sleep(300);
       response = await fetch(url, {
         method: 'POST',
@@ -167,15 +192,20 @@ async function requestAgentReply(phone, messageText) {
         body: JSON.stringify({ message: messageText }),
         signal: AbortSignal.timeout(45000),
       });
+      logger.info({ phone, retryStatus: response.status }, '[BAILEYS] Retry response status');
+    } else {
+      logger.warn({ phone }, '[BAILEYS] Failed to create tenant');
     }
   }
 
   if (!response.ok) {
     const detail = await response.text();
+    logger.error({ phone, status: response.status, detail: detail.substring(0, 200) }, '[BAILEYS] Backend error response');
     throw new Error(`Backend ${response.status}: ${detail}`);
   }
 
   const data = await response.json();
+  logger.info({ phone, hasResponse: !!data.response }, '[BAILEYS] Agent reply received');
   return data.response || 'No pude generar una respuesta en este momento.';
 }
 
@@ -241,10 +271,22 @@ async function startWhatsApp() {
       if (!isSupportedIncomingMessage(msg)) continue;
 
       const jid = msg.key.remoteJid;
+      const participant = msg.key.participant;
       const phone = phoneFromJid(jid);
       const text = extractText(msg.message);
 
-      if (!phone || !text) continue;
+      logger.info({
+        jid,
+        participant,
+        phone,
+        fromMe: msg.key.fromMe,
+        text: text ? text.substring(0, 50) : 'N/A',
+      }, '[BAILEYS] Incoming message details');
+
+      if (!phone || !text) {
+        logger.warn({ jid, phone, hasText: !!text }, '[BAILEYS] Skipping: missing phone or text');
+        continue;
+      }
 
       logger.info({ phone, jid, text }, '[BAILEYS] Incoming message');
 

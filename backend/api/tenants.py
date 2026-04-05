@@ -54,20 +54,23 @@ async def get_tenant(phone: str):
 @router.post("", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
 async def create_tenant(tenant: TenantCreate):
     """Create a new tenant."""
+    logger.info(f"create_tenant: phone={tenant.phone_number}, name={tenant.business_name}")
     try:
         tenants_service.create_tenant(tenant)
+        logger.info(f"create_tenant: successfully created tenant {tenant.phone_number}")
         return SuccessResponse(
             status="ok",
             message=f"Tenant {tenant.phone_number} created successfully",
             data={"phone_number": tenant.phone_number},
         )
     except TenantConflictError as exc:
+        logger.info(f"create_tenant: conflict - tenant {tenant.phone_number} already exists")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
-    except Exception:
-        logger.exception("Failed to create tenant %s", tenant.phone_number)
+    except Exception as e:
+        logger.exception(f"create_tenant: failed to create tenant {tenant.phone_number}: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create tenant",
