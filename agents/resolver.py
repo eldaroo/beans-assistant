@@ -11,7 +11,7 @@ Responsibilities:
 """
 from typing import Dict, Any
 from datetime import datetime, timedelta
-from database import fetch_one, fetch_all
+from database_config import fetch_one, fetch_all
 
 from .state import AgentState
 

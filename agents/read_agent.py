@@ -13,7 +13,7 @@ from typing import Dict, Any, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
-from database import fetch_all, fetch_one
+from database_config import fetch_all, fetch_one
 import unicodedata
 
 from .state import AgentState

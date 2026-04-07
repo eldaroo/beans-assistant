@@ -9,7 +9,7 @@ Responsibilities:
 - NEVER use sql_db_query
 """
 from typing import Dict, Any
-from database import (
+from database_config import (
     register_sale,
     register_product,
     add_stock,

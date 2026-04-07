@@ -5,7 +5,7 @@ import time
 from collections import defaultdict, deque
 from typing import Any
 
-import database
+from database_config import tenant_context
 from graph import create_business_agent_graph
 from tenant_manager import TenantManager
 
@@ -141,11 +141,8 @@ class ChatService:
         if not tenant_manager.tenant_exists(normalized_phone):
             raise ChatTenantNotFoundError(f"Tenant {normalized_phone} not found")
 
-        db_path = tenant_manager.get_tenant_db_path(normalized_phone)
-        logger.info(f"chat_with_tenant: using db_path={db_path}")
-        
-        token = database.set_tenant_db_path(db_path)
-        try:
+        logger.info(f"chat_with_tenant: setting tenant context for phone={normalized_phone}")
+        with tenant_context(normalized_phone):
             logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
             result = cls._invoke_graph(phone=normalized_phone, message=message)
             logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")
@@ -181,8 +178,3 @@ class ChatService:
             cls._append_history(phone=normalized_phone, user_message=message, bot_response=bot_response)
             logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
             return bot_response, metadata
-        except Exception as e:
-            logger.error(f"chat_with_tenant: ERROR - {type(e).__name__}: {e}", exc_info=True)
-            raise
-        finally:
-            database.reset_tenant_db_path(token)
