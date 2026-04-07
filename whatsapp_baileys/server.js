@@ -13,6 +13,7 @@ const {
 const BACKEND_URL = (process.env.BACKEND_URL || 'http://backend:8000').replace(/\/$/, '');
 const SESSION_DIR = process.env.BAILEYS_SESSION_DIR || '/app/.baileys_auth';
 const LOG_LEVEL = process.env.BAILEYS_LOG_LEVEL || 'info';
+const logger = pino({ level: LOG_LEVEL });
 const AUTO_CREATE_TENANT = (process.env.BAILEYS_AUTO_CREATE_TENANT || 'false').toLowerCase() === 'true';
 const DEFAULT_TENANT_CURRENCY = process.env.BAILEYS_DEFAULT_CURRENCY || 'USD';
 const DEFAULT_TENANT_LANGUAGE = process.env.BAILEYS_DEFAULT_LANGUAGE || 'es';
@@ -262,7 +263,7 @@ async function startWhatsApp() {
     auth: state,
     version,
     printQRInTerminal: false,
-    logger: pino({ level: LOG_LEVEL }),
+    logger,
     markOnlineOnConnect: false,
     syncFullHistory: false,
   });
