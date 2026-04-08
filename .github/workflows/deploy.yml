@@ -88,4 +88,5 @@ jobs:
           ghcr_token:   ${{ secrets.GHCR_READ_TOKEN }}
           project_secrets: |
             BAILEYS_SESSION_DIR=/app/.baileys_auth
+            BAILEYS_LID_MAP=${{ vars.BAILEYS_LID_MAP }}
           deploy_meta: ${{ steps.meta.outputs.value }}
