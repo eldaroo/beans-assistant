@@ -291,14 +291,20 @@ async function startWhatsApp() {
   // WhatsApp sends contacts with both id (@s.whatsapp.net) and lid (@lid);
   // we store the reverse mapping so @lid messages can be routed correctly.
   function indexContacts(contactList) {
+    // Log first few contacts at INFO level to understand the structure
+    if (contactList.length > 0) {
+      logger.info({ sample: contactList.slice(0, 3) }, '[BAILEYS] contacts event sample');
+    }
     for (const c of contactList) {
+      // Case 1: id is @s.whatsapp.net and lid field has the @lid JID
       if (c.lid && c.id && c.id.endsWith('@s.whatsapp.net')) {
         const phone = phoneFromJid(c.id);
         if (phone) {
           lidPhoneMap.set(c.lid, phone);
-          logger.debug({ lid: c.lid, phone }, '[BAILEYS] LID→phone mapped');
+          logger.info({ lid: c.lid, phone }, '[BAILEYS] LID→phone mapped (case 1)');
         }
       }
+      // Case 2: id is @lid itself — can't get phone from here, skip
     }
   }
   sock.ev.on('contacts.upsert', indexContacts);
@@ -365,6 +371,19 @@ async function startWhatsApp() {
         type: msg.key.type,
         messageType: Object.keys(msg.message || {})[0],
       }, '[BAILEYS] === RAW MESSAGE DEBUG ===');
+
+      // Extra debug for @lid JIDs to understand available fields
+      if (jid && jid.endsWith('@lid')) {
+        logger.info({
+          jid,
+          pushName: msg.pushName,
+          'key.participant': msg.key.participant,
+          msgKeys: Object.keys(msg),
+          msgMessageKeys: Object.keys(msg.message || {}),
+          lidMapSize: lidPhoneMap.size,
+          lidResolved: lidPhoneMap.get(jid) || null,
+        }, '[BAILEYS] @lid message fields');
+      }
 
       if (!isSupportedIncomingMessage(msg)) {
         logger.debug({ jid }, '[BAILEYS] Message type not supported, skipping');
