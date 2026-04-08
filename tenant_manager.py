@@ -74,6 +74,16 @@ class TenantManager:
                         config JSONB
                     )
                 """)
+                # Add whatsapp_lid column if it doesn't exist yet (safe migration)
+                cur.execute("""
+                    ALTER TABLE public.tenants
+                    ADD COLUMN IF NOT EXISTS whatsapp_lid TEXT
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_tenants_whatsapp_lid
+                    ON public.tenants(whatsapp_lid)
+                    WHERE whatsapp_lid IS NOT NULL
+                """)
             conn.commit()
             self._migrate_json_to_pg(conn)
         finally:
@@ -166,6 +176,46 @@ class TenantManager:
             with open(self.registry_path, "w", encoding="utf-8") as f:
                 json.dump(self.registry, f, indent=2, ensure_ascii=False)
             self.registry = self._load_registry()
+
+    def get_tenant_by_lid(self, lid: str) -> dict | None:
+        """Return tenant config for the given WhatsApp LID, or None."""
+        if not USE_POSTGRES or not lid:
+            return None
+        conn = self._get_pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT phone_number, business_name, created_at, config FROM public.tenants WHERE whatsapp_lid = %s",
+                    (lid,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                cfg = row.get("config") or {}
+                cfg["phone_number"] = row["phone_number"]
+                cfg["business_name"] = row["business_name"]
+                cfg["created_at"] = row["created_at"]
+                return cfg
+        finally:
+            conn.close()
+
+    def set_tenant_lid(self, phone: str, lid: str) -> bool:
+        """Associate a WhatsApp LID with a tenant. Returns True on success."""
+        normalized = self.normalize_phone_number(phone)
+        if not USE_POSTGRES or not normalized or not lid:
+            return False
+        conn = self._get_pg_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE public.tenants SET whatsapp_lid = %s WHERE phone_number = %s",
+                    (lid, normalized),
+                )
+                updated = cur.rowcount > 0
+            conn.commit()
+            return updated
+        finally:
+            conn.close()
 
     def tenant_exists(self, phone_number: str) -> bool:
         """

@@ -33,6 +33,34 @@ async def list_tenants(
         )
 
 
+@router.get("/by-lid/{lid}", response_model=TenantResponse)
+async def get_tenant_by_lid(lid: str):
+    """Find a tenant by their WhatsApp linked-identity (LID)."""
+    try:
+        return tenants_service.get_tenant_by_lid(lid)
+    except TenantNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Failed to fetch tenant by LID %s", lid)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch tenant by LID")
+
+
+@router.post("/{phone}/whatsapp-lid", response_model=SuccessResponse)
+async def set_whatsapp_lid(phone: str, body: dict):
+    """Associate a WhatsApp LID with an existing tenant."""
+    lid = body.get("lid", "").strip()
+    if not lid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="lid is required")
+    try:
+        tenants_service.set_tenant_lid(phone, lid)
+        return SuccessResponse(status="ok", message="LID linked successfully", data={"phone": phone, "lid": lid})
+    except TenantNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Failed to set LID for tenant %s", phone)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to set LID")
+
+
 @router.get("/{phone}", response_model=TenantResponse)
 async def get_tenant(phone: str):
     """Get tenant details by phone number."""

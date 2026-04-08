@@ -28,16 +28,13 @@ logger.info({ AUTO_CREATE_TENANT, BAILEYS_FALLBACK_VERSION }, '[BAILEYS] Connect
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
 let latestQR = null; // latest QR string from Baileys
 
-// Maps @lid JIDs to real phone numbers (persists across reconnects).
-// Pre-seeded from BAILEYS_LID_MAP env var (format: "lid1=+phone1,lid2=+phone2").
+// Maps @lid JIDs to real phone numbers. Populated from the backend DB
+// (tenants.whatsapp_lid) and from the self-identification flow.
 const lidPhoneMap = new Map();
-(process.env.BAILEYS_LID_MAP || '').split(',').forEach((pair) => {
-  const [lid, phone] = pair.split('=');
-  if (lid && phone) {
-    lidPhoneMap.set(`${lid.trim()}@lid`, phone.trim());
-    logger.info({ lid: `${lid.trim()}@lid`, phone: phone.trim() }, '[BAILEYS] LID→phone pre-seeded from env');
-  }
-});
+
+// Tracks JIDs that are mid-identification: waiting for the user to reply
+// with their phone number.  value = true (simple flag).
+const pendingIdentification = new Set();
 
 const healthServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
@@ -140,18 +137,54 @@ function phoneFromJid(jid) {
   return `+${digits}`;
 }
 
-// Resolve a JID (including @lid privacy JIDs) to a real phone number.
-// @lid JIDs are WhatsApp linked-identity identifiers that don't contain
-// the real phone — we resolve them via the contacts cache built from
-// contacts.upsert / contacts.update events.
+// Resolve a JID to a real phone number.
+// For @lid JIDs: checks the in-memory cache (populated from the backend DB).
+// Returns '' if the LID isn't mapped yet (triggers identification flow).
 function resolvePhone(jid) {
   if (!jid) return '';
-  if (jid.endsWith('@lid')) {
-    const phone = lidPhoneMap.get(jid);
-    if (!phone) logger.warn({ jid }, '[BAILEYS] Cannot resolve @lid JID to phone — contact not yet synced');
-    return phone || '';
-  }
+  if (jid.endsWith('@lid')) return lidPhoneMap.get(jid) || '';
   return phoneFromJid(jid);
+}
+
+// Query the backend for the phone number associated with a given LID.
+// Caches the result in lidPhoneMap on success.
+async function lookupLidInBackend(lid) {
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/tenants/by-lid/${encodeURIComponent(lid)}`);
+    if (!resp.ok) return null;
+    const tenant = await resp.json();
+    const phone = tenant.phone_number;
+    if (phone) {
+      lidPhoneMap.set(`${lid}@lid`, phone);
+      logger.info({ lid, phone }, '[BAILEYS] LID resolved from backend DB');
+    }
+    return phone || null;
+  } catch (err) {
+    logger.warn({ lid, err: err.message }, '[BAILEYS] LID backend lookup failed');
+    return null;
+  }
+}
+
+// Store a LID→phone mapping in the backend and in the local cache.
+async function saveLidMapping(jid, phone) {
+  const lid = jid.split('@')[0];
+  try {
+    const resp = await fetch(`${BACKEND_URL}/api/tenants/${encodeURIComponent(phone)}/whatsapp-lid`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lid }),
+    });
+    if (resp.ok) {
+      lidPhoneMap.set(jid, phone);
+      logger.info({ jid, phone }, '[BAILEYS] LID→phone saved to backend');
+      return true;
+    }
+    logger.warn({ jid, phone, status: resp.status }, '[BAILEYS] Backend rejected LID save');
+    return false;
+  } catch (err) {
+    logger.warn({ jid, err: err.message }, '[BAILEYS] Failed to save LID mapping');
+    return false;
+  }
 }
 
 function extractText(messageContent = {}) {
@@ -313,36 +346,6 @@ async function startWhatsApp() {
   sock.ev.on('contacts.upsert', indexContacts);
   sock.ev.on('contacts.update', indexContacts);
 
-  // Build LID map by querying all tenant phones via sock.onWhatsApp.
-  // WhatsApp returns the LID for each phone, which lets us reverse-map
-  // incoming @lid JIDs to the real tenant phone.
-  async function buildLidMapFromTenants() {
-    try {
-      const resp = await fetch(`${BACKEND_URL}/api/tenants?limit=500`);
-      if (!resp.ok) return;
-      const tenants = await resp.json();
-      const phones = tenants
-        .map((t) => t.phone_number)
-        .filter(Boolean);
-      if (!phones.length) return;
-
-      logger.info({ count: phones.length }, '[BAILEYS] Resolving LIDs for tenant phones');
-      const results = await sock.onWhatsApp(...phones);
-      logger.info({ results }, '[BAILEYS] onWhatsApp raw results');
-      for (const r of results) {
-        if (r.exists && r.jid && r.lid) {
-          const phone = phoneFromJid(r.jid);
-          if (phone) {
-            lidPhoneMap.set(r.lid, phone);
-            logger.info({ lid: r.lid, phone }, '[BAILEYS] LID→phone mapped via onWhatsApp');
-          }
-        }
-      }
-      logger.info({ mapSize: lidPhoneMap.size }, '[BAILEYS] LID map built');
-    } catch (err) {
-      logger.warn({ err: err.message }, '[BAILEYS] Failed to build LID map from tenants');
-    }
-  }
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -361,8 +364,6 @@ async function startWhatsApp() {
         const userPhone = sock.user.id ? sock.user.id.split(':')[0] : 'unknown';
         logger.info({ boundToPhone: `+${userPhone}`, user: sock.user }, '[BAILEYS] Session bound');
       }
-      // Build LID→phone map shortly after connect so contacts have had time to sync
-      setTimeout(() => buildLidMapFromTenants().catch(() => {}), 5000);
       return;
     }
 
@@ -423,19 +424,66 @@ async function startWhatsApp() {
         text: text ? text.substring(0, 50) : 'N/A',
       }, '[BAILEYS] Incoming message details');
 
-      if (!phone || !text) {
-        logger.warn({ jid, phone, hasText: !!text }, '[BAILEYS] Skipping: missing phone or text');
+      if (!text) {
+        logger.warn({ jid }, '[BAILEYS] Skipping: no text');
         continue;
       }
 
-      logger.info({ phone, jid, text }, '[BAILEYS] Incoming message');
+      // ── Identification flow for @lid JIDs ──────────────────────────────
+      if (jid.endsWith('@lid') && !phone) {
+        const lid = jid.split('@')[0];
+
+        // 1. Try to resolve from backend DB first (covers re-connects)
+        const backendPhone = await lookupLidInBackend(lid);
+        if (backendPhone) {
+          // Found — fall through with the resolved phone
+          lidPhoneMap.set(jid, backendPhone);
+        } else if (pendingIdentification.has(jid)) {
+          // 2. User is replying with their phone number
+          const candidate = text.replace(/[^\d+]/g, '');
+          const normalized = candidate.startsWith('+') ? candidate : `+${candidate}`;
+          try {
+            const resp = await fetch(`${BACKEND_URL}/api/tenants/${encodeURIComponent(normalized)}`);
+            if (resp.ok) {
+              const saved = await saveLidMapping(jid, normalized);
+              pendingIdentification.delete(jid);
+              if (saved) {
+                await sock.sendMessage(jid, { text: '✅ ¡Listo! Tu cuenta está vinculada. ¿En qué te puedo ayudar?' });
+              } else {
+                await sock.sendMessage(jid, { text: 'Hubo un error vinculando tu cuenta. Intentá de nuevo.' });
+              }
+            } else {
+              await sock.sendMessage(jid, { text: 'No encontré una cuenta con ese número. Verificá e intentá de nuevo (ej: +541153695627).' });
+            }
+          } catch (err) {
+            logger.error({ err, jid }, '[BAILEYS] Identification flow error');
+          }
+          continue;
+        } else {
+          // 3. First contact — ask for their phone number
+          pendingIdentification.add(jid);
+          logger.info({ jid }, '[BAILEYS] Unknown LID — starting identification flow');
+          await sock.sendMessage(jid, {
+            text: 'Hola! Para conectarte a tu cuenta necesito verificar tu identidad.\n\n¿Cuál es tu número de WhatsApp? (ej: *+541153695627*)',
+          });
+          continue;
+        }
+      }
+
+      const resolvedPhone = resolvePhone(jid);
+      if (!resolvedPhone) {
+        logger.warn({ jid }, '[BAILEYS] Could not resolve phone, skipping');
+        continue;
+      }
+
+      logger.info({ phone: resolvedPhone, jid, text }, '[BAILEYS] Incoming message');
 
       try {
         await sock.sendPresenceUpdate('composing', jid);
-        const responseText = await requestAgentReply(phone, text);
+        const responseText = await requestAgentReply(resolvedPhone, text);
         await sock.sendMessage(jid, { text: responseText });
       } catch (err) {
-        logger.error({ err, phone }, '[BAILEYS] Failed to process message');
+        logger.error({ err, phone: resolvedPhone }, '[BAILEYS] Failed to process message');
         await sock.sendMessage(jid, {
           text: 'Perdón, tuve un problema procesando tu mensaje. Intentá de nuevo en unos segundos.',
         });

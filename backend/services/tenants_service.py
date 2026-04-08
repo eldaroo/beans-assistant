@@ -84,6 +84,25 @@ class TenantsService:
             stock_total=stock_total.get("total", 0) if stock_total else 0,
         )
 
+    def get_tenant_by_lid(self, lid: str) -> TenantResponse:
+        cfg = self.repository.tenant_manager.get_tenant_by_lid(lid)
+        if not cfg:
+            raise TenantNotFoundError(f"No tenant found for LID {lid}")
+        phone = cfg["phone_number"]
+        return TenantResponse(
+            phone_number=phone,
+            business_name=cfg.get("business_name", "Unknown"),
+            currency=cfg.get("currency", "USD"),
+            language=cfg.get("language", "es"),
+            created_at=cfg.get("created_at", "Unknown"),
+            status=cfg.get("status", "active"),
+        )
+
+    def set_tenant_lid(self, phone: str, lid: str):
+        if not self.repository.tenant_exists(phone):
+            raise TenantNotFoundError(f"Tenant {phone} not found")
+        self.repository.tenant_manager.set_tenant_lid(phone, lid)
+
     def delete_tenant(self, phone: str):
         if not self.repository.tenant_exists(phone):
             raise TenantNotFoundError(f"Tenant {phone} not found")
