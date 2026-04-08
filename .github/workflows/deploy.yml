@@ -86,4 +86,6 @@ jobs:
           nomad_token:  ${{ secrets.NOMAD_TOKEN }}
           nomad_addr:   ${{ vars.NOMAD_ADDR }}
           ghcr_token:   ${{ secrets.GHCR_READ_TOKEN }}
+          project_secrets: |
+            BAILEYS_SESSION_DIR=/app/.baileys_auth
           deploy_meta: ${{ steps.meta.outputs.value }}
