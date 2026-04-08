@@ -28,6 +28,9 @@ logger.info({ AUTO_CREATE_TENANT, BAILEYS_FALLBACK_VERSION }, '[BAILEYS] Connect
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
 let latestQR = null; // latest QR string from Baileys
 
+// Maps @lid JIDs to real phone numbers (persists across reconnects)
+const lidPhoneMap = new Map();
+
 const healthServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     // Always return 200 — the server is running. WhatsApp status is in the body.
@@ -127,6 +130,20 @@ function phoneFromJid(jid) {
   const digits = base.replace(/\D/g, '');
   if (!digits) return '';
   return `+${digits}`;
+}
+
+// Resolve a JID (including @lid privacy JIDs) to a real phone number.
+// @lid JIDs are WhatsApp linked-identity identifiers that don't contain
+// the real phone — we resolve them via the contacts cache built from
+// contacts.upsert / contacts.update events.
+function resolvePhone(jid) {
+  if (!jid) return '';
+  if (jid.endsWith('@lid')) {
+    const phone = lidPhoneMap.get(jid);
+    if (!phone) logger.warn({ jid }, '[BAILEYS] Cannot resolve @lid JID to phone — contact not yet synced');
+    return phone || '';
+  }
+  return phoneFromJid(jid);
 }
 
 function extractText(messageContent = {}) {
@@ -270,6 +287,23 @@ async function startWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Build LID→phone map from contact sync events.
+  // WhatsApp sends contacts with both id (@s.whatsapp.net) and lid (@lid);
+  // we store the reverse mapping so @lid messages can be routed correctly.
+  function indexContacts(contactList) {
+    for (const c of contactList) {
+      if (c.lid && c.id && c.id.endsWith('@s.whatsapp.net')) {
+        const phone = phoneFromJid(c.id);
+        if (phone) {
+          lidPhoneMap.set(c.lid, phone);
+          logger.debug({ lid: c.lid, phone }, '[BAILEYS] LID→phone mapped');
+        }
+      }
+    }
+  }
+  sock.ev.on('contacts.upsert', indexContacts);
+  sock.ev.on('contacts.update', indexContacts);
+
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -337,7 +371,7 @@ async function startWhatsApp() {
         continue;
       }
 
-      const phone = phoneFromJid(jid);
+      const phone = resolvePhone(jid);
       const text = extractText(msg.message);
 
       logger.info({
