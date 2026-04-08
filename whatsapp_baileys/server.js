@@ -28,8 +28,16 @@ logger.info({ AUTO_CREATE_TENANT, BAILEYS_FALLBACK_VERSION }, '[BAILEYS] Connect
 let waStatus = 'starting'; // starting | connected | disconnected | logged_out
 let latestQR = null; // latest QR string from Baileys
 
-// Maps @lid JIDs to real phone numbers (persists across reconnects)
+// Maps @lid JIDs to real phone numbers (persists across reconnects).
+// Pre-seeded from BAILEYS_LID_MAP env var (format: "lid1=+phone1,lid2=+phone2").
 const lidPhoneMap = new Map();
+(process.env.BAILEYS_LID_MAP || '').split(',').forEach((pair) => {
+  const [lid, phone] = pair.split('=');
+  if (lid && phone) {
+    lidPhoneMap.set(`${lid.trim()}@lid`, phone.trim());
+    logger.info({ lid: `${lid.trim()}@lid`, phone: phone.trim() }, '[BAILEYS] LID→phone pre-seeded from env');
+  }
+});
 
 const healthServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
@@ -320,6 +328,7 @@ async function startWhatsApp() {
 
       logger.info({ count: phones.length }, '[BAILEYS] Resolving LIDs for tenant phones');
       const results = await sock.onWhatsApp(...phones);
+      logger.info({ results }, '[BAILEYS] onWhatsApp raw results');
       for (const r of results) {
         if (r.exists && r.jid && r.lid) {
           const phone = phoneFromJid(r.jid);
