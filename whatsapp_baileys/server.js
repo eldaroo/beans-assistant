@@ -291,24 +291,49 @@ async function startWhatsApp() {
   // WhatsApp sends contacts with both id (@s.whatsapp.net) and lid (@lid);
   // we store the reverse mapping so @lid messages can be routed correctly.
   function indexContacts(contactList) {
-    // Log first few contacts at INFO level to understand the structure
-    if (contactList.length > 0) {
-      logger.info({ sample: contactList.slice(0, 3) }, '[BAILEYS] contacts event sample');
-    }
     for (const c of contactList) {
-      // Case 1: id is @s.whatsapp.net and lid field has the @lid JID
+      // contacts.upsert gives {id: "@s.whatsapp.net", lid: "@lid"} when both are known
       if (c.lid && c.id && c.id.endsWith('@s.whatsapp.net')) {
         const phone = phoneFromJid(c.id);
         if (phone) {
           lidPhoneMap.set(c.lid, phone);
-          logger.info({ lid: c.lid, phone }, '[BAILEYS] LID→phone mapped (case 1)');
+          logger.info({ lid: c.lid, phone }, '[BAILEYS] LID→phone mapped via contacts');
         }
       }
-      // Case 2: id is @lid itself — can't get phone from here, skip
     }
   }
   sock.ev.on('contacts.upsert', indexContacts);
   sock.ev.on('contacts.update', indexContacts);
+
+  // Build LID map by querying all tenant phones via sock.onWhatsApp.
+  // WhatsApp returns the LID for each phone, which lets us reverse-map
+  // incoming @lid JIDs to the real tenant phone.
+  async function buildLidMapFromTenants() {
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/tenants?limit=500`);
+      if (!resp.ok) return;
+      const tenants = await resp.json();
+      const phones = tenants
+        .map((t) => t.phone_number)
+        .filter(Boolean);
+      if (!phones.length) return;
+
+      logger.info({ count: phones.length }, '[BAILEYS] Resolving LIDs for tenant phones');
+      const results = await sock.onWhatsApp(...phones);
+      for (const r of results) {
+        if (r.exists && r.jid && r.lid) {
+          const phone = phoneFromJid(r.jid);
+          if (phone) {
+            lidPhoneMap.set(r.lid, phone);
+            logger.info({ lid: r.lid, phone }, '[BAILEYS] LID→phone mapped via onWhatsApp');
+          }
+        }
+      }
+      logger.info({ mapSize: lidPhoneMap.size }, '[BAILEYS] LID map built');
+    } catch (err) {
+      logger.warn({ err: err.message }, '[BAILEYS] Failed to build LID map from tenants');
+    }
+  }
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -323,12 +348,12 @@ async function startWhatsApp() {
       waStatus = 'connected';
       latestQR = null;
       logger.info('[BAILEYS] WhatsApp connected');
-      
-      // Log the phone number this session is bound to
       if (sock.user) {
         const userPhone = sock.user.id ? sock.user.id.split(':')[0] : 'unknown';
-        logger.info({ boundToPhone: `+${userPhone}`, user: sock.user }, '[BAILEYS] ===== SESSION BOUND TO: +${userPhone} =====');
+        logger.info({ boundToPhone: `+${userPhone}`, user: sock.user }, '[BAILEYS] Session bound');
       }
+      // Build LID→phone map shortly after connect so contacts have had time to sync
+      setTimeout(() => buildLidMapFromTenants().catch(() => {}), 5000);
       return;
     }
 
@@ -372,18 +397,6 @@ async function startWhatsApp() {
         messageType: Object.keys(msg.message || {})[0],
       }, '[BAILEYS] === RAW MESSAGE DEBUG ===');
 
-      // Extra debug for @lid JIDs to understand available fields
-      if (jid && jid.endsWith('@lid')) {
-        logger.info({
-          jid,
-          pushName: msg.pushName,
-          'key.participant': msg.key.participant,
-          msgKeys: Object.keys(msg),
-          msgMessageKeys: Object.keys(msg.message || {}),
-          lidMapSize: lidPhoneMap.size,
-          lidResolved: lidPhoneMap.get(jid) || null,
-        }, '[BAILEYS] @lid message fields');
-      }
 
       if (!isSupportedIncomingMessage(msg)) {
         logger.debug({ jid }, '[BAILEYS] Message type not supported, skipping');
