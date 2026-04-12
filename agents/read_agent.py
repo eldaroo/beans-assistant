@@ -295,7 +295,7 @@ def generate_product_info_query(entities: dict) -> str:
         unit_price_cents / 100.0 as price_usd,
         unit_cost_cents / 100.0 as cost_usd
     FROM products
-    WHERE is_active = 1
+    WHERE is_active = TRUE
     ORDER BY name
     """
 

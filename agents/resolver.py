@@ -480,7 +480,7 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                 # print(f"DEBUG: Multi-word search failed, trying individual words with ranking")
 
                 # Get all products
-                all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = 1")
+                all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = TRUE")
 
                 # Score each product by how many words match
                 best_match = None
@@ -539,7 +539,7 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
 
     # If still not found, return original with error flag
     # Get all active products to show in error message
-    all_products = fetch_all("SELECT sku, name FROM products WHERE is_active = 1 ORDER BY name")
+    all_products = fetch_all("SELECT sku, name FROM products WHERE is_active = TRUE ORDER BY name")
     available_list = ", ".join([f"{p['name']}" for p in all_products])
 
     # Check if user input was too generic (no specific variant/color mentioned)
@@ -641,7 +641,7 @@ def fuzzy_match_with_scores(product_ref: str) -> list:
         }]
 
     # Get all active products for fuzzy matching
-    all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = 1")
+    all_products = fetch_all("SELECT id, sku, name FROM products WHERE is_active = TRUE")
 
     # Get variations with translations
     variations = translate_product_terms(product_ref)
