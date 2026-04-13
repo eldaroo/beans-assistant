@@ -68,22 +68,14 @@ async def home(request: Request):
     """Home page - list of all tenants."""
     from database_config import db as database, tenant_context
     from tenant_manager import phone_to_schema_name
-    import json
+    from backend.services.tenants_service import TenantsService
 
-    # Load tenant registry (if exists) for tenant metadata
-    registry_path = Path("configs/tenant_registry.json")
-    tenants_list = []
-
-    if registry_path.exists():
-        with open(registry_path, 'r', encoding='utf-8') as f:
-            registry = json.load(f)
-            tenants_list = [
-                {
-                    "phone_number": phone,
-                    **data
-                }
-                for phone, data in registry.items()
-            ]
+    tenants_service = TenantsService()
+    tenant_models = tenants_service.list_tenants(limit=500, offset=0)
+    tenants_list = [
+        tenant.model_dump() if hasattr(tenant, "model_dump") else tenant.dict()
+        for tenant in tenant_models
+    ]
 
     # Get stats for all tenants in ONE query (optimized)
     tenants_with_stats = []
@@ -211,34 +203,32 @@ async def home(request: Request):
 async def tenant_detail(request: Request, phone: str):
     """Tenant detail page - dashboard with tabs."""
     from database_config import db as database, tenant_context
-    import json
+    from backend.services.tenants_service import TenantsService, TenantNotFoundError
 
-    # Load tenant config from registry
-    registry_path = Path("configs/tenant_registry.json")
+    tenants_service = TenantsService()
+    try:
+        tenant = tenants_service.get_tenant(phone)
+    except TenantNotFoundError:
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "error": f"Tenant {phone} not found"
+            },
+            status_code=404
+        )
+
+    tenant_phone = tenant.phone_number
     tenant_config = {
-        "business_name": "Unknown",
-        "language": "es",
-        "currency": "USD"
+        "business_name": tenant.business_name,
+        "owner_name": getattr(tenant, "owner_name", None),
+        "language": tenant.language,
+        "currency": tenant.currency,
     }
-
-    if registry_path.exists():
-        with open(registry_path, 'r', encoding='utf-8') as f:
-            registry = json.load(f)
-            if phone in registry:
-                tenant_config["business_name"] = registry[phone].get("business_name", "Unknown")
-            else:
-                return templates.TemplateResponse(
-                    "error.html",
-                    {
-                        "request": request,
-                        "error": f"Tenant {phone} not found"
-                    },
-                    status_code=404
-                )
 
     # Get stats from PostgreSQL
     try:
-        with tenant_context(phone):
+        with tenant_context(tenant_phone):
             # Product count
             products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
 
@@ -279,7 +269,7 @@ async def tenant_detail(request: Request, phone: str):
         {
             "request": request,
             "tenant": {
-                "phone_number": phone,
+                "phone_number": tenant_phone,
                 **tenant_config
             },
             "stats": stats
