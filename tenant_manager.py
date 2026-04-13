@@ -170,6 +170,68 @@ class TenantManager:
 
         return phone if phone != "+" else ""
 
+    @classmethod
+    def phone_aliases(cls, phone_number: str) -> list[str]:
+        """
+        Build equivalent phone variants for lookup.
+
+        Handles Argentina WhatsApp mobile normalization differences:
+        - +54911... (mobile international)
+        - +5411...  (localized international without mobile 9)
+        """
+        normalized = cls.normalize_phone_number(phone_number)
+        if not normalized:
+            return []
+
+        aliases = [normalized]
+
+        # Argentina (+54): normalize both representations with/without mobile '9'
+        if normalized.startswith("+549") and len(normalized) > 4:
+            aliases.append(f"+54{normalized[4:]}")
+        elif normalized.startswith("+54") and len(normalized) > 3 and normalized[3] != "9":
+            aliases.append(f"+549{normalized[3:]}")
+
+        seen = set()
+        unique_aliases = []
+        for phone in aliases:
+            if phone and phone not in seen:
+                seen.add(phone)
+                unique_aliases.append(phone)
+        return unique_aliases
+
+    def resolve_tenant_phone(self, phone_number: str) -> Optional[str]:
+        """
+        Resolve an input phone into the registered tenant phone.
+
+        Returns:
+            Registered canonical phone if found, otherwise None.
+        """
+        aliases = self.phone_aliases(phone_number)
+        if not aliases:
+            return None
+
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    for candidate in aliases:
+                        cur.execute(
+                            "SELECT phone_number FROM public.tenants WHERE phone_number = %s",
+                            (candidate,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            return row["phone_number"]
+            finally:
+                conn.close()
+            return None
+
+        registry = self._load_registry()
+        for candidate in aliases:
+            if candidate in registry:
+                return candidate
+        return None
+
     def _save_registry(self):
         """Persist registry to disk (JSON mode only; PG writes are done inline)."""
         if not USE_POSTGRES:
@@ -201,15 +263,15 @@ class TenantManager:
 
     def set_tenant_lid(self, phone: str, lid: str) -> bool:
         """Associate a WhatsApp LID with a tenant. Returns True on success."""
-        normalized = self.normalize_phone_number(phone)
-        if not USE_POSTGRES or not normalized or not lid:
+        resolved_phone = self.resolve_tenant_phone(phone)
+        if not USE_POSTGRES or not resolved_phone or not lid:
             return False
         conn = self._get_pg_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE public.tenants SET whatsapp_lid = %s WHERE phone_number = %s",
-                    (lid, normalized),
+                    (lid, resolved_phone),
                 )
                 updated = cur.rowcount > 0
             conn.commit()
@@ -227,26 +289,12 @@ class TenantManager:
         Returns:
             True if tenant exists
         """
-        normalized_phone = self.normalize_phone_number(phone_number)
-        if not normalized_phone:
-            return False
-
-        if USE_POSTGRES:
-            conn = self._get_pg_conn()
-            try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT 1 FROM public.tenants WHERE phone_number = %s", (normalized_phone,)
-                    )
-                    return cur.fetchone() is not None
-            finally:
-                conn.close()
-
-        return normalized_phone in self._load_registry()
+        return self.resolve_tenant_phone(phone_number) is not None
 
     def get_tenant_path(self, phone_number: str) -> Path:
         """Get the directory path for a tenant."""
-        normalized_phone = self.normalize_phone_number(phone_number)
+        resolved_phone = self.resolve_tenant_phone(phone_number)
+        normalized_phone = resolved_phone or self.normalize_phone_number(phone_number)
         return self.base_path / normalized_phone
 
     def get_tenant_db_path(self, phone_number: str) -> str:
@@ -263,8 +311,8 @@ class TenantManager:
         Returns:
             Config dict or None if not found
         """
-        normalized_phone = self.normalize_phone_number(phone_number)
-        if not self.tenant_exists(normalized_phone):
+        resolved_phone = self.resolve_tenant_phone(phone_number)
+        if not resolved_phone:
             return None
 
         if USE_POSTGRES:
@@ -273,7 +321,7 @@ class TenantManager:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT phone_number, business_name, created_at, config FROM public.tenants WHERE phone_number = %s",
-                        (normalized_phone,),
+                        (resolved_phone,),
                     )
                     row = cur.fetchone()
                 if row is None:
@@ -287,7 +335,7 @@ class TenantManager:
             finally:
                 conn.close()
 
-        config_path = self.get_tenant_path(normalized_phone) / "config.json"
+        config_path = self.get_tenant_path(resolved_phone) / "config.json"
         if config_path.exists():
             with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -534,11 +582,11 @@ GROUP BY p.id, p.sku, p.name;
 
     def get_tenant_stats(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """Get statistics for a tenant."""
-        normalized_phone = self.normalize_phone_number(phone_number)
-        if not self.tenant_exists(normalized_phone):
+        resolved_phone = self.resolve_tenant_phone(phone_number)
+        if not resolved_phone:
             return None
 
-        db_path = self.get_tenant_db_path(normalized_phone)
+        db_path = self.get_tenant_db_path(resolved_phone)
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
 

@@ -136,15 +136,18 @@ class ChatService:
         
         tenant_manager = TenantManager()
         normalized_phone = tenant_manager.normalize_phone_number(phone)
-        logger.info(f"chat_with_tenant: phone={phone}, normalized={normalized_phone}")
-        
-        if not tenant_manager.tenant_exists(normalized_phone):
+        resolved_phone = tenant_manager.resolve_tenant_phone(normalized_phone)
+        logger.info(
+            f"chat_with_tenant: phone={phone}, normalized={normalized_phone}, resolved={resolved_phone}"
+        )
+
+        if not resolved_phone:
             raise ChatTenantNotFoundError(f"Tenant {normalized_phone} not found")
 
-        logger.info(f"chat_with_tenant: setting tenant context for phone={normalized_phone}")
-        with tenant_context(normalized_phone):
+        logger.info(f"chat_with_tenant: setting tenant context for phone={resolved_phone}")
+        with tenant_context(resolved_phone):
             logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
-            result = cls._invoke_graph(phone=normalized_phone, message=message)
+            result = cls._invoke_graph(phone=resolved_phone, message=message)
             logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")
 
             bot_response = ""
@@ -174,7 +177,7 @@ class ChatService:
                 "operation_type": result.get("operation_type"),
                 "confidence": result.get("confidence"),
             }
-            logger.info(f"chat_with_tenant: appending to history for phone={normalized_phone}")
-            cls._append_history(phone=normalized_phone, user_message=message, bot_response=bot_response)
+            logger.info(f"chat_with_tenant: appending to history for phone={resolved_phone}")
+            cls._append_history(phone=resolved_phone, user_message=message, bot_response=bot_response)
             logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
             return bot_response, metadata

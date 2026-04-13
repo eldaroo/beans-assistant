@@ -77,12 +77,15 @@ def tenant_context(phone_number: str, must_exist: bool = True):
     """
     tenant_manager = TenantManager()
     normalized_phone = tenant_manager.normalize_phone_number(phone_number)
+    resolved_phone = tenant_manager.resolve_tenant_phone(normalized_phone) if normalized_phone else None
 
-    if must_exist and not tenant_manager.tenant_exists(normalized_phone):
+    if must_exist and not resolved_phone:
         raise TenantNotFoundError(f"Tenant {normalized_phone} not found")
 
+    tenant_phone = resolved_phone or normalized_phone
+
     if USE_POSTGRES:
-        schema_name = phone_to_schema_name(phone_number)
+        schema_name = phone_to_schema_name(tenant_phone)
         if not hasattr(db, "set_tenant_schema") or not hasattr(db, "reset_tenant_schema"):
             raise TenantContextError("PostgreSQL module does not support tenant schema context")
 
@@ -92,7 +95,7 @@ def tenant_context(phone_number: str, must_exist: bool = True):
         finally:
             db.reset_tenant_schema(token)
     else:
-        db_path = tenant_manager.get_tenant_db_path(phone_number)
+        db_path = tenant_manager.get_tenant_db_path(tenant_phone)
         if not hasattr(db, "set_tenant_db_path") or not hasattr(db, "reset_tenant_db_path"):
             raise TenantContextError("SQLite module does not support tenant DB path context")
 

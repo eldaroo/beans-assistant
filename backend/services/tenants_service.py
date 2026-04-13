@@ -37,18 +37,19 @@ class TenantsService:
         ]
 
     def get_tenant(self, phone: str) -> TenantResponse:
-        if not self.repository.tenant_exists(phone):
+        resolved_phone = self.repository.tenant_manager.resolve_tenant_phone(phone)
+        if not resolved_phone:
             raise TenantNotFoundError(f"Tenant {phone} not found")
 
-        config = self.repository.get_tenant_config(phone)
+        config = self.repository.get_tenant_config(resolved_phone)
         if not config:
             raise TenantNotFoundError(f"Tenant {phone} config not found")
 
         tenants = self.repository.list_tenants()
-        tenant_data = next((t for t in tenants if t["phone_number"] == phone), None)
+        tenant_data = next((t for t in tenants if t["phone_number"] == resolved_phone), None)
 
         return TenantResponse(
-            phone_number=phone,
+            phone_number=resolved_phone,
             business_name=config.get("business_name", "Unknown"),
             currency=config.get("currency", "USD"),
             language=config.get("language", "es"),
@@ -99,15 +100,17 @@ class TenantsService:
         )
 
     def set_tenant_lid(self, phone: str, lid: str):
-        if not self.repository.tenant_exists(phone):
+        resolved_phone = self.repository.tenant_manager.resolve_tenant_phone(phone)
+        if not resolved_phone:
             raise TenantNotFoundError(f"Tenant {phone} not found")
-        self.repository.tenant_manager.set_tenant_lid(phone, lid)
+        self.repository.tenant_manager.set_tenant_lid(resolved_phone, lid)
 
     def delete_tenant(self, phone: str):
-        if not self.repository.tenant_exists(phone):
+        resolved_phone = self.repository.tenant_manager.resolve_tenant_phone(phone)
+        if not resolved_phone:
             raise TenantNotFoundError(f"Tenant {phone} not found")
 
-        tenant_path = self.repository.get_tenant_path(phone)
-        self.repository.drop_schema_if_needed(phone)
-        self.repository.remove_tenant_from_registry(phone)
+        tenant_path = self.repository.get_tenant_path(resolved_phone)
+        self.repository.drop_schema_if_needed(resolved_phone)
+        self.repository.remove_tenant_from_registry(resolved_phone)
         self.repository.delete_tenant_directory(tenant_path)
