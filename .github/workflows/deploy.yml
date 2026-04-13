@@ -53,8 +53,87 @@ jobs:
             AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
           deploy_meta: ${{ steps.meta.outputs.value }}
 
+  deploy-backend-tenants:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout infrastructure
+        uses: actions/checkout@v4
+        with:
+          repository: neozero86/infrastructure
+          path: _infra
+          token: ${{ secrets.INFRA_READ_TOKEN }}
+
+      - name: Create tenants var file
+        run: |
+          cat > _infra/jobs/vars/beans-assistant-tenants.hcl <<'EOF'
+          job_name = "beans-assistant-tenants"
+          domain   = "tenants.mdlautomations.duckdns.org"
+          app_port = 8000
+
+          image         = "$IMAGE_NAME"
+          auth_username = "$AUTH_USERNAME"
+          auth_password = "$AUTH_PASSWORD"
+
+          count = 1
+
+          scaling_enabled = false
+          canary          = 0
+          cpu             = 300
+          memory          = 192
+          health_check_path = "/health"
+          sticky_session  = false
+
+          env_vars = {
+            GOOGLE_API_KEY    = "$GOOGLE_API_KEY"
+            POSTGRES_PASSWORD = "$POSTGRES_PASSWORD"
+            BREVO_API_KEY     = "$BREVO_API_KEY"
+
+            GEMINI_MODEL       = "gemini-2.5-flash"
+            GEMINI_TEMPERATURE = "0.2"
+            USE_POSTGRES       = "true"
+            POSTGRES_HOST      = "postgres.service.consul"
+            POSTGRES_PORT      = "5432"
+            POSTGRES_DB        = "beansco_main"
+            POSTGRES_USER      = "beansco"
+            POSTGRES_SCHEMA    = "public"
+            REDIS_ENABLED      = "false"
+            WHATSAPP_URL       = "http://beans-assistant-whatsapp.service.consul:3000"
+            BREVO_TEMPLATE_EN  = "0"
+            BREVO_TEMPLATE_ES  = "0"
+          }
+          EOF
+
+      - name: Collect deploy metadata
+        id: meta
+        run: |
+          echo "value<<__META_EOF__" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "deployed_by=${{ github.actor }}" >> "$GITHUB_OUTPUT"
+          echo "__META_EOF__" >> "$GITHUB_OUTPUT"
+
+      - uses: ./_infra/.github/actions/nomad-deploy
+        with:
+          project_name:  beans-assistant-tenants
+          dockerfile:    Dockerfile
+          nomad_token:   ${{ secrets.NOMAD_TOKEN }}
+          nomad_addr:    ${{ vars.NOMAD_ADDR }}
+          ghcr_token:    ${{ secrets.GHCR_READ_TOKEN }}
+          project_secrets: |
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
+            AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
+          deploy_meta: ${{ steps.meta.outputs.value }}
+
   deploy-whatsapp:
-    needs: deploy-backend
+    needs: [deploy-backend, deploy-backend-tenants]
     runs-on: ubuntu-latest
     permissions:
       contents: read
