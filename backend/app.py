@@ -66,8 +66,6 @@ app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Home page - list of all tenants."""
-    from database_config import db as database, tenant_context
-    from tenant_manager import phone_to_schema_name
     from backend.services.tenants_service import TenantsService
 
     tenants_service = TenantsService()
@@ -77,118 +75,30 @@ async def home(request: Request):
         for tenant in tenant_models
     ]
 
-    # Get stats for all tenants in ONE query (optimized)
     tenants_with_stats = []
+    for tenant in tenants_list:
+        phone = tenant["phone_number"]
 
-    # Check if we're using PostgreSQL with the optimized function
-    use_postgres = os.getenv("USE_POSTGRES", "false").lower() == "true"
-
-    if use_postgres:
-        # PostgreSQL: Use optimized get_all_tenant_stats() function
         try:
-            # Query all tenant stats in a single call
-            all_stats = database.fetch_all("SELECT * FROM get_all_tenant_stats()")
-
-            # Create a mapping of schema_name to stats for quick lookup
-            stats_map = {}
-            for row in all_stats:
-                schema_name = row["schema_name"]
-                if schema_name == "public":
-                    continue
-
-                stats_map[schema_name] = {
-                    "products_count": int(row["products_count"]) if row["products_count"] else 0,
-                    "sales_count": int(row["sales_count"]) if row["sales_count"] else 0,
-                    "revenue_usd": float(row["revenue_cents"]) / 100.0 if row["revenue_cents"] else 0.0,
-                    "profit_usd": float(row["profit_usd"]) if row["profit_usd"] else 0.0
-                }
-
-            # Merge tenant info with stats
-            for tenant in tenants_list:
-                phone = tenant["phone_number"]
-                schema_name = phone_to_schema_name(phone)
-                stats = stats_map.get(schema_name, {
-                    "products_count": 0,
-                    "sales_count": 0,
-                    "revenue_usd": 0.0,
-                    "profit_usd": 0.0
-                })
-
-                # Backward-compatible keys for any old template references
-                stats["products"] = stats["products_count"]
-                stats["sales"] = stats["sales_count"]
-
-                # Cache the stats for individual tenant queries
-                cache.cache_stats(phone, stats)
-
-                tenants_with_stats.append({
-                    **tenant,
-                    "stats": stats
-                })
-
+            stats_model = tenants_service.get_tenant_stats(phone)
+            stats = stats_model.model_dump() if hasattr(stats_model, "model_dump") else stats_model.dict()
+            stats["products"] = stats["products_count"]
+            stats["sales"] = stats["sales_count"]
         except Exception as e:
-            print(f"Error getting all tenant stats: {e}")
-            import traceback
-            traceback.print_exc()
-            # Fallback: return tenants with empty stats
-            for tenant in tenants_list:
-                tenants_with_stats.append({
-                    **tenant,
-                    "stats": {
-                        "products_count": 0,
-                        "sales_count": 0,
-                        "products": 0,
-                        "sales": 0,
-                        "revenue_usd": 0.0,
-                        "profit_usd": 0.0
-                    }
-                })
-    else:
-        # SQLite: Resolve stats per-tenant DB file
-        for tenant in tenants_list:
-            phone = tenant["phone_number"]
+            print(f"Error getting stats for {phone}: {e}")
+            stats = {
+                "products_count": 0,
+                "sales_count": 0,
+                "products": 0,
+                "sales": 0,
+                "revenue_usd": 0.0,
+                "profit_usd": 0.0
+            }
 
-            try:
-                # Try to get from cache
-                stats = cache.get_cached_stats(phone)
-                if stats is None:
-                    # Cache miss - query tenant database
-                    with tenant_context(phone):
-                        products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
-                        sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
-                        revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
-                        revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
-                        profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
-                        profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
-
-                        stats = {
-                            "products_count": products_count["count"] if products_count else 0,
-                            "sales_count": sales_count["count"] if sales_count else 0,
-                            "revenue_usd": revenue_cents / 100.0,
-                            "profit_usd": profit_usd
-                        }
-
-                        # Backward-compatible keys
-                        stats["products"] = stats["products_count"]
-                        stats["sales"] = stats["sales_count"]
-
-                    # Cache the stats
-                    cache.cache_stats(phone, stats)
-            except Exception as e:
-                print(f"Error getting stats for {phone}: {e}")
-                stats = {
-                    "products_count": 0,
-                    "sales_count": 0,
-                    "products": 0,
-                    "sales": 0,
-                    "revenue_usd": 0.0,
-                    "profit_usd": 0.0
-                }
-
-            tenants_with_stats.append({
-                **tenant,
-                "stats": stats
-            })
+        tenants_with_stats.append({
+            **tenant,
+            "stats": stats
+        })
 
     return templates.TemplateResponse(
         "tenants.html",
