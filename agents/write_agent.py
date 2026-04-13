@@ -14,6 +14,7 @@ from database_config import (
     register_product,
     add_stock,
     register_expense,
+    deactivate_product,
     cancel_sale,
     cancel_expense,
     cancel_stock_movement,
@@ -360,9 +361,6 @@ def create_write_agent():
 
                 if product_id is None:
                     raise ValueError("No se pudo identificar el producto a desactivar")
-
-                # Import the deactivate function
-                from database import deactivate_product
 
                 result = deactivate_product(product_id)
 

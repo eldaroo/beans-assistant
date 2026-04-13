@@ -381,7 +381,6 @@ def format_expense_result(rows) -> str:
     """Format expense query results."""
     if not rows:
         # Check if this might be a filtering issue vs actually no expenses
-        from database import fetch_one
         total_expenses = fetch_one("SELECT COUNT(*) as count FROM expenses")
         if total_expenses and total_expenses['count'] > 0:
             return (

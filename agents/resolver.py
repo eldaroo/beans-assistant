@@ -421,7 +421,7 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
     # Query database for matching product
     # Try exact SKU match first
     row = fetch_one(
-        "SELECT id, sku, name FROM products WHERE sku = ?",
+        "SELECT id, sku, name FROM products WHERE sku = %s",
         (product_ref,)
     )
 
@@ -455,7 +455,7 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                     params = []
 
                     for word in word_combo:
-                        conditions.append("REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o') LIKE ?")
+                        conditions.append("REPLACE(REPLACE(REPLACE(REPLACE(LOWER(name), 'á', 'a'), 'é', 'e'), 'í', 'i'), 'ó', 'o') LIKE %s")
                         params.append(f"%{normalize_text(word)}%")
 
                     if conditions:
@@ -628,7 +628,7 @@ def fuzzy_match_with_scores(product_ref: str) -> list:
     """
     # Try exact SKU match first
     row = fetch_one(
-        "SELECT id, sku, name FROM products WHERE sku = ?",
+        "SELECT id, sku, name FROM products WHERE sku = %s",
         (product_ref,)
     )
 
@@ -878,8 +878,7 @@ def generate_sku_from_name(name: str) -> str:
         base_sku = f"BC-{product_type}-STD"
 
     # Check if SKU already exists and make it unique if needed
-    from database import fetch_one
-    existing = fetch_one("SELECT sku FROM products WHERE sku = ?", (base_sku,))
+    existing = fetch_one("SELECT sku FROM products WHERE sku = %s", (base_sku,))
 
     if existing:
         # SKU exists, append a number to make it unique
@@ -887,7 +886,7 @@ def generate_sku_from_name(name: str) -> str:
         counter = 2
         while True:
             new_sku = f"{base_sku}-{counter}"
-            existing = fetch_one("SELECT sku FROM products WHERE sku = ?", (new_sku,))
+            existing = fetch_one("SELECT sku FROM products WHERE sku = %s", (new_sku,))
             if not existing:
                 print(f"[SKU Generation] Generated unique SKU: {new_sku}")
                 return new_sku
