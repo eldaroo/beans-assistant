@@ -24,11 +24,18 @@ class TenantsRepository:
     def get_tenant_config(self, phone: str) -> dict | None:
         return self.tenant_manager.get_tenant_config(phone)
 
-    def create_tenant(self, phone: str, business_name: str, currency: str, language: str):
+    def create_tenant(
+        self,
+        phone: str,
+        business_name: str,
+        currency: str,
+        language: str,
+        owner_name: str | None = None,
+    ):
         self.tenant_manager.create_tenant(
             phone_number=phone,
             business_name=business_name,
-            config={"currency": currency, "language": language},
+            config={"currency": currency, "language": language, "owner_name": owner_name},
         )
 
     def create_schema_if_needed(self, phone: str):

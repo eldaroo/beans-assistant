@@ -88,7 +88,7 @@ class ChatService:
         return str(message_obj)
 
     @classmethod
-    def _invoke_graph(cls, phone: str, message: str) -> dict:
+    def _invoke_graph(cls, phone: str, message: str, owner_name: str | None = None) -> dict:
         import logging
         logger = logging.getLogger(__name__)
         
@@ -106,7 +106,7 @@ class ChatService:
                 "phone": phone,
                 "sender": phone,
                 "normalized_entities": {},
-                "metadata": {},
+                "metadata": {"owner_name": owner_name} if owner_name else {},
             }
             logger.info(f"_invoke_graph: initial_state keys={list(initial_state.keys())}")
             
@@ -130,24 +130,42 @@ class ChatService:
         return bot_response, result.get("metadata", {})
 
     @classmethod
-    def chat_with_tenant(cls, phone: str, message: str) -> tuple[str, dict]:
+    def chat_with_tenant(
+        cls,
+        phone: str,
+        message: str,
+        sender_name: str | None = None,
+    ) -> tuple[str, dict]:
         import logging
         logger = logging.getLogger(__name__)
         
         tenant_manager = TenantManager()
         normalized_phone = tenant_manager.normalize_phone_number(phone)
         resolved_phone = tenant_manager.resolve_tenant_phone(normalized_phone)
+        clean_sender_name = tenant_manager.sanitize_owner_name(sender_name)
         logger.info(
-            f"chat_with_tenant: phone={phone}, normalized={normalized_phone}, resolved={resolved_phone}"
+            f"chat_with_tenant: phone={phone}, normalized={normalized_phone}, resolved={resolved_phone}, sender_name={clean_sender_name}"
         )
 
         if not resolved_phone:
             raise ChatTenantNotFoundError(f"Tenant {normalized_phone} not found")
 
+        if clean_sender_name:
+            tenant_manager.set_tenant_owner_name(resolved_phone, clean_sender_name)
+
+        tenant_config = tenant_manager.get_tenant_config(resolved_phone) or {}
+        owner_name = clean_sender_name or tenant_manager.sanitize_owner_name(
+            tenant_config.get("owner_name")
+        )
+        if not owner_name:
+            business_name = tenant_manager.sanitize_owner_name(tenant_config.get("business_name"))
+            if business_name and not business_name.lower().startswith("tenant +"):
+                owner_name = business_name
+
         logger.info(f"chat_with_tenant: setting tenant context for phone={resolved_phone}")
         with tenant_context(resolved_phone):
             logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
-            result = cls._invoke_graph(phone=resolved_phone, message=message)
+            result = cls._invoke_graph(phone=resolved_phone, message=message, owner_name=owner_name)
             logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")
 
             bot_response = ""

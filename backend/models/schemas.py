@@ -14,6 +14,7 @@ class TenantCreate(BaseModel):
     """Schema for creating a new tenant."""
     phone_number: str = Field(..., description="Phone number in international format (e.g., +5491153695627)")
     business_name: str = Field(..., description="Business name")
+    owner_name: Optional[str] = Field(default=None, description="Owner/person name associated with this phone")
     currency: str = Field(default="USD", description="Currency code (USD, AUD, etc.)")
     language: str = Field(default="es", description="Language code (es, en)")
 
@@ -22,6 +23,7 @@ class TenantResponse(BaseModel):
     """Schema for tenant response."""
     phone_number: str
     business_name: str
+    owner_name: Optional[str] = None
     currency: str
     language: str
     created_at: str

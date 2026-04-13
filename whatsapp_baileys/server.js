@@ -212,8 +212,8 @@ function isSupportedIncomingMessage(message) {
   return true;
 }
 
-async function createTenantIfNeeded(phone) {
-  logger.info({ phone, AUTO_CREATE_TENANT, BACKEND_URL }, '[BAILEYS] createTenantIfNeeded called');
+async function createTenantIfNeeded(phone, senderName = '') {
+  logger.info({ phone, senderName, AUTO_CREATE_TENANT, BACKEND_URL }, '[BAILEYS] createTenantIfNeeded called');
 
   if (!AUTO_CREATE_TENANT) {
     logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] AUTO_CREATE_TENANT disabled, cannot create tenant');
@@ -225,6 +225,7 @@ async function createTenantIfNeeded(phone) {
   const payload = {
     phone_number: phone,
     business_name: `Tenant ${phone}`,
+    owner_name: senderName || undefined,
     currency: DEFAULT_TENANT_CURRENCY,
     language: DEFAULT_TENANT_LANGUAGE,
   };
@@ -265,7 +266,7 @@ async function createTenantIfNeeded(phone) {
   }
 }
 
-async function requestAgentReply(phone, messageText) {
+async function requestAgentReply(phone, messageText, senderName = '') {
   const url = `${BACKEND_URL}/api/tenants/${encodeURIComponent(phone)}/chat`;
 
   logger.info({ phone, url, messageLength: messageText.length }, '[BAILEYS] Requesting agent reply');
@@ -273,7 +274,7 @@ async function requestAgentReply(phone, messageText) {
   let response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: messageText }),
+    body: JSON.stringify({ message: messageText, sender_name: senderName || undefined }),
     signal: AbortSignal.timeout(45000),
   });
 
@@ -281,7 +282,7 @@ async function requestAgentReply(phone, messageText) {
 
   if (response.status === 404 && AUTO_CREATE_TENANT) {
     logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] Got 404, attempting to create tenant');
-    const created = await createTenantIfNeeded(phone);
+    const created = await createTenantIfNeeded(phone, senderName);
     logger.info({ phone, created }, '[BAILEYS] createTenantIfNeeded result');
     if (created) {
       logger.info({ phone }, '[BAILEYS] Tenant created/exists, retrying chat');
@@ -289,7 +290,7 @@ async function requestAgentReply(phone, messageText) {
       response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageText }),
+        body: JSON.stringify({ message: messageText, sender_name: senderName || undefined }),
         signal: AbortSignal.timeout(45000),
       });
       logger.info({ phone, retryStatus: response.status }, '[BAILEYS] Retry response status');
@@ -480,7 +481,8 @@ async function startWhatsApp() {
 
       try {
         await sock.sendPresenceUpdate('composing', jid);
-        const responseText = await requestAgentReply(resolvedPhone, text);
+        const senderName = String(msg.pushName || '').trim();
+        const responseText = await requestAgentReply(resolvedPhone, text, senderName);
         await sock.sendMessage(jid, { text: responseText });
       } catch (err) {
         logger.error({ err, phone: resolvedPhone }, '[BAILEYS] Failed to process message');

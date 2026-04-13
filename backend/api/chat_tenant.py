@@ -20,6 +20,7 @@ class TenantChatMessage(BaseModel):
     """Chat message input for tenant-specific chat."""
 
     message: str
+    sender_name: str | None = None
 
     class Config:
         json_schema_extra = {
@@ -42,7 +43,11 @@ async def chat_with_tenant(phone: str, chat: TenantChatMessage):
     logger.info(f"chat_with_tenant endpoint: phone={phone}, message={chat.message[:50]}...")
     try:
         logger.info(f"chat_with_tenant endpoint: calling ChatService.chat_with_tenant")
-        response, metadata = ChatService.chat_with_tenant(phone=phone, message=chat.message)
+        response, metadata = ChatService.chat_with_tenant(
+            phone=phone,
+            message=chat.message,
+            sender_name=chat.sender_name,
+        )
         logger.info(f"chat_with_tenant endpoint: got response={response[:50]}...")
         return TenantChatResponse(response=response, metadata=metadata)
     except ChatTenantNotFoundError as exc:

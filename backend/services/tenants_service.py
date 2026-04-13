@@ -28,6 +28,7 @@ class TenantsService:
             TenantResponse(
                 phone_number=t["phone_number"],
                 business_name=t["business_name"],
+                owner_name=t.get("owner_name"),
                 currency=t.get("currency", "USD"),
                 language=t.get("language", "es"),
                 created_at=t["created_at"],
@@ -51,6 +52,7 @@ class TenantsService:
         return TenantResponse(
             phone_number=resolved_phone,
             business_name=config.get("business_name", "Unknown"),
+            owner_name=config.get("owner_name"),
             currency=config.get("currency", "USD"),
             language=config.get("language", "es"),
             created_at=tenant_data["created_at"] if tenant_data else "Unknown",
@@ -66,6 +68,7 @@ class TenantsService:
             business_name=payload.business_name,
             currency=payload.currency,
             language=payload.language,
+            owner_name=payload.owner_name,
         )
         self.repository.create_schema_if_needed(payload.phone_number)
 
@@ -93,6 +96,7 @@ class TenantsService:
         return TenantResponse(
             phone_number=phone,
             business_name=cfg.get("business_name", "Unknown"),
+            owner_name=cfg.get("owner_name"),
             currency=cfg.get("currency", "USD"),
             language=cfg.get("language", "es"),
             created_at=cfg.get("created_at", "Unknown"),

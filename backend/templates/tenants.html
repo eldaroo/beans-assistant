@@ -7,7 +7,7 @@
     class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8"
     x-data="{
         showCreateModal: false,
-        form: { phone_number: '', business_name: '', currency: 'USD', language: 'es' },
+        form: { phone_number: '', business_name: '', owner_name: '', currency: 'USD', language: 'es' },
         loading: false,
         error: '',
         async submit() {
@@ -81,6 +81,14 @@
                         x-model="form.business_name"
                         placeholder="My Business"
                         required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Owner name (optional)</label>
+                    <input
+                        type="text"
+                        x-model="form.owner_name"
+                        placeholder="Darío"
                         class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500">
                 </div>
                 <div class="grid grid-cols-2 gap-4">

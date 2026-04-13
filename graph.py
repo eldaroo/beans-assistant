@@ -126,24 +126,29 @@ def create_final_answer_node():
         # If greeting, respond friendly
         if state.get("intent") == "GREETING":
             import random
+            metadata = state.get("metadata") or {}
+            owner_name = str(metadata.get("owner_name") or "").strip()
+            greeting_prefix = f"Hola, {owner_name}! " if owner_name else "Hola! "
+            thanks_prefix = f"De nada, {owner_name}! " if owner_name else "De nada! "
+            farewell_prefix = f"Chau, {owner_name}! " if owner_name else "Chau! "
             greetings = [
-                "Hola! ¿En qué te puedo ayudar hoy?",
-                "Hola! Decime, ¿qué necesitás?",
-                "Hola! ¿Cómo te va? ¿Qué necesitás?",
-                "Hola! Estoy acá para ayudarte con tu negocio.",
-                "Hola! ¿Querés consultar o registrar algo?",
+                f"{greeting_prefix}¿En qué te puedo ayudar hoy?",
+                f"{greeting_prefix}Decime, ¿qué necesitás?",
+                f"{greeting_prefix}¿Cómo te va? ¿Qué necesitás?",
+                f"{greeting_prefix}Estoy acá para ayudarte con tu negocio.",
+                f"{greeting_prefix}¿Querés consultar o registrar algo?",
             ]
             farewells = [
-                "Chau! Que tengas un buen día.",
+                f"{farewell_prefix}Que tengas un buen día.",
                 "Hasta luego!",
                 "Nos vemos! Cualquier cosa avisame.",
-                "Chau! Acá estoy cuando necesites.",
+                f"{farewell_prefix}Acá estoy cuando necesites.",
             ]
             thanks = [
-                "De nada! Para eso estoy.",
+                f"{thanks_prefix}Para eso estoy.",
                 "Un placer ayudarte!",
                 "No hay problema! Acá estoy.",
-                "De nada! Cualquier cosa avisame.",
+                f"{thanks_prefix}Cualquier cosa avisame.",
             ]
 
             user_input_lower = state.get("user_input", "").lower()

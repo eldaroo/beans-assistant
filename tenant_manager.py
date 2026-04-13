@@ -239,6 +239,16 @@ class TenantManager:
                 json.dump(self.registry, f, indent=2, ensure_ascii=False)
             self.registry = self._load_registry()
 
+    @staticmethod
+    def sanitize_owner_name(owner_name: Optional[str]) -> str:
+        """Normalize and validate owner name strings."""
+        if not owner_name:
+            return ""
+        normalized = " ".join(str(owner_name).replace("\n", " ").replace("\r", " ").split())
+        if not normalized:
+            return ""
+        return normalized[:80]
+
     def get_tenant_by_lid(self, lid: str) -> dict | None:
         """Return tenant config for the given WhatsApp LID, or None."""
         if not USE_POSTGRES or not lid:
@@ -278,6 +288,50 @@ class TenantManager:
             return updated
         finally:
             conn.close()
+
+    def set_tenant_owner_name(self, phone: str, owner_name: Optional[str]) -> bool:
+        """Store owner/person name for a tenant phone."""
+        resolved_phone = self.resolve_tenant_phone(phone)
+        clean_name = self.sanitize_owner_name(owner_name)
+        if not resolved_phone or not clean_name:
+            return False
+
+        if USE_POSTGRES:
+            conn = self._get_pg_conn()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE public.tenants
+                        SET config = jsonb_set(
+                            COALESCE(config, '{}'::jsonb),
+                            '{owner_name}',
+                            to_jsonb(%s::text),
+                            true
+                        )
+                        WHERE phone_number = %s
+                        """,
+                        (clean_name, resolved_phone),
+                    )
+                    updated = cur.rowcount > 0
+                conn.commit()
+                return updated
+            finally:
+                conn.close()
+
+        config_path = self.get_tenant_path(resolved_phone) / "config.json"
+        if not config_path.exists():
+            return False
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        config["owner_name"] = clean_name
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+
+        return True
 
     def tenant_exists(self, phone_number: str) -> bool:
         """
@@ -367,8 +421,11 @@ class TenantManager:
 
         if config is None:
             config = self._get_default_config()
+        else:
+            config = dict(config)
 
         config["business_name"] = business_name
+        config["owner_name"] = self.sanitize_owner_name(config.get("owner_name"))
         config["phone_number"] = normalized_phone
         config["created_at"] = datetime.now().isoformat()
 
@@ -535,6 +592,7 @@ GROUP BY p.id, p.sku, p.name;
         """Get default tenant configuration."""
         return {
             "business_name": "",
+            "owner_name": "",
             "phone_number": "",
             "language": "es",
             "currency": "USD",
