@@ -20,10 +20,14 @@
                     body: JSON.stringify(this.form)
                 });
                 if (res.ok) {
-                    window.location.reload();
+                    window.location.href = `/?refresh=${Date.now()}`;
                 } else {
-                    const data = await res.json();
-                    this.error = data.detail || 'Error creating tenant';
+                    let detail = 'Error creating tenant';
+                    try {
+                        const data = await res.json();
+                        detail = data.detail || detail;
+                    } catch (_) {}
+                    this.error = detail;
                 }
             } catch(e) {
                 this.error = 'Network error';

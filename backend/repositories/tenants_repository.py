@@ -31,8 +31,8 @@ class TenantsRepository:
         currency: str,
         language: str,
         owner_name: str | None = None,
-    ):
-        self.tenant_manager.create_tenant(
+    ) -> bool:
+        return self.tenant_manager.create_tenant(
             phone_number=phone,
             business_name=business_name,
             config={"currency": currency, "language": language, "owner_name": owner_name},

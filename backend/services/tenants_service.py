@@ -63,13 +63,15 @@ class TenantsService:
         if self.repository.tenant_exists(payload.phone_number):
             raise TenantConflictError(f"Tenant {payload.phone_number} already exists")
 
-        self.repository.create_tenant(
+        created = self.repository.create_tenant(
             phone=payload.phone_number,
             business_name=payload.business_name,
             currency=payload.currency,
             language=payload.language,
             owner_name=payload.owner_name,
         )
+        if not created:
+            raise TenantConflictError(f"Tenant {payload.phone_number} already exists")
         self.repository.create_schema_if_needed(payload.phone_number)
 
     def get_tenant_stats(self, phone: str) -> TenantStats:
