@@ -965,9 +965,12 @@ function tenantDashboard() {
             if (!confirm(`Delete ${this.tenantName} and all its data? This cannot be undone.`)) return;
 
             this.isDeletingTenant = true;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
             try {
                 const response = await fetch(`/api/tenants/${encodeURIComponent(this.phoneNumber)}`, {
-                    method: 'DELETE'
+                    method: 'DELETE',
+                    signal: controller.signal
                 });
 
                 if (response.ok) {
@@ -983,8 +986,11 @@ function tenantDashboard() {
                 alert(detail);
             } catch (error) {
                 console.error('Error deleting tenant:', error);
-                alert('Error deleting tenant');
+                alert(error.name === 'AbortError'
+                    ? 'Delete timed out. Try again or check the backend.'
+                    : 'Error deleting tenant');
             } finally {
+                clearTimeout(timeoutId);
                 this.isDeletingTenant = false;
             }
         }

@@ -43,9 +43,12 @@
 
             this.deletingPhone = phone;
             this.error = '';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
             try {
                 const res = await fetch(`/api/tenants/${encodeURIComponent(phone)}`, {
                     method: 'DELETE',
+                    signal: controller.signal,
                 });
 
                 if (res.ok) {
@@ -60,8 +63,11 @@
                 } catch (_) {}
                 this.error = detail;
             } catch (e) {
-                this.error = 'Network error';
+                this.error = e.name === 'AbortError'
+                    ? 'Delete timed out. Try again or check the backend.'
+                    : 'Network error';
             } finally {
+                clearTimeout(timeoutId);
                 this.deletingPhone = '';
             }
         }
@@ -225,8 +231,7 @@
                                 @click="deleteTenant({{ tenant.phone_number | tojson }}, {{ tenant.business_name | tojson }})"
                                 :disabled="deletingPhone === {{ tenant.phone_number | tojson }}"
                                 class="px-4 py-2 border border-red-300 rounded-md text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed">
-                                <span x-show="deletingPhone !== {{ tenant.phone_number | tojson }}">Delete</span>
-                                <span x-show="deletingPhone === {{ tenant.phone_number | tojson }}">Deleting...</span>
+                                <span x-text="deletingPhone === {{ tenant.phone_number | tojson }} ? 'Deleting...' : 'Delete'"></span>
                             </button>
                         </div>
                     </div>
