@@ -59,7 +59,7 @@ class TenantsService:
             status=tenant_data["status"] if tenant_data else "active",
         )
 
-    def create_tenant(self, payload: TenantCreate):
+    def create_tenant(self, payload: TenantCreate, extra_config: dict | None = None):
         if self.repository.tenant_exists(payload.phone_number):
             raise TenantConflictError(f"Tenant {payload.phone_number} already exists")
 
@@ -69,6 +69,7 @@ class TenantsService:
             currency=payload.currency,
             language=payload.language,
             owner_name=payload.owner_name,
+            extra_config=extra_config,
         )
         if not created:
             raise TenantConflictError(f"Tenant {payload.phone_number} already exists")

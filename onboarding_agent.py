@@ -1,25 +1,27 @@
 """
-Onboarding Agent - Configuración inicial interactiva de nuevos clientes.
+Onboarding Agent - Configuracion inicial interactiva de nuevos clientes.
 
 Hace preguntas al usuario para crear su negocio personalizado.
 """
-from typing import Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, Optional
 
 
 class OnboardingStep(Enum):
     """Pasos del proceso de onboarding."""
+
     WELCOME = "welcome"
+    OWNER_NAME = "owner_name"
     BUSINESS_NAME = "business_name"
-    BUSINESS_TYPE = "business_type"
+    LANGUAGE = "language"
     CURRENCY = "currency"
-    FIRST_PRODUCTS = "first_products"
+    FIRST_GOAL = "first_goal"
     CONFIRMATION = "confirmation"
     COMPLETE = "complete"
 
 
 class OnboardingSession:
-    """Sesión de onboarding para un cliente."""
+    """Sesion de onboarding para un cliente."""
 
     def __init__(self, phone_number: str):
         """
@@ -32,6 +34,42 @@ class OnboardingSession:
         self.current_step = OnboardingStep.WELCOME
         self.data: Dict[str, Any] = {}
 
+    @staticmethod
+    def _clean_text(user_message: str, default: str = "") -> str:
+        text = " ".join(str(user_message or "").replace("\n", " ").replace("\r", " ").split())
+        return text or default
+
+    @staticmethod
+    def _normalize_language(user_message: str) -> str:
+        text = OnboardingSession._clean_text(user_message).lower()
+        if text in {"en", "eng", "english", "ingles", "ingles"} or "english" in text:
+            return "en"
+        return "es"
+
+    @staticmethod
+    def _normalize_currency(user_message: str) -> str:
+        text = OnboardingSession._clean_text(user_message).upper()
+        if text in {"USD", "ARS", "EUR", "BRL"}:
+            return text
+        return "USD"
+
+    @staticmethod
+    def _normalize_first_goal(user_message: str) -> str:
+        text = OnboardingSession._clean_text(user_message).lower()
+        if not text:
+            return "cargar productos"
+        if any(word in text for word in ["producto", "productos", "inventario", "catalogo", "catálogo"]):
+            return "cargar productos"
+        if "venta" in text or "vender" in text:
+            return "registrar una venta"
+        if "stock" in text or "existencia" in text:
+            return "ver stock"
+        if "gasto" in text or "gastos" in text or "expense" in text:
+            return "anotar un gasto"
+        if "consulta" in text or "pregunta" in text or "ayuda" in text:
+            return "hacer una consulta"
+        return text
+
     def get_next_message(self) -> str:
         """
         Get the next message to send to the user based on current step.
@@ -41,20 +79,22 @@ class OnboardingSession:
         """
         if self.current_step == OnboardingStep.WELCOME:
             return self._welcome_message()
-        elif self.current_step == OnboardingStep.BUSINESS_NAME:
+        if self.current_step == OnboardingStep.OWNER_NAME:
+            return self._owner_name_message()
+        if self.current_step == OnboardingStep.BUSINESS_NAME:
             return self._business_name_message()
-        elif self.current_step == OnboardingStep.BUSINESS_TYPE:
-            return self._business_type_message()
-        elif self.current_step == OnboardingStep.CURRENCY:
+        if self.current_step == OnboardingStep.LANGUAGE:
+            return self._language_message()
+        if self.current_step == OnboardingStep.CURRENCY:
             return self._currency_message()
-        elif self.current_step == OnboardingStep.FIRST_PRODUCTS:
-            return self._first_products_message()
-        elif self.current_step == OnboardingStep.CONFIRMATION:
+        if self.current_step == OnboardingStep.FIRST_GOAL:
+            return self._first_goal_message()
+        if self.current_step == OnboardingStep.CONFIRMATION:
             return self._confirmation_message()
-        elif self.current_step == OnboardingStep.COMPLETE:
+        if self.current_step == OnboardingStep.COMPLETE:
             return self._complete_message()
 
-        return "Error en el proceso de configuración."
+        return "Error en el proceso de configuracion."
 
     def process_response(self, user_message: str) -> tuple[bool, str]:
         """
@@ -67,136 +107,156 @@ class OnboardingSession:
             Tuple of (is_complete, next_message)
         """
         if self.current_step == OnboardingStep.WELCOME:
-            # Just advance
+            self.current_step = OnboardingStep.OWNER_NAME
+            return False, self.get_next_message()
+
+        if self.current_step == OnboardingStep.OWNER_NAME:
+            self.data["owner_name"] = self._clean_text(user_message, "Tu nombre")
             self.current_step = OnboardingStep.BUSINESS_NAME
             return False, self.get_next_message()
 
-        elif self.current_step == OnboardingStep.BUSINESS_NAME:
-            self.data["business_name"] = user_message.strip()
-            self.current_step = OnboardingStep.BUSINESS_TYPE
+        if self.current_step == OnboardingStep.BUSINESS_NAME:
+            self.data["business_name"] = self._clean_text(user_message, "Mi negocio")
+            self.current_step = OnboardingStep.LANGUAGE
             return False, self.get_next_message()
 
-        elif self.current_step == OnboardingStep.BUSINESS_TYPE:
-            self.data["business_type"] = user_message.strip()
+        if self.current_step == OnboardingStep.LANGUAGE:
+            self.data["language"] = self._normalize_language(user_message)
             self.current_step = OnboardingStep.CURRENCY
             return False, self.get_next_message()
 
-        elif self.current_step == OnboardingStep.CURRENCY:
-            currency = user_message.strip().upper()
-            if currency in ["USD", "ARS", "EUR", "BRL"]:
-                self.data["currency"] = currency
-            else:
-                self.data["currency"] = "USD"  # Default
-
-            self.current_step = OnboardingStep.FIRST_PRODUCTS
+        if self.current_step == OnboardingStep.CURRENCY:
+            self.data["currency"] = self._normalize_currency(user_message)
+            self.current_step = OnboardingStep.FIRST_GOAL
             return False, self.get_next_message()
 
-        elif self.current_step == OnboardingStep.FIRST_PRODUCTS:
-            response = user_message.strip().lower()
-            if response in ["si", "sí", "yes", "s", "y"]:
-                self.data["add_products_now"] = True
-                self.current_step = OnboardingStep.CONFIRMATION
-                return False, "Perfecto! Ahora podrás agregar productos cuando quieras.\n\n" + self.get_next_message()
-            else:
-                self.data["add_products_now"] = False
-                self.current_step = OnboardingStep.CONFIRMATION
-                return False, self.get_next_message()
+        if self.current_step == OnboardingStep.FIRST_GOAL:
+            first_goal = self._normalize_first_goal(user_message)
+            self.data["first_goal"] = first_goal
+            # Compatibility with callers that still look for business_type.
+            self.data["business_type"] = first_goal
+            self.current_step = OnboardingStep.CONFIRMATION
+            return False, self.get_next_message()
 
-        elif self.current_step == OnboardingStep.CONFIRMATION:
-            response = user_message.strip().lower()
-            if response in ["si", "sí", "yes", "s", "y", "confirmar", "ok"]:
+        if self.current_step == OnboardingStep.CONFIRMATION:
+            response = self._clean_text(user_message).lower()
+            if response in {"si", "sí", "yes", "s", "y", "confirmar", "ok", "dale", "listo"}:
                 self.current_step = OnboardingStep.COMPLETE
                 return True, self.get_next_message()
-            else:
-                # Restart
-                self.current_step = OnboardingStep.WELCOME
-                self.data = {}
-                return False, "Ok, empecemos de nuevo.\n\n" + self.get_next_message()
 
-        return False, "No entendí tu respuesta. Por favor intenta de nuevo."
+            # Restart
+            self.current_step = OnboardingStep.WELCOME
+            self.data = {}
+            return False, "Ok, empecemos de nuevo.\n\n" + self.get_next_message()
+
+        return False, "No entendi tu respuesta. Por favor intenta de nuevo."
 
     def _welcome_message(self) -> str:
-        return """¡Bienvenido! 👋
+        return """Hola, soy tu asistente virtual para ayudarte con tu negocio.
 
-Soy tu asistente de negocios inteligente. Veo que es la primera vez que me escribes.
+Te voy a hacer unas preguntas cortas para dejar todo listo.
 
-Voy a hacerte algunas preguntas rápidas para configurar tu negocio. Te tomará solo 2 minutos.
+¿Listo para empezar? Responde *Si* para continuar."""
 
-¿Listo para empezar? Responde *Sí* para continuar."""
+    def _owner_name_message(self) -> str:
+        return """Perfecto. ¿Como te llamas?
+
+Usare ese nombre para dirigirme a vos."""
 
     def _business_name_message(self) -> str:
-        return """Perfecto! Comencemos.
+        owner_name = self.data.get("owner_name", "").strip()
+        prefix = f"Gracias, {owner_name}.\n\n" if owner_name else ""
+        return f"""{prefix}¿Como se llama tu negocio?
 
-¿Cómo se llama tu negocio?
+Ejemplo: "Tienda de Maria", "Accesorios Luna", "Panaderia del Centro"."""
 
-Ejemplo: "Beans&Co", "Tienda de María", "Accesorios Luna"..."""
+    def _language_message(self) -> str:
+        return """¿En que idioma queres seguir?
 
-    def _business_type_message(self) -> str:
-        return f"""Genial, *{self.data.get('business_name')}*!
+Opciones: ES o EN
 
-¿Qué tipo de negocio tienes?
-
-Ejemplo: "Vendo pulseras artesanales", "Tienda de ropa", "Panadería"..."""
+Responde solo con el codigo."""
 
     def _currency_message(self) -> str:
-        return """¿En qué moneda trabajas?
+        return """¿En que moneda trabajas?
 
 Opciones: USD, ARS, EUR, BRL
 
-Responde solo con el código (ej: "USD")"""
+Responde solo con el codigo."""
 
-    def _first_products_message(self) -> str:
-        return """Perfecto!
+    def _first_goal_message(self) -> str:
+        return """¿Que queres hacer primero?
 
-¿Quieres que te ayude a cargar algunos productos ahora?
+Opciones:
+• cargar productos
+• registrar una venta
+• ver stock
+• anotar un gasto
+• hacer una consulta
 
-Responde *Sí* o *No*"""
+Podes responder con una opcion corta."""
 
     def _confirmation_message(self) -> str:
         config_summary = f"""
-Resumen de tu configuración:
+Resumen de tu configuracion:
 
 🏪 *Negocio:* {self.data.get('business_name')}
-📋 *Tipo:* {self.data.get('business_type')}
+👤 *Tu nombre:* {self.data.get('owner_name')}
+🌐 *Idioma:* {self.data.get('language', 'es').upper()}
 💰 *Moneda:* {self.data.get('currency', 'USD')}
+🎯 *Primer objetivo:* {self.data.get('first_goal', 'cargar productos')}
 
-¿Todo correcto? Responde *Sí* para confirmar o *No* para empezar de nuevo."""
+¿Todo correcto? Responde *Si* para confirmar o *No* para empezar de nuevo."""
 
         return config_summary
 
     def _complete_message(self) -> str:
+        business_name = self.data.get("business_name", "Tu negocio")
         return f"""¡Listo! ✅
 
-Tu negocio *{self.data.get('business_name')}* está configurado.
+Tu negocio *{business_name}* ya quedo configurado.
 
 Ahora puedes:
-• Consultar stock: "¿Cuánto stock tengo?"
-• Registrar ventas: "Vendí 2 pulseras doradas"
+• Consultar stock: "Cuanto stock tengo?"
+• Registrar ventas: "Vendi 2 pulseras"
 • Agregar productos: "Crear producto nuevo"
-• Registrar gastos: "Gasté $50 en materiales"
-• Ver ganancias: "¿Cuánto gané este mes?"
+• Registrar gastos: "Gaste 50 en materiales"
+• Ver ganancias: "Cuanto gane este mes?"
 
-¿En qué puedo ayudarte?"""
+¿En que puedo ayudarte?"""
 
     def get_config(self) -> Dict[str, Any]:
         """Get the collected configuration data."""
+        language = self.data.get("language", "es")
+        currency = self.data.get("currency", "USD")
+        business_name = self.data.get("business_name", "Mi negocio")
+        owner_name = self.data.get("owner_name", "")
+        first_goal = self.data.get("first_goal", "")
+
         return {
-            "business_name": self.data.get("business_name", "Mi Negocio"),
-            "business_type": self.data.get("business_type", ""),
-            "currency": self.data.get("currency", "USD"),
-            "language": "es",
+            "business_name": business_name,
+            "owner_name": owner_name,
+            "business_type": self.data.get("business_type", first_goal),
+            "first_goal": first_goal,
+            "currency": currency,
+            "language": language,
             "timezone": "America/Argentina/Buenos_Aires",
             "prompts": {
-                "system_prompt": f"Eres un asistente de negocios para {self.data.get('business_name')}. "
-                                 f"Ayudas con ventas, inventario, gastos y análisis de ganancias.",
-                "welcome_message": f"¡Hola! Soy el asistente de {self.data.get('business_name')}. ¿En qué puedo ayudarte?"
+                "system_prompt": (
+                    f"Eres el asistente virtual de {business_name}. "
+                    "Ayudas con ventas, inventario, gastos y analisis de ganancias."
+                ),
+                "welcome_message": (
+                    "Hola, soy tu asistente virtual para ayudarte con tu negocio. "
+                    "¿En que puedo ayudarte?"
+                ),
             },
             "features": {
                 "audio_enabled": True,
                 "sales_enabled": True,
                 "expenses_enabled": True,
-                "inventory_enabled": True
-            }
+                "inventory_enabled": True,
+            },
         }
 
 

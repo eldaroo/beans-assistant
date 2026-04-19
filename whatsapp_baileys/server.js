@@ -36,6 +36,10 @@ const lidPhoneMap = new Map();
 // with their phone number.  value = true (simple flag).
 const pendingIdentification = new Set();
 
+// Tracks phones that are currently in onboarding so future messages go
+// straight to the onboarding endpoint until the tenant is created.
+const pendingOnboarding = new Set();
+
 const healthServer = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     // Always return 200 — the server is running. WhatsApp status is in the body.
@@ -187,6 +191,29 @@ async function saveLidMapping(jid, phone) {
   }
 }
 
+async function requestOnboardingReply(phone, messageText, senderName = '') {
+  const url = `${BACKEND_URL}/api/onboarding/${encodeURIComponent(phone)}`;
+
+  logger.info({ phone, url, messageLength: messageText.length }, '[BAILEYS] Requesting onboarding reply');
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: messageText, sender_name: senderName || undefined }),
+    signal: AbortSignal.timeout(45000),
+  });
+
+  logger.info({ phone, status: response.status }, '[BAILEYS] Onboarding response status');
+
+  if (!response.ok) {
+    const detail = await response.text();
+    logger.error({ phone, status: response.status, detail: detail.substring(0, 200) }, '[BAILEYS] Onboarding backend error response');
+    throw new Error(`Onboarding ${response.status}: ${detail}`);
+  }
+
+  return response.json();
+}
+
 function extractText(messageContent = {}) {
   return (
     messageContent.conversation ||
@@ -279,25 +306,6 @@ async function requestAgentReply(phone, messageText, senderName = '') {
   });
 
   logger.info({ phone, status: response.status }, '[BAILEYS] Initial response status');
-
-  if (response.status === 404 && AUTO_CREATE_TENANT) {
-    logger.info({ phone, AUTO_CREATE_TENANT }, '[BAILEYS] Got 404, attempting to create tenant');
-    const created = await createTenantIfNeeded(phone, senderName);
-    logger.info({ phone, created }, '[BAILEYS] createTenantIfNeeded result');
-    if (created) {
-      logger.info({ phone }, '[BAILEYS] Tenant created/exists, retrying chat');
-      await sleep(300);
-      response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageText, sender_name: senderName || undefined }),
-        signal: AbortSignal.timeout(45000),
-      });
-      logger.info({ phone, retryStatus: response.status }, '[BAILEYS] Retry response status');
-    } else {
-      logger.warn({ phone }, '[BAILEYS] Failed to create tenant');
-    }
-  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -482,7 +490,36 @@ async function startWhatsApp() {
       try {
         await sock.sendPresenceUpdate('composing', jid);
         const senderName = String(msg.pushName || '').trim();
-        const responseText = await requestAgentReply(resolvedPhone, text, senderName);
+        let responseText;
+
+        if (pendingOnboarding.has(resolvedPhone)) {
+          const onboardingResult = await requestOnboardingReply(resolvedPhone, text, senderName);
+          responseText = onboardingResult.response;
+          if (onboardingResult.metadata?.onboarding_complete) {
+            pendingOnboarding.delete(resolvedPhone);
+          } else {
+            pendingOnboarding.add(resolvedPhone);
+          }
+        } else {
+          try {
+            responseText = await requestAgentReply(resolvedPhone, text, senderName);
+          } catch (err) {
+            const message = String(err?.message || '');
+            if (message.startsWith('Backend 404')) {
+              logger.info({ phone: resolvedPhone }, '[BAILEYS] Tenant missing, starting onboarding');
+              const onboardingResult = await requestOnboardingReply(resolvedPhone, text, senderName);
+              responseText = onboardingResult.response;
+              if (onboardingResult.metadata?.onboarding_complete) {
+                pendingOnboarding.delete(resolvedPhone);
+              } else {
+                pendingOnboarding.add(resolvedPhone);
+              }
+            } else {
+              throw err;
+            }
+          }
+        }
+
         await sock.sendMessage(jid, { text: responseText });
       } catch (err) {
         logger.error({ err, phone: resolvedPhone }, '[BAILEYS] Failed to process message');

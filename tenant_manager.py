@@ -598,8 +598,8 @@ GROUP BY p.id, p.sku, p.name;
             "currency": "USD",
             "timezone": "America/Argentina/Buenos_Aires",
             "prompts": {
-                "system_prompt": "Eres un asistente de negocios inteligente.",
-                "welcome_message": "¡Hola! Soy tu asistente de negocios. ¿En qué puedo ayudarte?"
+                "system_prompt": "Eres el asistente virtual de un negocio. Ayudas con ventas, inventario, gastos y analisis de ganancias.",
+                "welcome_message": "Hola, soy tu asistente virtual para ayudarte con tu negocio. ¿En qué puedo ayudarte?"
             },
             "features": {
                 "audio_enabled": True,

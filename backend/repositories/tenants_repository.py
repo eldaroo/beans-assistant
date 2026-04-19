@@ -31,11 +31,15 @@ class TenantsRepository:
         currency: str,
         language: str,
         owner_name: str | None = None,
+        extra_config: dict | None = None,
     ) -> bool:
+        config = {"currency": currency, "language": language, "owner_name": owner_name}
+        if extra_config:
+            config.update(extra_config)
         return self.tenant_manager.create_tenant(
             phone_number=phone,
             business_name=business_name,
-            config={"currency": currency, "language": language, "owner_name": owner_name},
+            config=config,
         )
 
     def create_schema_if_needed(self, phone: str):

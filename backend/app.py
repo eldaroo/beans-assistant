@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding
 from backend import cache
 
 # Initialize FastAPI app
@@ -59,6 +59,7 @@ app.include_router(stock.router, prefix="/api/tenants", tags=["Stock"])
 app.include_router(analytics.router, prefix="/api/tenants", tags=["Analytics"])
 app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"])
 app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat"])
+app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"])
 
 
 
