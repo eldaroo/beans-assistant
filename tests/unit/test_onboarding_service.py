@@ -51,15 +51,9 @@ def test_onboarding_service_creates_tenant_at_completion():
     assert "como se llama tu negocio" in result["response"].lower()
 
     result = service.handle_message(phone, "Mi tienda")
-    assert "idioma" in result["response"].lower()
-
-    result = service.handle_message(phone, "EN")
     assert "moneda" in result["response"].lower()
 
     result = service.handle_message(phone, "ARS")
-    assert "que queres hacer primero" in result["response"].lower()
-
-    result = service.handle_message(phone, "registrar una venta")
     assert "resumen de tu configuracion" in result["response"].lower()
 
     result = service.handle_message(phone, "Si")
@@ -73,5 +67,6 @@ def test_onboarding_service_creates_tenant_at_completion():
     assert created["business_name"] == "Mi tienda"
     assert created["owner_name"] == "Sofia"
     assert created["currency"] == "ARS"
-    assert created["language"] == "en"
-    assert created["extra_config"]["first_goal"] == "registrar una venta"
+    assert created["language"] == "es"
+    assert "first_goal" not in created["extra_config"]
+    assert "business_type" not in created["extra_config"]
