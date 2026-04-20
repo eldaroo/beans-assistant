@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { resolveTenantPhoneFromHeuristics } = require('./lid_resolution');
+const {
+  resolvePhoneFromMessageKey,
+  resolveTenantPhoneFromHeuristics,
+} = require('./lid_resolution');
 
 test('matches business name with accents removed', () => {
   const tenants = [
@@ -23,4 +26,20 @@ test('matches owner name regardless of word order and punctuation', () => {
   const phone = resolveTenantPhoneFromHeuristics(tenants, 'Lopez, Maria');
 
   assert.equal(phone, '+5491333333333');
+});
+
+test('resolves phone from senderPn in the message key', () => {
+  const phone = resolvePhoneFromMessageKey({
+    senderPn: '5491155566677@s.whatsapp.net',
+  });
+
+  assert.equal(phone, '+5491155566677');
+});
+
+test('falls back to participantPn when senderPn is missing', () => {
+  const phone = resolvePhoneFromMessageKey({
+    participantPn: '5491166677788@s.whatsapp.net',
+  });
+
+  assert.equal(phone, '+5491166677788');
 });
