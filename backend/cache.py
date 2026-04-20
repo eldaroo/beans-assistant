@@ -10,11 +10,15 @@ Provides caching functionality for the Beans&Co backend with:
 """
 import os
 import json
-import redis
 from typing import Optional, Any
 from functools import wraps
 import logging
 from datetime import date, datetime
+
+try:
+    import redis
+except ImportError:  # pragma: no cover - exercised in environments without redis installed
+    redis = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -35,10 +39,10 @@ TTL_SALES = 120     # 2 minutes
 TTL_RESOURCE_VERSION = 86400  # 24 hours
 
 # Global Redis client
-_redis_client: Optional[redis.Redis] = None
+_redis_client: Optional[Any] = None
 
 
-def get_redis_client() -> Optional[redis.Redis]:
+def get_redis_client() -> Optional[Any]:
     """
     Get or create Redis client.
     
@@ -51,6 +55,9 @@ def get_redis_client() -> Optional[redis.Redis]:
         return None
     
     if _redis_client is None:
+        if redis is None:
+            logger.warning("[CACHE] redis package is not installed; caching disabled.")
+            return None
         try:
             _redis_client = redis.Redis(
                 host=REDIS_HOST,

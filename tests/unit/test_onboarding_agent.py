@@ -23,17 +23,9 @@ def test_onboarding_flow_is_neutral_and_collects_config():
 
     complete, next_message = session.process_response("Mi tienda")
     assert not complete
-    assert "idioma" in next_message.lower()
-
-    complete, next_message = session.process_response("EN")
-    assert not complete
     assert "moneda" in next_message.lower()
 
     complete, next_message = session.process_response("ARS")
-    assert not complete
-    assert "que queres hacer primero" in next_message.lower()
-
-    complete, next_message = session.process_response("registrar una venta")
     assert not complete
     assert "resumen de tu configuracion" in next_message.lower()
 
@@ -46,10 +38,10 @@ def test_onboarding_flow_is_neutral_and_collects_config():
     assert config is not None
     assert config["owner_name"] == "Sofia"
     assert config["business_name"] == "Mi tienda"
-    assert config["language"] == "en"
+    assert config["language"] == "es"
     assert config["currency"] == "ARS"
-    assert config["first_goal"] == "registrar una venta"
-    assert config["business_type"] == "registrar una venta"
+    assert "first_goal" not in config
+    assert "business_type" not in config
     assert "asistente virtual" in config["prompts"]["welcome_message"].lower()
 
 

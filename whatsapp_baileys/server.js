@@ -9,6 +9,7 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
 } = require('@whiskeysockets/baileys');
+const { resolvePhoneFromTenantHeuristics } = require('./lid_resolution');
 
 const BACKEND_URL = (process.env.BACKEND_URL || 'http://backend:8000').replace(/\/$/, '');
 const SESSION_DIR = process.env.BAILEYS_SESSION_DIR || '/app/.baileys_auth';
@@ -441,14 +442,24 @@ async function startWhatsApp() {
       // ── Identification flow for @lid JIDs ──────────────────────────────
       if (jid.endsWith('@lid') && !phone) {
         const lid = jid.split('@')[0];
+        const senderName = String(msg.pushName || '').trim();
 
-        // 1. Try to resolve from backend DB first (covers re-connects)
+        // 1. Try to resolve from backend DB first (covers re-connects).
         const backendPhone = await lookupLidInBackend(lid);
         if (backendPhone) {
-          // Found — fall through with the resolved phone
           lidPhoneMap.set(jid, backendPhone);
-        } else if (pendingIdentification.has(jid)) {
-          // 2. User is replying with their phone number
+        } else {
+          // 2. Try to infer the tenant from the active tenant list and the contact name.
+          const heuristicPhone = await resolvePhoneFromTenantHeuristics(senderName);
+          if (heuristicPhone) {
+            lidPhoneMap.set(jid, heuristicPhone);
+            logger.info({ jid, phone: heuristicPhone, senderName }, '[BAILEYS] Unknown LID resolved heuristically from tenant list');
+            await saveLidMapping(jid, heuristicPhone);
+          }
+        }
+
+        if (!resolvePhone(jid) && pendingIdentification.has(jid)) {
+          // 3. User is replying with their phone number.
           const candidate = text.replace(/[^\d+]/g, '');
           const normalized = candidate.startsWith('+') ? candidate : `+${candidate}`;
           try {
@@ -468,8 +479,10 @@ async function startWhatsApp() {
             logger.error({ err, jid }, '[BAILEYS] Identification flow error');
           }
           continue;
-        } else {
-          // 3. First contact — ask for their phone number
+        }
+
+        if (!resolvePhone(jid)) {
+          // 4. Last resort: ask for the phone number only when we could not infer it.
           pendingIdentification.add(jid);
           logger.info({ jid }, '[BAILEYS] Unknown LID — starting identification flow');
           await sock.sendMessage(jid, {
@@ -478,7 +491,6 @@ async function startWhatsApp() {
           continue;
         }
       }
-
       const resolvedPhone = resolvePhone(jid);
       if (!resolvedPhone) {
         logger.warn({ jid }, '[BAILEYS] Could not resolve phone, skipping');
