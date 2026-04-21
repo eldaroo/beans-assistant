@@ -44,6 +44,16 @@ function scoreMatch(query, candidate) {
   return 0;
 }
 
+function phoneFromPnJid(jid) {
+  const base = String(jid || '').split('@')[0].trim();
+  if (!base) return '';
+
+  const digits = base.replace(/\D/g, '');
+  if (!digits) return '';
+
+  return `+${digits}`;
+}
+
 function isActiveTenant(tenant) {
   const status = String(tenant?.status || '').toLowerCase();
   return !status || status === 'active';
@@ -89,6 +99,15 @@ function resolveTenantPhoneFromHeuristics(tenants, senderName) {
   return bestPhone;
 }
 
+function resolvePhoneFromMessageKey(messageKey) {
+  if (!messageKey) return '';
+
+  return (
+    phoneFromPnJid(messageKey.senderPn) ||
+    phoneFromPnJid(messageKey.participantPn)
+  );
+}
+
 async function fetchTenantsForLidResolution(fetchImpl = global.fetch) {
   if (typeof fetchImpl !== 'function') return [];
 
@@ -118,6 +137,7 @@ async function resolvePhoneFromTenantHeuristicsAsync(senderName, fetchImpl = glo
 
 module.exports = {
   fetchTenantsForLidResolution,
+  resolvePhoneFromMessageKey,
   resolvePhoneFromTenantHeuristics: resolvePhoneFromTenantHeuristicsAsync,
   resolveTenantPhoneFromHeuristics,
 };
