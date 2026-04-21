@@ -13,6 +13,7 @@ const {
   resolvePhoneFromMessageKey,
   resolvePhoneFromTenantHeuristics,
 } = require('./lid_resolution');
+const { sendOnboardingMessages } = require('./onboarding_messages');
 
 const BACKEND_URL = (process.env.BACKEND_URL || 'http://backend:8000').replace(/\/$/, '');
 const SESSION_DIR = process.env.BAILEYS_SESSION_DIR || '/app/.baileys_auth';
@@ -514,11 +515,12 @@ async function startWhatsApp() {
         await sock.sendPresenceUpdate('composing', jid);
         const senderName = String(msg.pushName || '').trim();
         let responseText;
+        let onboardingPayload = null;
 
         if (pendingOnboarding.has(resolvedPhone)) {
-          const onboardingResult = await requestOnboardingReply(resolvedPhone, text, senderName);
-          responseText = onboardingResult.response;
-          if (onboardingResult.metadata?.onboarding_complete) {
+          onboardingPayload = await requestOnboardingReply(resolvedPhone, text, senderName);
+          responseText = onboardingPayload.response;
+          if (onboardingPayload.metadata?.onboarding_complete) {
             pendingOnboarding.delete(resolvedPhone);
           } else {
             pendingOnboarding.add(resolvedPhone);
@@ -530,9 +532,9 @@ async function startWhatsApp() {
             const message = String(err?.message || '');
             if (message.startsWith('Backend 404')) {
               logger.info({ phone: resolvedPhone }, '[BAILEYS] Tenant missing, starting onboarding');
-              const onboardingResult = await requestOnboardingReply(resolvedPhone, text, senderName);
-              responseText = onboardingResult.response;
-              if (onboardingResult.metadata?.onboarding_complete) {
+              onboardingPayload = await requestOnboardingReply(resolvedPhone, text, senderName);
+              responseText = onboardingPayload.response;
+              if (onboardingPayload.metadata?.onboarding_complete) {
                 pendingOnboarding.delete(resolvedPhone);
               } else {
                 pendingOnboarding.add(resolvedPhone);
@@ -543,7 +545,11 @@ async function startWhatsApp() {
           }
         }
 
-        await sock.sendMessage(jid, { text: responseText });
+        if (onboardingPayload) {
+          await sendOnboardingMessages(sock, jid, onboardingPayload, logger);
+        } else {
+          await sock.sendMessage(jid, { text: responseText });
+        }
       } catch (err) {
         logger.error({ err, phone: resolvedPhone }, '[BAILEYS] Failed to process message');
         await sock.sendMessage(jid, {

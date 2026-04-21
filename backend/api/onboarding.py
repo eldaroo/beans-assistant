@@ -24,10 +24,20 @@ class OnboardingMessage(BaseModel):
     sender_name: str | None = None
 
 
+class OnboardingMessagePart(BaseModel):
+    """Structured onboarding message fragment."""
+
+    type: str
+    text: str | None = None
+    caption: str | None = None
+    asset_key: str | None = None
+
+
 class OnboardingResponse(BaseModel):
     """Outgoing onboarding response."""
 
     response: str
+    messages: list[OnboardingMessagePart] | None = None
     metadata: dict = Field(default_factory=dict)
 
 
