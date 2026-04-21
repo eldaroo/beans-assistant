@@ -1,3 +1,5 @@
+from onboarding_agent import complete_onboarding_session
+
 from backend.services.onboarding_service import OnboardingService
 
 
@@ -38,13 +40,62 @@ class _FakeTenantsService:
         )
 
 
-def test_onboarding_service_creates_tenant_at_completion():
-    fake_tenants_service = _FakeTenantsService()
-    service = OnboardingService(fake_tenants_service)
+class _FakeProductsService:
+    def __init__(self):
+        self.created_products = []
+
+    def create_product(self, phone, payload):
+        self.created_products.append(
+            {
+                "phone": phone,
+                "sku": payload.sku,
+                "name": payload.name,
+                "unit_cost_cents": payload.unit_cost_cents,
+                "unit_price_cents": payload.unit_price_cents,
+            }
+        )
+        return payload
+
+
+def test_onboarding_service_starts_with_visual_welcome():
     phone = "+5491112345678"
+    complete_onboarding_session(phone)
+    fake_tenants_service = _FakeTenantsService()
+    fake_products_service = _FakeProductsService()
+    service = OnboardingService(fake_tenants_service, fake_products_service)
 
     result = service.handle_message(phone, "hola")
     assert result["metadata"]["onboarding_complete"] is False
+    assert result["metadata"]["step"] == "welcome"
+    assert result["metadata"]["phase"] == "setup"
+    assert result["metadata"]["product_created"] is False
+    assert "arranquemos" in result["response"].lower()
+    assert result["messages"][0]["type"] == "image"
+    assert result["messages"][0]["asset_key"] == "onboarding_welcome"
+    assert "paso *1 de 2*" in result["messages"][1]["text"].lower()
+    assert fake_tenants_service.created_tenants == []
+    assert fake_products_service.created_products == []
+
+
+def test_onboarding_service_creates_tenant_and_first_product(monkeypatch):
+    phone = "+5491112345678"
+    complete_onboarding_session(phone)
+    fake_tenants_service = _FakeTenantsService()
+    fake_products_service = _FakeProductsService()
+    service = OnboardingService(fake_tenants_service, fake_products_service)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _tenant_scope(_phone):
+        yield
+
+    monkeypatch.setattr("backend.services.onboarding_service.tenant_scope", _tenant_scope)
+
+    result = service.handle_message(phone, "hola")
+    assert result["metadata"]["step"] == "welcome"
+
+    result = service.handle_message(phone, "Si")
     assert "como te llamas" in result["response"].lower()
 
     result = service.handle_message(phone, "Sofia")
@@ -54,12 +105,24 @@ def test_onboarding_service_creates_tenant_at_completion():
     assert "moneda" in result["response"].lower()
 
     result = service.handle_message(phone, "ARS")
-    assert "resumen de tu configuracion" in result["response"].lower()
+    assert "asi queda tu negocio" in result["response"].lower()
 
     result = service.handle_message(phone, "Si")
+    assert result["metadata"]["onboarding_complete"] is False
+    assert "primer producto" in result["response"].lower()
+
+    result = service.handle_message(phone, "Pulsera coral")
+    assert "costo" in result["response"].lower()
+
+    result = service.handle_message(phone, "12500")
+    assert "precio" in result["response"].lower()
+
+    result = service.handle_message(phone, "25000")
     assert result["metadata"]["onboarding_complete"] is True
     assert result["metadata"]["tenant_created"] is True
-    assert "ya quedo configurado" in result["response"].lower()
+    assert result["metadata"]["product_created"] is True
+    assert "cargar stock" in result["response"].lower()
+    assert "- registrar ventas" not in result["response"].lower()
 
     assert len(fake_tenants_service.created_tenants) == 1
     created = fake_tenants_service.created_tenants[0]
@@ -70,3 +133,12 @@ def test_onboarding_service_creates_tenant_at_completion():
     assert created["language"] == "es"
     assert "first_goal" not in created["extra_config"]
     assert "business_type" not in created["extra_config"]
+    assert created["extra_config"]["first_product_name"] == "Pulsera coral"
+
+    assert len(fake_products_service.created_products) == 1
+    created_product = fake_products_service.created_products[0]
+    assert created_product["phone"] == phone
+    assert created_product["name"] == "Pulsera coral"
+    assert created_product["sku"] == "PULSERA-CORAL"
+    assert created_product["unit_cost_cents"] == 1250000
+    assert created_product["unit_price_cents"] == 2500000
