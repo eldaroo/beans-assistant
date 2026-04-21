@@ -10,7 +10,6 @@ import unicodedata
 from typing import Any, Dict, Optional
 
 
-WELCOME_ASSET_KEY = "onboarding_welcome"
 AFFIRMATIVE_RESPONSES = {"si", "sí", "yes", "s", "y", "confirmar", "ok", "dale", "listo", "empezar"}
 NEGATIVE_RESPONSES = {"no", "n", "reiniciar", "de nuevo"}
 VALID_CURRENCIES = {"USD", "ARS", "EUR", "BRL"}
@@ -25,7 +24,6 @@ class OnboardingStep(Enum):
     CURRENCY = "currency"
     CONFIRMATION = "confirmation"
     FIRST_PRODUCT_NAME = "first_product_name"
-    FIRST_PRODUCT_COST = "first_product_cost"
     FIRST_PRODUCT_PRICE = "first_product_price"
     COMPLETE = "complete"
 
@@ -47,6 +45,29 @@ class OnboardingSession:
     def _normalize_text(value: str) -> str:
         normalized = unicodedata.normalize("NFKD", value or "")
         return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower().strip()
+
+    @classmethod
+    def _normalize_product_name_answer(cls, user_message: str) -> str:
+        text = cls._clean_text(user_message)
+        normalized = cls._normalize_text(text)
+
+        conversational_prefixes = (
+            "vendo ",
+            "vendemos ",
+            "trabajo con ",
+            "trabajamos con ",
+            "mi producto es ",
+            "mi producto principal es ",
+            "el producto es ",
+            "vendo de todo, pero principalmente ",
+        )
+
+        for prefix in conversational_prefixes:
+            if normalized.startswith(prefix):
+                trimmed = text[len(prefix):].strip()
+                return trimmed or text
+
+        return text
 
     def _is_affirmative(self, user_message: str) -> bool:
         return self._normalize_text(self._clean_text(user_message)) in AFFIRMATIVE_RESPONSES
@@ -112,7 +133,6 @@ class OnboardingSession:
             return "setup"
         if self.current_step in {
             OnboardingStep.FIRST_PRODUCT_NAME,
-            OnboardingStep.FIRST_PRODUCT_COST,
             OnboardingStep.FIRST_PRODUCT_PRICE,
         }:
             return "catalog"
@@ -124,11 +144,6 @@ class OnboardingSession:
 
         if self.current_step == OnboardingStep.WELCOME:
             payload["messages"] = [
-                {
-                    "type": "image",
-                    "asset_key": WELCOME_ASSET_KEY,
-                    "caption": "Beans assistant",
-                },
                 {
                     "type": "text",
                     "text": message,
@@ -150,8 +165,6 @@ class OnboardingSession:
             return self._confirmation_message()
         if self.current_step == OnboardingStep.FIRST_PRODUCT_NAME:
             return self._first_product_name_message()
-        if self.current_step == OnboardingStep.FIRST_PRODUCT_COST:
-            return self._first_product_cost_message()
         if self.current_step == OnboardingStep.FIRST_PRODUCT_PRICE:
             return self._first_product_price_message()
         if self.current_step == OnboardingStep.COMPLETE:
@@ -228,7 +241,7 @@ class OnboardingSession:
             }
 
         if self.current_step == OnboardingStep.FIRST_PRODUCT_NAME:
-            product_name = self._clean_text(user_message)
+            product_name = self._normalize_product_name_answer(user_message)
             if not product_name:
                 return False, {
                     "response": "Decime el nombre del primer producto para dejar tu catalogo listo.",
@@ -236,18 +249,6 @@ class OnboardingSession:
                 }
 
             self.data["first_product_name"] = product_name
-            self.current_step = OnboardingStep.FIRST_PRODUCT_COST
-            return False, self.get_response_payload()
-
-        if self.current_step == OnboardingStep.FIRST_PRODUCT_COST:
-            amount = self._parse_amount_cents(user_message)
-            if amount is None:
-                return False, {
-                    "response": "Pasame el costo solo como numero. Ejemplo: *12500*.",
-                    "messages": None,
-                }
-
-            self.data["first_product_cost_cents"] = amount
             self.current_step = OnboardingStep.FIRST_PRODUCT_PRICE
             return False, self.get_response_payload()
 
@@ -267,65 +268,43 @@ class OnboardingSession:
 
     def _welcome_message(self) -> str:
         return (
-            "Bienvenido a *Beans assistant*.\n\n"
-            "Paso *1 de 2*: dejamos tu negocio configurado.\n"
-            "Paso *2 de 2*: cargamos tu primer producto para que arranques con el catalogo listo.\n\n"
-            "Si te va, arranquemos ahora.\n"
-            "Responde *Si* para continuar."
+            "👋 Bienvenido a *Beans assistant*.\n\n"
+            "Responde *Si* para empezar."
         )
 
     def _owner_name_message(self) -> str:
-        return (
-            "Buenisimo, vamos con el paso *1 de 2*.\n\n"
-            "Como te llamas?\n"
-            "Voy a usar ese nombre para hablarte en el chat."
-        )
+        return "Tu nombre?"
 
     def _business_name_message(self) -> str:
-        owner_name = self.data.get("owner_name", "").strip()
-        prefix = f"Genial, {owner_name}.\n\n" if owner_name else ""
-        return (
-            f"{prefix}Como se llama tu negocio?\n\n"
-            "Ejemplo: *Tienda de Maria*, *Accesorios Luna* o *Panaderia del Centro*."
-        )
+        return "Nombre de tu negocio?"
 
     def _currency_message(self) -> str:
         return (
-            "Perfecto.\n\n"
-            "En que moneda trabajas?\n"
-            "Opciones: *USD, ARS, EUR, BRL*.\n\n"
-            "Responde solo con el codigo."
+            "Moneda?\n"
+            "Responde: *USD, ARS, EUR o BRL*."
         )
 
     def _confirmation_message(self) -> str:
         return (
-            "Asi queda tu negocio:\n\n"
+            "Queda asi:\n\n"
             f"Negocio: *{self.data.get('business_name')}*\n"
-            f"Tu nombre: *{self.data.get('owner_name')}*\n"
+            f"Nombre: *{self.data.get('owner_name')}*\n"
             f"Moneda: *{self.data.get('currency', 'USD')}*\n\n"
-            "Si esta bien, responde *Si* y seguimos con el primer producto."
+            "Responde *Si* para seguir."
         )
 
     def _first_product_name_message(self) -> str:
         return (
-            "Listo, paso *1 de 2* completado.\n\n"
-            "Ahora vamos con el paso *2 de 2*: tu primer producto.\n"
-            "Como se llama?"
-        )
-
-    def _first_product_cost_message(self) -> str:
-        product_name = self.data.get("first_product_name", "ese producto")
-        return (
-            f"Anotado: *{product_name}*.\n\n"
-            "Ahora pasame el *costo* en tu moneda, solo como numero.\n"
-            "Ejemplos: *12500* o *125,50*."
+            "Deseas agregar un producto a tu inventario?\n\n"
+            "Decime el nombre del primero."
         )
 
     def _first_product_price_message(self) -> str:
+        product_name = self.data.get("first_product_name", "ese producto")
         return (
-            "Perfecto.\n\n"
-            "Ahora pasame el *precio de venta* en tu moneda, solo como numero.\n"
-            "Ejemplos: *25000* o *250,75*."
+            f"Perfecto, agregamos *{product_name}*.\n\n"
+            "Cual es el *precio de venta*?\n"
+            "Pasamelo solo como numero."
         )
 
     def _complete_message(self) -> str:
@@ -337,11 +316,13 @@ class OnboardingSession:
             "Tu catalogo ya arranco.\n\n"
             "Proximo paso recomendado: *cargar stock* para empezar a moverlo.\n\n"
             "Desde ahora ya podes:\n"
-            "- crear mas productos\n"
-            "- cargar stock\n"
-            "- registrar gastos\n"
-            "- consultar tu catalogo\n\n"
-            "Cuando cargues stock, despues tambien vas a poder registrar ventas y consultar stock actual."
+            f"- crear mas productos. Ej: *Crea un producto buzo negro*\n"
+            f"- cargar stock. Ej: *Agrega 10 unidades de {product_name}*\n"
+            "- registrar gastos. Ej: *Registra un gasto de 5000 en envios*\n"
+            "- consultar tu catalogo. Ej: *Mostrame mi catalogo*\n\n"
+            "Cuando cargues stock, tambien vas a poder:\n"
+            f"- registrar ventas. Ej: *Vendi 2 {product_name}*\n"
+            f"- consultar stock actual. Ej: *Cuanto stock tengo de {product_name}?*"
         )
 
     def get_config(self) -> Dict[str, Any]:
@@ -356,7 +337,7 @@ class OnboardingSession:
             "language": "es",
             "timezone": "America/Argentina/Buenos_Aires",
             "first_product_name": self.data.get("first_product_name"),
-            "first_product_cost_cents": self.data.get("first_product_cost_cents"),
+            "first_product_cost_cents": self.data.get("first_product_cost_cents", 0),
             "first_product_price_cents": self.data.get("first_product_price_cents"),
             "prompts": {
                 "system_prompt": (
@@ -364,7 +345,7 @@ class OnboardingSession:
                     "Ayudas con ventas, inventario, gastos y analisis de ganancias."
                 ),
                 "welcome_message": (
-                    "Bienvenido a Beans assistant. Arranquemos con tu negocio y tu primer producto."
+                    "Bienvenido a Beans assistant. Responde Si para empezar."
                 ),
             },
             "features": {

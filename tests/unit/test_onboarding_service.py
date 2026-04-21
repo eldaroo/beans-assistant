@@ -57,7 +57,7 @@ class _FakeProductsService:
         return payload
 
 
-def test_onboarding_service_starts_with_visual_welcome():
+def test_onboarding_service_starts_with_text_welcome():
     phone = "+5491112345678"
     complete_onboarding_session(phone)
     fake_tenants_service = _FakeTenantsService()
@@ -69,10 +69,10 @@ def test_onboarding_service_starts_with_visual_welcome():
     assert result["metadata"]["step"] == "welcome"
     assert result["metadata"]["phase"] == "setup"
     assert result["metadata"]["product_created"] is False
-    assert "arranquemos" in result["response"].lower()
-    assert result["messages"][0]["type"] == "image"
-    assert result["messages"][0]["asset_key"] == "onboarding_welcome"
-    assert "paso *1 de 2*" in result["messages"][1]["text"].lower()
+    assert "bienvenido" in result["response"].lower()
+    assert "responde *si* para empezar" in result["response"].lower()
+    assert result["messages"][0]["type"] == "text"
+    assert "responde *si* para empezar" in result["messages"][0]["text"].lower()
     assert fake_tenants_service.created_tenants == []
     assert fake_products_service.created_products == []
 
@@ -96,25 +96,22 @@ def test_onboarding_service_creates_tenant_and_first_product(monkeypatch):
     assert result["metadata"]["step"] == "welcome"
 
     result = service.handle_message(phone, "Si")
-    assert "como te llamas" in result["response"].lower()
+    assert "tu nombre" in result["response"].lower()
 
     result = service.handle_message(phone, "Sofia")
-    assert "como se llama tu negocio" in result["response"].lower()
+    assert "nombre de tu negocio" in result["response"].lower()
 
     result = service.handle_message(phone, "Mi tienda")
     assert "moneda" in result["response"].lower()
 
     result = service.handle_message(phone, "ARS")
-    assert "asi queda tu negocio" in result["response"].lower()
+    assert "queda asi" in result["response"].lower()
 
     result = service.handle_message(phone, "Si")
     assert result["metadata"]["onboarding_complete"] is False
-    assert "primer producto" in result["response"].lower()
+    assert "deseas agregar un producto a tu inventario" in result["response"].lower()
 
     result = service.handle_message(phone, "Pulsera coral")
-    assert "costo" in result["response"].lower()
-
-    result = service.handle_message(phone, "12500")
     assert "precio" in result["response"].lower()
 
     result = service.handle_message(phone, "25000")
@@ -122,7 +119,10 @@ def test_onboarding_service_creates_tenant_and_first_product(monkeypatch):
     assert result["metadata"]["tenant_created"] is True
     assert result["metadata"]["product_created"] is True
     assert "cargar stock" in result["response"].lower()
-    assert "- registrar ventas" not in result["response"].lower()
+    assert "ej: *agrega 10 unidades de pulsera coral*" in result["response"].lower()
+    assert "cuando cargues stock, tambien vas a poder" in result["response"].lower()
+    assert "ej: *vendi 2 pulsera coral*" in result["response"].lower()
+    assert "ej: *mostrame mi catalogo*" in result["response"].lower()
 
     assert len(fake_tenants_service.created_tenants) == 1
     created = fake_tenants_service.created_tenants[0]
@@ -134,11 +134,45 @@ def test_onboarding_service_creates_tenant_and_first_product(monkeypatch):
     assert "first_goal" not in created["extra_config"]
     assert "business_type" not in created["extra_config"]
     assert created["extra_config"]["first_product_name"] == "Pulsera coral"
+    assert created["extra_config"]["first_product_cost_cents"] == 0
 
     assert len(fake_products_service.created_products) == 1
     created_product = fake_products_service.created_products[0]
     assert created_product["phone"] == phone
     assert created_product["name"] == "Pulsera coral"
     assert created_product["sku"] == "PULSERA-CORAL"
-    assert created_product["unit_cost_cents"] == 1250000
+    assert created_product["unit_cost_cents"] == 0
     assert created_product["unit_price_cents"] == 2500000
+
+
+def test_onboarding_service_normalizes_conversational_product_name(monkeypatch):
+    phone = "+5491112345679"
+    complete_onboarding_session(phone)
+    fake_tenants_service = _FakeTenantsService()
+    fake_products_service = _FakeProductsService()
+    service = OnboardingService(fake_tenants_service, fake_products_service)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _tenant_scope(_phone):
+        yield
+
+    monkeypatch.setattr("backend.services.onboarding_service.tenant_scope", _tenant_scope)
+
+    service.handle_message(phone, "hola")
+    service.handle_message(phone, "Si")
+    service.handle_message(phone, "Sofia")
+    service.handle_message(phone, "Mi tienda")
+    service.handle_message(phone, "ARS")
+    service.handle_message(phone, "Si")
+
+    result = service.handle_message(phone, "Vendo medias")
+    assert "precio de venta" in result["response"].lower()
+
+    service.handle_message(phone, "24000")
+
+    created_product = fake_products_service.created_products[0]
+    assert created_product["name"] == "medias"
+    assert created_product["sku"] == "MEDIAS"
+    assert created_product["unit_cost_cents"] == 0

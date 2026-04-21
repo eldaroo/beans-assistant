@@ -40,7 +40,7 @@ class OnboardingService:
 
     def _create_first_product(self, phone: str, config: dict) -> bool:
         product_name = config.get("first_product_name")
-        unit_cost_cents = config.get("first_product_cost_cents")
+        unit_cost_cents = config.get("first_product_cost_cents", 0)
         unit_price_cents = config.get("first_product_price_cents")
 
         if not product_name or unit_cost_cents is None or unit_price_cents is None:

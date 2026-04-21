@@ -15,7 +15,6 @@ def test_onboarding_api_exposes_structured_messages(monkeypatch):
         lambda phone, message, sender_name=None: {
             "response": "Bienvenida fallback",
             "messages": [
-                {"type": "image", "asset_key": "onboarding_welcome", "caption": "Beans assistant"},
                 {"type": "text", "text": "Bienvenido al onboarding"},
             ],
             "metadata": {
@@ -33,7 +32,5 @@ def test_onboarding_api_exposes_structured_messages(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["response"] == "Bienvenida fallback"
-    assert payload["messages"][0]["type"] == "image"
-    assert payload["messages"][0]["asset_key"] == "onboarding_welcome"
-    assert payload["messages"][1]["text"] == "Bienvenido al onboarding"
-
+    assert payload["messages"][0]["type"] == "text"
+    assert payload["messages"][0]["text"] == "Bienvenido al onboarding"
