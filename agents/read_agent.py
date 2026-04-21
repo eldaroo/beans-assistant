@@ -13,7 +13,7 @@ from typing import Dict, Any, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
-from database_config import fetch_all, fetch_one
+from database_config import USE_POSTGRES, fetch_all, fetch_one
 import unicodedata
 
 from .state import AgentState
@@ -224,6 +224,12 @@ def generate_profit_query(entities: dict) -> str:
 
 def generate_sales_query(entities: dict) -> str:
     """Generate SQL for sales history queries."""
+    item_aggregation = (
+        "STRING_AGG(p.name || ' (' || CAST(si.quantity AS TEXT) || ')', ', ')"
+        if USE_POSTGRES
+        else "GROUP_CONCAT(p.name || ' (' || si.quantity || ')', ', ')"
+    )
+
     return """
     SELECT
         s.id,
@@ -231,14 +237,14 @@ def generate_sales_query(entities: dict) -> str:
         s.total_amount_cents / 100.0 as total_usd,
         s.status,
         s.created_at,
-        GROUP_CONCAT(p.name || ' (' || si.quantity || ')') as items
+        {item_aggregation} as items
     FROM sales s
     LEFT JOIN sale_items si ON s.id = si.sale_id
     LEFT JOIN products p ON si.product_id = p.id
     GROUP BY s.id
     ORDER BY s.created_at DESC
     LIMIT 10
-    """
+    """.format(item_aggregation=item_aggregation)
 
 
 def generate_expense_query(entities: dict) -> str:
@@ -305,18 +311,8 @@ def format_stock_result(rows) -> str:
     if not rows:
         return "No hay productos en el inventario."
 
-    # Filter only bracelets (pulseras) if that's what was asked
-    # Check if all results are bracelets (case-insensitive)
-    bracelet_rows = [r for r in rows if "pulsera" in r["name"].lower() or "bracelet" in r["name"].lower()]
-
-    if bracelet_rows and len(bracelet_rows) < len(rows):
-        # User probably asked about bracelets specifically
-        rows_to_show = bracelet_rows
-    else:
-        rows_to_show = rows
-
     lines = ["*📦 Stock disponible:*\n"]
-    for row in rows_to_show:
+    for row in rows:
         name = row["name"]
         qty = row["stock_qty"]
         lines.append(f"• {name}: *{qty}* unidades")
