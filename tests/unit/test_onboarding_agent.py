@@ -1,27 +1,23 @@
 from onboarding_agent import (
-    OnboardingSession,
     complete_onboarding_session,
     create_onboarding_session,
     is_in_onboarding,
 )
 
 
-def test_onboarding_requires_explicit_confirmation_before_advancing():
+def test_onboarding_starts_with_welcome_and_first_real_question():
     phone = "+5491112345678"
     session = create_onboarding_session(phone)
+    intro_payload = session.get_intro_payload()
 
     assert is_in_onboarding(phone)
-    assert "bienvenido" in session.get_next_message().lower()
-    assert "responde *si* para empezar" in session.get_next_message().lower()
+    assert "bienvenido" in intro_payload["response"].lower()
+    assert "ventas, stock y gastos" in intro_payload["response"].lower()
+    assert "cómo te gustaría que te llame" in intro_payload["response"].lower()
 
-    complete, next_payload = session.process_response("hola")
+    complete, next_payload = session.process_response("Dario")
     assert not complete
-    assert session.current_step.value == "welcome"
-    assert "responde *si*" in next_payload["response"].lower()
-
-    complete, next_payload = session.process_response("Si")
-    assert not complete
-    assert "tu nombre" in next_payload["response"].lower()
+    assert "cómo se llama tu negocio" in next_payload["response"].lower()
 
     assert is_in_onboarding(phone)
     complete_onboarding_session(phone)
@@ -31,13 +27,9 @@ def test_onboarding_flow_collects_business_and_first_product_data():
     phone = "+5491112345678"
     session = create_onboarding_session(phone)
 
-    complete, next_payload = session.process_response("Si")
-    assert not complete
-    assert "tu nombre" in next_payload["response"].lower()
-
     complete, next_payload = session.process_response("Sofia")
     assert not complete
-    assert "nombre de tu negocio" in next_payload["response"].lower()
+    assert "cómo se llama tu negocio" in next_payload["response"].lower()
 
     complete, next_payload = session.process_response("Mi tienda")
     assert not complete
@@ -45,11 +37,8 @@ def test_onboarding_flow_collects_business_and_first_product_data():
 
     complete, next_payload = session.process_response("ARS")
     assert not complete
-    assert "queda asi" in next_payload["response"].lower()
-
-    complete, next_payload = session.process_response("Si")
-    assert not complete
-    assert "deseas agregar un producto a tu inventario" in next_payload["response"].lower()
+    assert "ya tengo lo básico de tu negocio" in next_payload["response"].lower()
+    assert "cómo se llama" in next_payload["response"].lower()
 
     complete, next_payload = session.process_response("Pulsera coral")
     assert not complete
@@ -75,22 +64,18 @@ def test_onboarding_flow_collects_business_and_first_product_data():
     assert config["first_product_price_cents"] == 2500000
     assert "first_goal" not in config
     assert "business_type" not in config
-    assert "responde si para empezar" in config["prompts"]["welcome_message"].lower()
+    assert "ventas, stock y gastos" in config["prompts"]["welcome_message"].lower()
 
 
 def test_onboarding_amount_parser_accepts_decimals_in_major_units():
     phone = "+5491112345000"
     session = create_onboarding_session(phone)
 
-    complete, next_payload = session.process_response("Si")
-    assert not complete
     complete, next_payload = session.process_response("Sofia")
     assert not complete
     complete, next_payload = session.process_response("Mi tienda")
     assert not complete
     complete, next_payload = session.process_response("ARS")
-    assert not complete
-    complete, next_payload = session.process_response("Si")
     assert not complete
     complete, next_payload = session.process_response("Pulsera coral")
     assert not complete
@@ -109,15 +94,11 @@ def test_onboarding_normalizes_conversational_product_name_answers():
     phone = "+5491112345001"
     session = create_onboarding_session(phone)
 
-    complete, next_payload = session.process_response("Si")
-    assert not complete
     complete, next_payload = session.process_response("Sofia")
     assert not complete
     complete, next_payload = session.process_response("Mi tienda")
     assert not complete
     complete, next_payload = session.process_response("ARS")
-    assert not complete
-    complete, next_payload = session.process_response("Si")
     assert not complete
 
     complete, next_payload = session.process_response("Vendo medias")

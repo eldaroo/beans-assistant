@@ -90,7 +90,7 @@ class OnboardingService:
         session = get_onboarding_session(normalized_phone)
         if session is None:
             session = create_onboarding_session(normalized_phone)
-            payload = session.get_response_payload()
+            payload = session.get_intro_payload()
             return {
                 "response": payload["response"],
                 "messages": payload.get("messages"),

@@ -66,13 +66,14 @@ def test_onboarding_service_starts_with_text_welcome():
 
     result = service.handle_message(phone, "hola")
     assert result["metadata"]["onboarding_complete"] is False
-    assert result["metadata"]["step"] == "welcome"
+    assert result["metadata"]["step"] == "owner_name"
     assert result["metadata"]["phase"] == "setup"
     assert result["metadata"]["product_created"] is False
     assert "bienvenido" in result["response"].lower()
-    assert "responde *si* para empezar" in result["response"].lower()
+    assert "ventas, stock y gastos" in result["response"].lower()
+    assert "cómo te gustaría que te llame" in result["response"].lower()
     assert result["messages"][0]["type"] == "text"
-    assert "responde *si* para empezar" in result["messages"][0]["text"].lower()
+    assert "cómo te gustaría que te llame" in result["messages"][0]["text"].lower()
     assert fake_tenants_service.created_tenants == []
     assert fake_products_service.created_products == []
 
@@ -93,23 +94,17 @@ def test_onboarding_service_creates_tenant_and_first_product(monkeypatch):
     monkeypatch.setattr("backend.services.onboarding_service.tenant_scope", _tenant_scope)
 
     result = service.handle_message(phone, "hola")
-    assert result["metadata"]["step"] == "welcome"
-
-    result = service.handle_message(phone, "Si")
-    assert "tu nombre" in result["response"].lower()
+    assert result["metadata"]["step"] == "owner_name"
 
     result = service.handle_message(phone, "Sofia")
-    assert "nombre de tu negocio" in result["response"].lower()
+    assert "cómo se llama tu negocio" in result["response"].lower()
 
     result = service.handle_message(phone, "Mi tienda")
     assert "moneda" in result["response"].lower()
 
     result = service.handle_message(phone, "ARS")
-    assert "queda asi" in result["response"].lower()
-
-    result = service.handle_message(phone, "Si")
-    assert result["metadata"]["onboarding_complete"] is False
-    assert "deseas agregar un producto a tu inventario" in result["response"].lower()
+    assert "ya tengo lo básico de tu negocio" in result["response"].lower()
+    assert "cómo se llama" in result["response"].lower()
 
     result = service.handle_message(phone, "Pulsera coral")
     assert "precio" in result["response"].lower()
@@ -161,11 +156,9 @@ def test_onboarding_service_normalizes_conversational_product_name(monkeypatch):
     monkeypatch.setattr("backend.services.onboarding_service.tenant_scope", _tenant_scope)
 
     service.handle_message(phone, "hola")
-    service.handle_message(phone, "Si")
     service.handle_message(phone, "Sofia")
     service.handle_message(phone, "Mi tienda")
     service.handle_message(phone, "ARS")
-    service.handle_message(phone, "Si")
 
     result = service.handle_message(phone, "Vendo medias")
     assert "precio de venta" in result["response"].lower()

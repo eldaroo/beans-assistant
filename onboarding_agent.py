@@ -18,11 +18,9 @@ VALID_CURRENCIES = {"USD", "ARS", "EUR", "BRL"}
 class OnboardingStep(Enum):
     """Pasos del proceso de onboarding."""
 
-    WELCOME = "welcome"
     OWNER_NAME = "owner_name"
     BUSINESS_NAME = "business_name"
     CURRENCY = "currency"
-    CONFIRMATION = "confirmation"
     FIRST_PRODUCT_NAME = "first_product_name"
     FIRST_PRODUCT_PRICE = "first_product_price"
     COMPLETE = "complete"
@@ -33,7 +31,7 @@ class OnboardingSession:
 
     def __init__(self, phone_number: str):
         self.phone_number = phone_number
-        self.current_step = OnboardingStep.WELCOME
+        self.current_step = OnboardingStep.OWNER_NAME
         self.data: Dict[str, Any] = {}
 
     @staticmethod
@@ -124,11 +122,9 @@ class OnboardingSession:
 
     def current_phase(self) -> str:
         if self.current_step in {
-            OnboardingStep.WELCOME,
             OnboardingStep.OWNER_NAME,
             OnboardingStep.BUSINESS_NAME,
             OnboardingStep.CURRENCY,
-            OnboardingStep.CONFIRMATION,
         }:
             return "setup"
         if self.current_step in {
@@ -138,31 +134,29 @@ class OnboardingSession:
             return "catalog"
         return "ready"
 
-    def get_response_payload(self) -> dict:
-        message = self.get_next_message()
-        payload = {"response": message, "messages": None}
-
-        if self.current_step == OnboardingStep.WELCOME:
-            payload["messages"] = [
+    def get_intro_payload(self) -> dict:
+        message = f"{self._welcome_message()}\n\n{self._owner_name_message()}"
+        return {
+            "response": message,
+            "messages": [
                 {
                     "type": "text",
                     "text": message,
                 },
-            ]
+            ],
+        }
 
-        return payload
+    def get_response_payload(self) -> dict:
+        message = self.get_next_message()
+        return {"response": message, "messages": None}
 
     def get_next_message(self) -> str:
-        if self.current_step == OnboardingStep.WELCOME:
-            return self._welcome_message()
         if self.current_step == OnboardingStep.OWNER_NAME:
             return self._owner_name_message()
         if self.current_step == OnboardingStep.BUSINESS_NAME:
             return self._business_name_message()
         if self.current_step == OnboardingStep.CURRENCY:
             return self._currency_message()
-        if self.current_step == OnboardingStep.CONFIRMATION:
-            return self._confirmation_message()
         if self.current_step == OnboardingStep.FIRST_PRODUCT_NAME:
             return self._first_product_name_message()
         if self.current_step == OnboardingStep.FIRST_PRODUCT_PRICE:
@@ -173,24 +167,11 @@ class OnboardingSession:
         return "Error en el proceso de configuracion."
 
     def process_response(self, user_message: str) -> tuple[bool, dict]:
-        if self.current_step == OnboardingStep.WELCOME:
-            if self._is_affirmative(user_message):
-                self.current_step = OnboardingStep.OWNER_NAME
-                return False, self.get_response_payload()
-
-            return False, {
-                "response": (
-                    "Necesito que me confirmes para arrancar.\n\n"
-                    "Responde *Si* y seguimos con el paso 1 de 2."
-                ),
-                "messages": None,
-            }
-
         if self.current_step == OnboardingStep.OWNER_NAME:
             owner_name = self._clean_text(user_message)
             if not owner_name:
                 return False, {
-                    "response": "Todavia no me dijiste tu nombre. Escribilo y seguimos.",
+                    "response": "🙂 ¿Cómo te gustaría que te llame?",
                     "messages": None,
                 }
 
@@ -202,7 +183,7 @@ class OnboardingSession:
             business_name = self._clean_text(user_message)
             if not business_name:
                 return False, {
-                    "response": "Necesito el nombre de tu negocio para seguir.",
+                    "response": "✨ Decime el nombre de tu negocio y seguimos.",
                     "messages": None,
                 }
 
@@ -214,29 +195,14 @@ class OnboardingSession:
             currency = self._normalize_currency(user_message)
             if not currency:
                 return False, {
-                    "response": "Pasamela como uno de estos codigos: *USD, ARS, EUR o BRL*.",
+                    "response": "💵 Decime tu moneda usando uno de estos códigos: *USD, ARS, EUR o BRL*.",
                     "messages": None,
                 }
 
             self.data["currency"] = currency
-            self.current_step = OnboardingStep.CONFIRMATION
-            return False, self.get_response_payload()
-
-        if self.current_step == OnboardingStep.CONFIRMATION:
-            if self._is_affirmative(user_message):
-                self.current_step = OnboardingStep.FIRST_PRODUCT_NAME
-                return False, self.get_response_payload()
-
-            if self._is_negative(user_message):
-                self.current_step = OnboardingStep.WELCOME
-                self.data = {}
-                return False, {
-                    "response": "Dale, reiniciemos desde cero cuando quieras.",
-                    "messages": None,
-                }
-
+            self.current_step = OnboardingStep.FIRST_PRODUCT_NAME
             return False, {
-                "response": "Responde *Si* para seguir o *No* para arrancar de nuevo.",
+                "response": self._setup_complete_message(),
                 "messages": None,
             }
 
@@ -244,7 +210,7 @@ class OnboardingSession:
             product_name = self._normalize_product_name_answer(user_message)
             if not product_name:
                 return False, {
-                    "response": "Decime el nombre del primer producto para dejar tu catalogo listo.",
+                    "response": "📦 Decime el nombre de tu primer producto.",
                     "messages": None,
                 }
 
@@ -256,7 +222,7 @@ class OnboardingSession:
             amount = self._parse_amount_cents(user_message)
             if amount is None:
                 return False, {
-                    "response": "Pasame el precio solo como numero. Ejemplo: *25000*.",
+                    "response": "💸 Pasame el precio de venta solo como número. Ejemplo: *25000*.",
                     "messages": None,
                 }
 
@@ -269,42 +235,42 @@ class OnboardingSession:
     def _welcome_message(self) -> str:
         return (
             "👋 Bienvenido a *Beans assistant*.\n\n"
-            "Responde *Si* para empezar."
+            "Te ayudo a llevar ventas, stock y gastos por WhatsApp."
         )
 
     def _owner_name_message(self) -> str:
-        return "Tu nombre?"
+        return "🙂 ¿Cómo te gustaría que te llame?"
 
     def _business_name_message(self) -> str:
-        return "Nombre de tu negocio?"
+        owner_name = self.data.get("owner_name", "").strip()
+        prefix = f"Encantado, *{owner_name}*.\n\n" if owner_name else ""
+        return f"{prefix}✨ ¿Cómo se llama tu negocio?"
 
     def _currency_message(self) -> str:
         return (
-            "Moneda?\n"
-            "Responde: *USD, ARS, EUR o BRL*."
+            "💵 ¿Con qué moneda trabajás?\n"
+            "Podés responder: *USD, ARS, EUR o BRL*."
         )
 
-    def _confirmation_message(self) -> str:
+    def _setup_complete_message(self) -> str:
         return (
-            "Queda asi:\n\n"
+            "🙌 Ya tengo lo básico de tu negocio:\n\n"
             f"Negocio: *{self.data.get('business_name')}*\n"
             f"Nombre: *{self.data.get('owner_name')}*\n"
             f"Moneda: *{self.data.get('currency', 'USD')}*\n\n"
-            "Responde *Si* para seguir."
+            "Ahora vamos con tu primer producto.\n"
+            "📦 ¿Cómo se llama?"
         )
 
     def _first_product_name_message(self) -> str:
-        return (
-            "Deseas agregar un producto a tu inventario?\n\n"
-            "Decime el nombre del primero."
-        )
+        return "📦 ¿Cómo se llama tu primer producto?"
 
     def _first_product_price_message(self) -> str:
         product_name = self.data.get("first_product_name", "ese producto")
         return (
-            f"Perfecto, agregamos *{product_name}*.\n\n"
-            "Cual es el *precio de venta*?\n"
-            "Pasamelo solo como numero."
+            f"✨ Perfecto, ya anoté *{product_name}*.\n\n"
+            "¿Cuál es el *precio de venta*?\n"
+            "Pasamelo solo como número."
         )
 
     def _complete_message(self) -> str:
@@ -345,7 +311,7 @@ class OnboardingSession:
                     "Ayudas con ventas, inventario, gastos y analisis de ganancias."
                 ),
                 "welcome_message": (
-                    "Bienvenido a Beans assistant. Responde Si para empezar."
+                    "Bienvenido a Beans assistant. Te ayudo a llevar ventas, stock y gastos por WhatsApp."
                 ),
             },
             "features": {
