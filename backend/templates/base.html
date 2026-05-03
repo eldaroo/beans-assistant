@@ -1,12 +1,18 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Beans&Co Admin{% endblock %}</title>
+    <title>{% block title %}Bitácora AI{% endblock %}</title>
 
     <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Brand font (Inter, single family). Self-hosting is the future direction
+         per beans-typography rule 1; for now the CDN payload is acceptable. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 
     <!-- Alpine.js CDN -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -14,48 +20,317 @@
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+    <!--
+      Brand tokens. Two-layer system per beans-color-system:
+        - Primitives (coffee, cream, jade, gold, neutrals)
+        - Semantic (--color-bg, --color-surface, --color-brand, --color-accent, --color-highlight, status, glows, gradients)
+      Layered shadow recipe per beans-layout-spacing rule 6.
+      Motion easing tokens per beans-motion rule 3.
+    -->
     <style>
+        :root {
+            /* primitives: coffee (brand), raised chroma vs first pass */
+            --color-coffee-50:  oklch(0.97 0.02 55);
+            --color-coffee-100: oklch(0.93 0.04 55);
+            --color-coffee-300: oklch(0.72 0.09 55);
+            --color-coffee-500: oklch(0.50 0.13 55);
+            --color-coffee-700: oklch(0.34 0.10 55);
+            --color-coffee-900: oklch(0.20 0.05 55);
+
+            /* primitives: cream (surfaces) */
+            --color-cream-50:  oklch(0.985 0.012 80);
+            --color-cream-100: oklch(0.965 0.020 80);
+            --color-cream-200: oklch(0.93  0.030 80);
+            --color-cream-300: oklch(0.86  0.035 80);
+
+            /* primitives: jade (accent, the AI voice) */
+            --color-jade-300: oklch(0.78 0.10 175);
+            --color-jade-500: oklch(0.62 0.13 175);
+            --color-jade-700: oklch(0.45 0.11 175);
+
+            /* primitives: gold (highlight, the rare moment) */
+            --color-gold-300: oklch(0.88 0.10 85);
+            --color-gold-500: oklch(0.78 0.14 85);
+            --color-gold-700: oklch(0.62 0.13 85);
+
+            /* semantic: surfaces and text */
+            --color-bg:             var(--color-cream-50);
+            --color-bg-subtle:      var(--color-cream-100);
+            --color-surface:        oklch(0.995 0.005 80);
+            --color-surface-raised: oklch(1 0 0);
+            --color-border:         var(--color-cream-200);
+            --color-border-strong:  var(--color-cream-300);
+            --color-text:           var(--color-coffee-900);
+            --color-text-muted:     var(--color-coffee-700);
+            --color-text-subtle:    var(--color-coffee-300);
+
+            /* semantic: brand, accent, highlight */
+            --color-brand:          var(--color-coffee-500);
+            --color-brand-hover:    oklch(0.45 0.14 55);
+            --color-brand-fg:       var(--color-cream-50);
+            --color-accent:         var(--color-jade-500);
+            --color-accent-hover:   oklch(0.66 0.14 175);
+            --color-accent-fg:      oklch(0.99 0.01 175);
+            --color-highlight:      var(--color-gold-500);
+            --color-highlight-fg:   oklch(0.25 0.05 85);
+
+            /* semantic: status (raised chroma) */
+            --color-success:        var(--color-jade-500);
+            --color-success-bg:     oklch(0.94 0.04 175);
+            --color-warning:        oklch(0.76 0.16 75);
+            --color-warning-bg:     oklch(0.96 0.06 75);
+            --color-danger:         oklch(0.58 0.20 28);
+            --color-danger-bg:      oklch(0.96 0.05 28);
+            --color-info:           oklch(0.65 0.10 230);
+            --color-focus-ring:     var(--color-jade-500);
+
+            /* gradients: used only on chat avatar halo + primary CTA hover */
+            --gradient-brand:        linear-gradient(135deg, oklch(0.50 0.13 55), oklch(0.55 0.14 65));
+            --gradient-accent-halo:  radial-gradient(circle at 30% 30%, oklch(0.72 0.13 175 / 0.45), transparent 70%);
+
+            /* glow tokens (focus, active assistant): color-mix for clean theme tinting */
+            --color-glow-accent: color-mix(in oklch, var(--color-accent) 40%, transparent);
+            --color-glow-brand:  color-mix(in oklch, var(--color-brand)  30%, transparent);
+            --color-glow-focus:  color-mix(in oklch, var(--color-accent) 35%, transparent);
+            --color-glow-danger: color-mix(in oklch, var(--color-danger) 35%, transparent);
+
+            /* layered shadow recipe (warm-tinted, low alpha) */
+            --shadow-card:     0 1px 0 oklch(0.20 0.01 70 / 0.04),
+                               0 4px 12px -2px oklch(0.20 0.01 70 / 0.06);
+            --shadow-raised:   0 2px 0 oklch(0.20 0.01 70 / 0.04),
+                               0 8px 24px -4px oklch(0.20 0.01 70 / 0.10);
+            --shadow-floating: 0 4px 0 oklch(0.20 0.01 70 / 0.05),
+                               0 16px 40px -8px oklch(0.20 0.01 70 / 0.16);
+
+            /* motion easing tokens (beans-motion rule 3) */
+            --ease-out:    cubic-bezier(0.2, 0, 0.2, 1);
+            --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+            /* type */
+            --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        [data-theme="dark"] {
+            --color-bg:             oklch(0.20 0.012 70);
+            --color-bg-subtle:      oklch(0.24 0.014 70);
+            --color-surface:        oklch(0.26 0.016 70);
+            --color-surface-raised: oklch(0.30 0.020 70);
+            --color-border:         oklch(0.34 0.022 70);
+            --color-border-strong:  oklch(0.42 0.025 70);
+            --color-text:           oklch(0.96 0.012 80);
+            --color-text-muted:     oklch(0.80 0.018 80);
+            --color-text-subtle:    oklch(0.62 0.018 80);
+            --color-brand:          oklch(0.68 0.12 55);
+            --color-brand-hover:    oklch(0.72 0.13 55);
+            --color-brand-fg:       oklch(0.20 0.012 70);
+            --color-accent:         oklch(0.70 0.13 175);
+            --color-accent-hover:   oklch(0.74 0.13 175);
+            --color-accent-fg:      oklch(0.20 0.012 70);
+            --color-highlight:      oklch(0.82 0.14 85);
+            --color-highlight-fg:   oklch(0.20 0.05 85);
+            --color-success:        oklch(0.70 0.13 175);
+            --color-success-bg:     oklch(0.32 0.06 175);
+            --color-warning:        oklch(0.80 0.16 75);
+            --color-warning-bg:     oklch(0.32 0.08 75);
+            --color-danger:         oklch(0.65 0.20 28);
+            --color-danger-bg:      oklch(0.32 0.10 28);
+            --color-info:           oklch(0.72 0.10 230);
+            --color-focus-ring:     oklch(0.70 0.13 175);
+            --gradient-brand:       linear-gradient(135deg, oklch(0.55 0.13 55), oklch(0.62 0.14 65));
+            --gradient-accent-halo: radial-gradient(circle at 30% 30%, oklch(0.74 0.13 175 / 0.50), transparent 70%);
+            --shadow-card:     0 1px 0 oklch(0 0 0 / 0.20),
+                               0 4px 12px -2px oklch(0 0 0 / 0.30);
+            --shadow-raised:   0 2px 0 oklch(0 0 0 / 0.30),
+                               0 8px 24px -4px oklch(0 0 0 / 0.40);
+            --shadow-floating: 0 4px 0 oklch(0 0 0 / 0.40),
+                               0 16px 40px -8px oklch(0 0 0 / 0.50);
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--color-bg);
+            color: var(--color-text);
+            font-feature-settings: "ss01", "cv11";
+        }
+
         [x-cloak] { display: none !important; }
+
+        /* text-stat: KPI numbers, the dashboard's rhythm anchor.
+           32px on mobile, 36px from lg+. Tabular nums + ligatures off. */
+        .text-stat {
+            font-size: 2rem;
+            line-height: 1.05;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "liga" 0, "calt" 0, "ss01", "cv11";
+        }
+        @media (min-width: 1024px) {
+            .text-stat { font-size: 2.25rem; }
+        }
+
+        /* Ledger metadata: 12px, slight positive tracking, subtle color. */
+        .text-ledger {
+            font-size: 0.75rem;
+            line-height: 1.5;
+            letter-spacing: 0.02em;
+            color: var(--color-text-subtle);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Named motion patterns from beans-motion. */
+        .hover-lift {
+            transition: transform 150ms var(--ease-out),
+                        border-color 150ms var(--ease-out),
+                        box-shadow 150ms var(--ease-out);
+        }
+        .hover-lift:hover {
+            transform: translateY(-1px);
+            border-color: var(--color-border-strong);
+            box-shadow: var(--shadow-raised);
+        }
+
+        .focus-bloom:focus-visible {
+            outline: 2px solid transparent;
+            outline-offset: 2px;
+            box-shadow: 0 0 0 3px var(--color-glow-accent);
+            transition: box-shadow 100ms var(--ease-out);
+        }
+
+        /* agent-pulse: only allowed loop. Drives the chat avatar halo when
+           the timonel is thinking or running a tool. */
+        @keyframes agent-pulse {
+            0%, 100% { transform: scale(1);    opacity: 1; }
+            50%      { transform: scale(1.04); opacity: 0.92; }
+        }
+        .agent-pulse {
+            animation: agent-pulse 1.6s var(--ease-in-out) infinite;
+            transform-origin: center;
+        }
+
+        /* Primary brand CTA: flat at rest, gradient on hover (rule 5). */
+        .btn-brand {
+            background-color: var(--color-brand);
+            color: var(--color-brand-fg);
+            transition: background-image 150ms var(--ease-out),
+                        background-color 150ms var(--ease-out),
+                        transform 150ms var(--ease-out),
+                        box-shadow 100ms var(--ease-out);
+        }
+        .btn-brand:hover:not(:disabled) {
+            background-image: var(--gradient-brand);
+            transform: translateY(-1px);
+        }
+        .btn-brand:focus-visible {
+            outline: 2px solid transparent;
+            outline-offset: 2px;
+            box-shadow: 0 0 0 3px var(--color-glow-accent);
+        }
+        .btn-brand:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Generic page focus fallback (forced-colors mode). */
+        :focus-visible {
+            outline: 2px solid var(--color-focus-ring);
+            outline-offset: 2px;
+        }
+
+        /* Sticky thead inset shadow: honest seam between header and rows
+           per beans-data-display rule 2. */
+        .sticky-thead {
+            box-shadow: inset 0 -1px 0 var(--color-border);
+        }
+
+        /* prefers-reduced-motion: short-circuit the two looping animations. */
+        @media (prefers-reduced-motion: reduce) {
+            .agent-pulse {
+                animation: none;
+                transform: none;
+                opacity: 1;
+            }
+            .beans-cursor {
+                animation: none !important;
+                opacity: 1 !important;
+            }
+            .hover-lift { transition: border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out); }
+            .hover-lift:hover { transform: none; }
+            .btn-brand:hover:not(:disabled) { transform: none; }
+        }
     </style>
 
+    <script>
+        // Map brand tokens into Tailwind so utilities like bg-brand work alongside arbitrary properties.
+        // text-stat is also exposed as a fontSize utility (CDN v3 supports the inline fontSize array).
+        if (window.tailwind) {
+            tailwind.config = {
+                theme: {
+                    extend: {
+                        colors: {
+                            brand: 'var(--color-brand)',
+                            'brand-hover': 'var(--color-brand-hover)',
+                            'brand-fg': 'var(--color-brand-fg)',
+                            accent: 'var(--color-accent)',
+                            'accent-hover': 'var(--color-accent-hover)',
+                            'accent-fg': 'var(--color-accent-fg)',
+                            highlight: 'var(--color-highlight)',
+                            'highlight-fg': 'var(--color-highlight-fg)',
+                            success: 'var(--color-success)',
+                            danger: 'var(--color-danger)',
+                            warning: 'var(--color-warning)',
+                            info: 'var(--color-info)',
+                        },
+                        fontFamily: {
+                            sans: 'var(--font-sans)',
+                        },
+                        fontSize: {
+                            // Page h1: 36px, weight 700, tight tracking.
+                            '3xl': ['2.25rem', { lineHeight: '1.15', letterSpacing: '-0.02em', fontWeight: '700' }],
+                        }
+                    }
+                }
+            };
+        }
+    </script>
+
     {% block extra_head %}
-    <!-- Chat Widget Styles -->
-    <link rel="stylesheet" href="/static/css/chat_widget.css">
+    <link rel="stylesheet" href="/static/css/chat_widget.css?v=20260502c">
     {% endblock %}
 </head>
-<body class="bg-gray-50">
-    <!-- Navigation -->
-    <nav class="bg-white shadow-sm border-b border-gray-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16">
-                <div class="flex">
-                    <div class="flex-shrink-0 flex items-center">
-                        <a href="/" class="text-2xl font-bold text-amber-600">Beans&Co</a>
-                        <span class="ml-3 text-sm text-gray-500">Multi-Tenant Admin</span>
-                    </div>
-                    <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
-                        <a href="/" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
-                            Tenants
-                        </a>
-                        <a href="/docs" class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium" target="_blank">
-                            API Docs
-                        </a>
-                    </div>
+<body>
+    <!-- Top navigation -->
+    <nav class="sticky top-0 z-30 h-14 border-b border-[color:var(--color-border)] bg-[color:var(--color-surface)]">
+        <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-14">
+                <div class="flex items-center gap-3">
+                    <a href="/" class="text-xl font-bold tracking-tight text-[color:var(--color-text)]" aria-label="Bitácora AI">
+                        Bitácora <span class="text-[color:var(--color-accent)]">AI</span>
+                    </a>
+                    <span class="hidden sm:inline text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)]">Tu negocio, anotado y al día.</span>
                 </div>
+                {% if request.state.user is defined and request.state.user %}
+                <div class="flex items-center gap-3">
+                    <span class="hidden sm:inline text-xs text-[color:var(--color-text-muted)]">{{ request.state.user.email }}</span>
+                    <form action="/auth/logout" method="post" class="inline">
+                        <button type="submit"
+                            class="text-xs text-[color:var(--color-text-muted)] hover:text-[color:var(--color-text)] underline-offset-4 hover:underline">
+                            Cerrar sesión
+                        </button>
+                    </form>
+                </div>
+                {% endif %}
             </div>
         </div>
     </nav>
 
-    <!-- Main Content -->
+    <!-- Main -->
     <main>
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
-    <footer class="bg-white border-t border-gray-200 mt-12">
-        <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-            <p class="text-center text-sm text-gray-500">
-                &copy; 2026 Beans&Co Multi-Tenant System. Powered by FastAPI.
+    <footer class="mt-16 border-t border-[color:var(--color-border)] bg-[color:var(--color-surface)]">
+        <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <p class="text-center text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)]">
+                Bitácora AI · Tu negocio, anotado y al día.
             </p>
         </div>
     </footer>
