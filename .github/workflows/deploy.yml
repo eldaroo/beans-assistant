@@ -93,6 +93,12 @@ jobs:
             POSTGRES_PASSWORD = "$POSTGRES_PASSWORD"
             BREVO_API_KEY     = "$BREVO_API_KEY"
 
+            GOOGLE_CLIENT_ID     = "$GOOGLE_CLIENT_ID"
+            GOOGLE_CLIENT_SECRET = "$GOOGLE_CLIENT_SECRET"
+            GOOGLE_REDIRECT_URI  = "https://tenants.mdlautomations.duckdns.org/auth/google/callback"
+            SESSION_SECRET       = "$SESSION_SECRET"
+            COOKIE_SECURE        = "true"
+
             GEMINI_MODEL       = "gemini-2.5-flash"
             GEMINI_TEMPERATURE = "0.2"
             USE_POSTGRES       = "true"
@@ -130,6 +136,9 @@ jobs:
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
             AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            SESSION_SECRET=${{ secrets.SESSION_SECRET }}
           deploy_meta: ${{ steps.meta.outputs.value }}
 
   deploy-whatsapp:
