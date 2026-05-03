@@ -43,6 +43,47 @@ def get_llm() -> ChatGoogleGenerativeAI:
     )
 
 
+def get_llm_for_tools() -> ChatGoogleGenerativeAI:
+    """
+    Configure a Gemini chat model ready to be bound with tools via
+    ``.bind_tools(...)`` for the M3.3 onboarding dispatcher.
+
+    Mirrors ``get_llm()`` env vars (GOOGLE_API_KEY, GEMINI_MODEL,
+    GEMINI_TEMPERATURE) but explicitly disables the
+    ``convert_system_message_to_human`` behavior so Gemini's
+    function-calling format works correctly. The agents/graph layer
+    keeps using ``get_llm()`` unchanged.
+    """
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY (or OPENAI_API_KEY) is not set")
+
+    requested_model = (
+        os.getenv("OPENAI_MODEL")
+        or os.getenv("GEMINI_MODEL")
+        or "gemini-2.5-flash"
+    )
+    supported_models = {
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash-exp",
+    }
+    model = requested_model if requested_model in supported_models else "gemini-2.5-flash"
+
+    temperature = float(
+        os.getenv("OPENAI_TEMPERATURE")
+        or os.getenv("GEMINI_TEMPERATURE")
+        or "0.2"
+    )
+
+    return ChatGoogleGenerativeAI(
+        model=model,
+        temperature=temperature,
+        google_api_key=api_key,
+        convert_system_message_to_human=False,
+    )
+
+
 def get_llm_cheap() -> ChatGoogleGenerativeAI:
     """
     Get a fast LLM for simple tasks like disambiguation.
