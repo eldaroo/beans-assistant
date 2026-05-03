@@ -71,7 +71,7 @@ class ProductResponse(BaseModel):
     name: str
     description: Optional[str]
     unit_cost_cents: int
-    unit_price_cents: int
+    unit_price_cents: Optional[int]
     is_active: bool
     created_at: str
 

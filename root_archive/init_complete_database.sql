@@ -20,7 +20,7 @@ CREATE TABLE products (
   name TEXT NOT NULL,
   description TEXT,
   unit_cost_cents INTEGER NOT NULL CHECK (unit_cost_cents >= 0),
-  unit_price_cents INTEGER NOT NULL CHECK (unit_price_cents >= 0),
+  unit_price_cents INTEGER CHECK (unit_price_cents IS NULL OR unit_price_cents >= 0),
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
