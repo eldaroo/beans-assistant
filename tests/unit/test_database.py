@@ -13,6 +13,7 @@ Total: 30 tests
 import pytest
 from database import (
     register_product,
+    register_product_with_stock,
     add_stock,
     register_sale,
     register_expense,
@@ -116,6 +117,137 @@ class TestProductRegistration:
 
         row = fetch_one("SELECT * FROM products WHERE sku = ?", ("ZERO-COST-001",))
         assert row["unit_cost_cents"] == 0
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestRegisterProductWithStock:
+    """Tests for register_product_with_stock() atomic function."""
+
+    def test_creates_product_and_stock_movement(self, test_db):
+        result = register_product_with_stock({
+            "sku": "BC-MANZ",
+            "name": "Manzanas",
+            "initial_stock": 15,
+        })
+
+        assert result["sku"] == "BC-MANZ"
+        assert result["name"] == "Manzanas"
+        assert result["initial_stock"] == 15
+        assert result["current_stock"] == 15
+        assert isinstance(result["product_id"], int)
+
+        product = fetch_one("SELECT * FROM products WHERE sku = ?", ("BC-MANZ",))
+        assert product is not None
+        assert product["unit_price_cents"] is None
+        assert product["unit_cost_cents"] == 0
+        assert product["is_active"] == 1
+
+        movement = fetch_one(
+            "SELECT * FROM stock_movements WHERE product_id = ?",
+            (result["product_id"],),
+        )
+        assert movement is not None
+        assert movement["movement_type"] == "IN"
+        assert movement["quantity"] == 15
+        assert movement["reason"] == "Entrada inicial"
+
+    def test_accepts_explicit_price_and_cost(self, test_db):
+        result = register_product_with_stock({
+            "sku": "BC-PEAR",
+            "name": "Peras",
+            "initial_stock": 10,
+            "unit_price_cents": 200,
+            "unit_cost_cents": 80,
+        })
+
+        product = fetch_one("SELECT * FROM products WHERE sku = ?", ("BC-PEAR",))
+        assert product["unit_price_cents"] == 200
+        assert product["unit_cost_cents"] == 80
+        assert result["initial_stock"] == 10
+
+    def test_rejects_zero_initial_stock(self, test_db):
+        with pytest.raises(ValueError, match="initial_stock"):
+            register_product_with_stock({
+                "sku": "BC-ZERO",
+                "name": "Zero",
+                "initial_stock": 0,
+            })
+
+        # Producto no debe existir
+        assert fetch_one("SELECT * FROM products WHERE sku = ?", ("BC-ZERO",)) is None
+
+    def test_rejects_duplicate_sku(self, test_db):
+        register_product_with_stock({
+            "sku": "BC-DUP",
+            "name": "Dup",
+            "initial_stock": 5,
+        })
+
+        with pytest.raises(ValueError, match="ya existe"):
+            register_product_with_stock({
+                "sku": "BC-DUP",
+                "name": "Dup2",
+                "initial_stock": 7,
+            })
+
+    def test_rollback_on_stock_failure(self, test_db, monkeypatch):
+        """Si el INSERT del stock_movement falla, el producto debe rollback."""
+        import database
+
+        original_get_conn = database.get_conn
+
+        class FailingConn:
+            """Wrapper que delega excepto en stock_movements INSERT."""
+
+            def __init__(self, real_conn):
+                self._real = real_conn
+
+            def execute(self, query, *args, **kwargs):
+                if "stock_movements" in query and "INSERT" in query:
+                    raise RuntimeError("simulated stock insert failure")
+                return self._real.execute(query, *args, **kwargs)
+
+            def commit(self):
+                self._real.commit()
+
+            def rollback(self):
+                self._real.rollback()
+
+            def close(self):
+                self._real.close()
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def failing_get_conn():
+            real_cm = original_get_conn()
+            real_conn = real_cm.__enter__()
+            wrapper = FailingConn(real_conn)
+            try:
+                yield wrapper
+                real_cm.__exit__(None, None, None)
+            except Exception:
+                real_cm.__exit__(RuntimeError, RuntimeError("rollback"), None)
+                raise
+
+        monkeypatch.setattr("database.get_conn", failing_get_conn)
+
+        with pytest.raises(RuntimeError, match="simulated stock insert failure"):
+            register_product_with_stock({
+                "sku": "BC-ROLLBACK",
+                "name": "Rollback",
+                "initial_stock": 5,
+            })
+
+        # Restore unpatched conn for verification
+        monkeypatch.setattr("database.get_conn", original_get_conn)
+
+        # Producto NO debe existir tras rollback
+        assert fetch_one("SELECT * FROM products WHERE sku = ?", ("BC-ROLLBACK",)) is None
 
 
 # ==============================================================================

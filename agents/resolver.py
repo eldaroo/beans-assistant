@@ -194,6 +194,66 @@ def create_resolver_agent(llm=None):
             if "amount" in resolved and "amount_cents" not in resolved:
                 resolved["amount_cents"] = int(resolved["amount"] * 100)
 
+            # If ADD_STOCK references a product that doesn't exist AND we already
+            # have a quantity, surface this as a proposal to create the product
+            # (and register the stock entry on confirmation), instead of falling
+            # through to validate_required_fields which would mark product_id
+            # and quantity as missing.
+            if operation_type == "ADD_STOCK":
+                propose = None
+
+                top_level_unresolved = (
+                    "resolution_error" in resolved
+                    and "quantity" in resolved
+                )
+                single_item_unresolved = (
+                    "items" in resolved
+                    and len(resolved.get("items", [])) == 1
+                    and "resolution_error" in resolved["items"][0]
+                    and "quantity" in resolved["items"][0]
+                )
+
+                if top_level_unresolved:
+                    candidate = (
+                        entities.get("product_ref")
+                        or entities.get("sku")
+                        or "el producto"
+                    )
+                    propose = {
+                        "candidate_name": candidate,
+                        "quantity": resolved["quantity"],
+                    }
+                elif single_item_unresolved:
+                    item = resolved["items"][0]
+                    candidate = (
+                        item.get("product_ref")
+                        or item.get("sku")
+                        or "el producto"
+                    )
+                    propose = {
+                        "candidate_name": candidate,
+                        "quantity": item["quantity"],
+                    }
+
+                if propose:
+                    return {
+                        "intent": "PROPOSE_PRODUCT_CREATION",
+                        "operation_type": None,
+                        "missing_fields": [],
+                        "normalized_entities": propose,
+                        "final_answer": (
+                            f"No tengo *{propose['candidate_name']}* en el catalogo.\n"
+                            f"La creo y registro {propose['quantity']} unidades de entrada?"
+                        ),
+                        "messages": [{
+                            "role": "assistant",
+                            "content": (
+                                f"[Resolver] Producto '{propose['candidate_name']}' "
+                                f"no encontrado. Propongo crear."
+                            )
+                        }]
+                    }
+
             # Validate required fields based on operation type
             missing_fields = validate_required_fields(operation_type, resolved)
 
@@ -988,6 +1048,13 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         if "product_id" not in entities:
             missing.append("product_id")
 
+    elif operation_type == "UPDATE_PRODUCT_PRICE":
+        # Need product_id (resolved from product_ref) and unit_price_cents
+        if "product_id" not in entities:
+            missing.append("product_id")
+        if "unit_price_cents" not in entities:
+            missing.append("unit_price_cents")
+
     return missing
 
 
@@ -1003,6 +1070,11 @@ def route_after_resolver(state: AgentState) -> str:
     """
     # If error or missing fields, go to final answer
     if state.get("error") or state.get("missing_fields"):
+        return "final_answer"
+
+    # Terminal intents emitted by the resolver (e.g., propose product creation
+    # when a stock entry references an unknown product) skip write_agent.
+    if state.get("intent") == "PROPOSE_PRODUCT_CREATION":
         return "final_answer"
 
     # Otherwise, go to write agent
