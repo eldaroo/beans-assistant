@@ -3,8 +3,13 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from backend.auth.dependencies import (
+    require_internal_or_admin,
+    require_role,
+    require_tenant_match,
+)
 from backend.models.schemas import SuccessResponse, TenantCreate, TenantResponse, TenantStats
 from backend.services.tenants_service import (
     TenantConflictError,
@@ -17,7 +22,7 @@ logger = logging.getLogger(__name__)
 tenants_service = TenantsService()
 
 
-@router.get("", response_model=List[TenantResponse])
+@router.get("", response_model=List[TenantResponse], dependencies=[Depends(require_role("admin"))])
 async def list_tenants(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -33,7 +38,7 @@ async def list_tenants(
         )
 
 
-@router.get("/by-lid/{lid}", response_model=TenantResponse)
+@router.get("/by-lid/{lid}", response_model=TenantResponse, dependencies=[Depends(require_internal_or_admin)])
 async def get_tenant_by_lid(lid: str):
     """Find a tenant by their WhatsApp linked-identity (LID)."""
     try:
@@ -45,7 +50,7 @@ async def get_tenant_by_lid(lid: str):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch tenant by LID")
 
 
-@router.post("/{phone}/whatsapp-lid", response_model=SuccessResponse)
+@router.post("/{phone}/whatsapp-lid", response_model=SuccessResponse, dependencies=[Depends(require_internal_or_admin)])
 async def set_whatsapp_lid(phone: str, body: dict):
     """Associate a WhatsApp LID with an existing tenant."""
     lid = body.get("lid", "").strip()
@@ -61,7 +66,7 @@ async def set_whatsapp_lid(phone: str, body: dict):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to set LID")
 
 
-@router.get("/{phone}", response_model=TenantResponse)
+@router.get("/{phone}", response_model=TenantResponse, dependencies=[Depends(require_tenant_match)])
 async def get_tenant(phone: str):
     """Get tenant details by phone number."""
     try:
@@ -79,7 +84,7 @@ async def get_tenant(phone: str):
         )
 
 
-@router.post("", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SuccessResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_internal_or_admin)])
 async def create_tenant(tenant: TenantCreate):
     """Create a new tenant."""
     logger.info(f"create_tenant: phone={tenant.phone_number}, name={tenant.business_name}")
@@ -105,7 +110,7 @@ async def create_tenant(tenant: TenantCreate):
         )
 
 
-@router.get("/{phone}/stats", response_model=TenantStats)
+@router.get("/{phone}/stats", response_model=TenantStats, dependencies=[Depends(require_tenant_match)])
 async def get_tenant_stats(phone: str):
     """Get tenant statistics."""
     try:
@@ -120,7 +125,7 @@ async def get_tenant_stats(phone: str):
         )
 
 
-@router.delete("/{phone}", response_model=SuccessResponse)
+@router.delete("/{phone}", response_model=SuccessResponse, dependencies=[Depends(require_role("admin"))])
 async def delete_tenant(phone: str):
     """Delete a tenant and all tenant data."""
     try:
