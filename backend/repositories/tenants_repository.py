@@ -24,6 +24,11 @@ class TenantsRepository:
     def get_tenant_config(self, phone: str) -> dict | None:
         return self.tenant_manager.get_tenant_config(phone)
 
+    def get_tenant_config_strict(self, phone: str) -> dict | None:
+        """Exact-match variant for portal reads where the caller has been
+        authorized against a specific phone. See TenantManager docstring."""
+        return self.tenant_manager.get_tenant_config_strict(phone)
+
     def create_tenant(
         self,
         phone: str,
