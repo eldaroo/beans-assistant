@@ -74,17 +74,12 @@
         'Comparar con la semana pasada'
     ];
 
-    // Onboarding-mode chips. M2 hardcodes both lists; M3 may swap them with
-    // a /api/onboarding/first-action call. Voseo, sentence case, no period.
-    var ONBOARDING_INITIAL_SUGGESTIONS = [
-        'Configurar mi negocio',
-        '¿Qué información necesitás de mí?',
-        'Probar primero con datos de ejemplo'
-    ];
-    var ONBOARDING_POST_REPLY_SUGGESTIONS = [
-        'Listo, seguimos',
-        'Cambiar mi respuesta anterior'
-    ];
+    // Onboarding-mode chips: intentionally empty (per Dario's UX feedback,
+    // 2026-05-04). The dispatcher now drives the conversation deterministically
+    // — every reply ends with a concrete next question, so chips would only
+    // distract or, worse, send a message Timonel doesn't know how to handle.
+    var ONBOARDING_INITIAL_SUGGESTIONS = [];
+    var ONBOARDING_POST_REPLY_SUGGESTIONS = [];
 
     /**
      * Naive keyword router for v1. Returns a `beans:navigate` detail or null.

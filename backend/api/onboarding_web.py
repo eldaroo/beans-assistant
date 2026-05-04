@@ -44,6 +44,8 @@ from backend.services.onboarding_llm_prompt import build_system_prompt
 from backend.services.onboarding_llm_tools import (
     TOOL_REGISTRY,
     ToolOk,
+    ConfirmAndCreateTenantArgs,
+    execute_confirm_and_create_tenant,
 )
 
 router = APIRouter()
@@ -80,6 +82,19 @@ _STEP_ORDER: tuple[tuple[str, str], ...] = (
     ("currency", "currency"),
     ("language", "language"),
 )
+
+# Hardcoded next-question copy. The dispatcher uses this instead of trusting
+# Gemini's second-turn text reply, which empirically (2026-05-04) regresses
+# to bare "Listo." despite the prompt rule asking it to chain. With this
+# table the post-capture reply is deterministic and one-line, so the user
+# only ever has to type the answer to whatever Timonel just asked.
+_NEXT_QUESTION_COPY: dict[str, str] = {
+    "business_name": "Cómo se llama tu negocio.",
+    "phone":         "Tu WhatsApp en formato internacional. Ejemplo: +5491155556666.",
+    "currency":      "Qué moneda usás. USD, ARS, EUR o AUD.",
+    "language":      "En qué idioma querés usar el sistema. Español o english.",
+}
+_REQUIRED_FIELDS: tuple[str, ...] = ("business_name", "phone", "currency", "language")
 
 
 def _infer_step(state: dict) -> str:
@@ -328,36 +343,82 @@ async def handle_onboarding_web(
                 if isinstance(rt, str):
                     redirect_to = rt
 
-            # Feed the tool result back to the LLM for the second call.
-            try:
-                tool_payload_json = json.dumps(result.model_dump(), default=str)
-            except Exception:
-                tool_payload_json = "{}"
-            messages.append(
-                ToolMessage(
-                    content=tool_payload_json,
-                    tool_call_id=tool_call_id or tool_name,
-                )
-            )
-
-        # Second LLM call: produce the user-facing reply with tool
-        # results in context. Best-effort; on failure we synthesize
-        # a minimal acknowledgement so the user is not left hanging.
+    # Deterministic post-tool-call response. We skip Gemini's second turn
+    # entirely for the capture path because empirically the model collapses
+    # to a bare "Listo." instead of chaining to the next question, regardless
+    # of how directive the system prompt is. The dispatcher knows the field
+    # order and the current state — that's enough to pick the next question
+    # and to auto-fire `confirm_and_create_tenant` when all four are in.
+    deterministic_reply: str | None = None
+    if raw_tool_calls:
         try:
-            ai_response = await asyncio.wait_for(
-                asyncio.to_thread(llm.invoke, messages),
-                timeout=_LLM_TIMEOUT_SECONDS,
+            refresh = repo.get(email)
+            state_after_now = (refresh.get("state") if refresh else state_before) or state_before
+        except Exception:
+            state_after_now = state_before
+
+        failures = [tc for tc in tool_call_metadata if tc.get("status") != "success"]
+        confirm_called = any(
+            tc.get("tool") == "confirm_and_create_tenant" for tc in tool_call_metadata
+        )
+
+        if failures:
+            payload = failures[0].get("payload") or {}
+            deterministic_reply = (
+                payload.get("message_es")
+                or "Hubo un problema. Probá de nuevo."
             )
-        except (asyncio.TimeoutError, Exception):
-            logger.exception("Gemini second-turn error; using fallback text")
+        elif confirm_called:
+            ok_card = next(
+                (tc for tc in tool_call_metadata if tc.get("tool") == "confirm_and_create_tenant"),
+                None,
+            )
+            deterministic_reply = (
+                (ok_card and ok_card.get("label_es"))
+                or "Listo, creé tu negocio en Bitácora AI."
+            )
+        else:
+            missing = [f for f in _REQUIRED_FIELDS if not state_after_now.get(f)]
+            if missing:
+                deterministic_reply = _NEXT_QUESTION_COPY[missing[0]]
+            else:
+                # All four required fields are captured but the LLM didn't
+                # call confirm in this turn. Server-side auto-confirm so the
+                # user doesn't have to nudge with another message.
+                try:
+                    confirm_result = execute_confirm_and_create_tenant(
+                        email, ConfirmAndCreateTenantArgs()
+                    )
+                    tool_call_metadata.append({
+                        "tool": "confirm_and_create_tenant",
+                        "status": "success" if getattr(confirm_result, "ok", False) else "failure",
+                        "label_es": (
+                            getattr(confirm_result, "label_es", None)
+                            or getattr(confirm_result, "message_es", "")
+                        ),
+                        "payload": confirm_result.model_dump(),
+                    })
+                    if isinstance(confirm_result, ToolOk):
+                        rt = confirm_result.captured.get("redirect_to")
+                        if isinstance(rt, str):
+                            redirect_to = rt
+                        deterministic_reply = confirm_result.label_es
+                    else:
+                        deterministic_reply = (
+                            getattr(confirm_result, "message_es", "")
+                            or "Hubo un problema al crear tu negocio. Probá de nuevo."
+                        )
+                except Exception:
+                    logger.exception("auto-confirm failed")
+                    deterministic_reply = (
+                        "Hubo un problema al crear tu negocio. Probá de nuevo."
+                    )
 
-            class _Stub:
-                content = "Listo."
-                tool_calls: list = []
-
-            ai_response = _Stub()
-
-    reply_text = _ai_text(ai_response) or "Listo."
+    if deterministic_reply is not None:
+        reply_text = deterministic_reply
+    else:
+        # No tool calls — the LLM produced a text reply (greeting / clarification).
+        reply_text = _ai_text(ai_response) or "Cómo se llama tu negocio."
 
     # Re-read state in case executors mutated it; persist the new
     # history + bumped turn count UNLESS the confirm path already
