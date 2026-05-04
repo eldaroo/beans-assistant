@@ -504,7 +504,15 @@
                         role: 'assistant',
                         kind: 'text',
                         html: renderMarkdown(displayReply),
-                        streaming: false
+                        // Start true so the cursor is visible from the first
+                        // render after push. The clear-after-600ms must mutate
+                        // via the reactive array index, not via this raw
+                        // reference — Alpine wraps the object once it lands in
+                        // self.messages and direct mutations on the closure
+                        // ref bypass the proxy, leaving the cursor visually
+                        // stuck on past bubbles when later re-renders expose
+                        // the stale state.
+                        streaming: true
                     };
                     if (cards && cards.length) {
                         msg.cards = cards;
@@ -513,11 +521,14 @@
                         self.messages.push(msg);
                     }
 
-                    // Briefly flag streaming so the cursor flashes.
                     self._setState('streaming', null);
-                    msg.streaming = true;
                     setTimeout(function () {
-                        msg.streaming = false;
+                        for (var k = 0; k < self.messages.length; k++) {
+                            if (self.messages[k] && self.messages[k].id === assistantId) {
+                                self.messages[k].streaming = false;
+                                break;
+                            }
+                        }
                         if (self.state === 'streaming') self._setState('idle', null);
                         // On llm_unavailable / rate_limited / db_error the input
                         // stays enabled and the state machine resets to idle so
