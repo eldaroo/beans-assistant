@@ -355,17 +355,28 @@ class TenantManager:
         """Get the database path for a tenant."""
         return str(self.get_tenant_path(phone_number) / "business.db")
 
+    def get_tenant_config_strict(self, phone_number: str) -> Optional[Dict[str, Any]]:
+        """
+        Strict variant of get_tenant_config. Returns the tenant config only
+        for an EXACT phone match — never alias-resolves Argentine +54/+549
+        variants. Use this on the user-facing portal where the caller is
+        already authorized against a specific phone (require_tenant_match);
+        any alias hop on read becomes a cross-tenant leak.
+        """
+        return self._get_tenant_config_for_phone(phone_number)
+
     def get_tenant_config(self, phone_number: str) -> Optional[Dict[str, Any]]:
         """
-        Get tenant configuration.
-
-        Args:
-            phone_number: Phone number
-
-        Returns:
-            Config dict or None if not found
+        Get tenant configuration with alias resolution. Used by the
+        WhatsApp bot path where inbound numbers come in messy formats.
+        Do NOT use for portal/dashboard reads; use get_tenant_config_strict.
         """
         resolved_phone = self.resolve_tenant_phone(phone_number)
+        if not resolved_phone:
+            return None
+        return self._get_tenant_config_for_phone(resolved_phone)
+
+    def _get_tenant_config_for_phone(self, resolved_phone: str) -> Optional[Dict[str, Any]]:
         if not resolved_phone:
             return None
 
