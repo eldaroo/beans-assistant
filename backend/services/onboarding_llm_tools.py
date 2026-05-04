@@ -372,6 +372,26 @@ def execute_confirm_and_create_tenant(
             message_es="Algo se rompió. Probá en un minuto.",
         )
 
+    schema_name = _phone_to_schema_name(phone)
+
+    # Provision the per-tenant schema WITH its tables BEFORE the main
+    # transaction. The previous version only ran `CREATE SCHEMA IF NOT
+    # EXISTS` here — leaving the schema empty. With search_path set to
+    # `tenant_X, public` on every read, queries against tables that
+    # didn't exist in tenant_X silently fell back to `public.products`
+    # / `public.sales`, leaking data from earlier tests across every new
+    # tenant's dashboard. Calling create_tenant_schema (idempotent: uses
+    # IF NOT EXISTS for every DDL) fixes the leak by giving the new
+    # tenant its own empty tables to land on first.
+    try:
+        from database_pg import create_tenant_schema as _create_schema
+        _create_schema(schema_name)
+    except Exception:
+        return ToolHardFail(
+            error="db_error",
+            message_es="Algo se rompió al preparar tu negocio. Probá en un minuto.",
+        )
+
     conn = repo._connect()
     try:
         try:
@@ -395,13 +415,6 @@ def execute_confirm_and_create_tenant(
                     """,
                     (phone, business_name, created_at, json.dumps(config)),
                 )
-
-                schema_name = _phone_to_schema_name(phone)
-                # Create the per-tenant schema. Bare CREATE SCHEMA IF NOT
-                # EXISTS uses a plain identifier; psycopg2 does not
-                # parametrize identifiers, but the sanitizer in
-                # _phone_to_schema_name keeps it to [0-9A-Za-z_].
-                cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"')
 
                 cur.execute(
                     """
