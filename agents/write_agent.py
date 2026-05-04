@@ -8,6 +8,7 @@ Responsibilities:
 - Summarize business impact after execution
 - NEVER use sql_db_query
 """
+import re
 from typing import Dict, Any
 from database_config import (
     register_sale,
@@ -57,6 +58,47 @@ def create_write_agent():
 
         # Check if we have missing required fields
         if missing_fields:
+            # Disambiguation seam: "agregame N productos a stock" reads to the
+            # router as ADD_STOCK with quantity=N and a missing product_ref,
+            # but the user's intent is genuinely ambiguous between
+            #   (a) add N units of one product (ADD_STOCK), and
+            #   (b) create N distinct products (REGISTER_PRODUCT × N).
+            # The generic "Me falta un dato: el producto" answers neither
+            # cleanly. Detect the pattern and ask the user to pick.
+            user_input = state.get("user_input") or ""
+            quantity = entities.get("quantity")
+            product_field_missing = any(
+                f in missing_fields for f in ("product_ref", "product_id", "items")
+            )
+            if (
+                operation_type == "ADD_STOCK"
+                and quantity is not None
+                and isinstance(quantity, (int, float))
+                and quantity >= 2
+                and product_field_missing
+                and re.search(
+                    r"\b" + re.escape(str(int(quantity))) + r"\s+(productos|articulos|artículos|items|cosas)\b",
+                    user_input,
+                    flags=re.IGNORECASE,
+                )
+            ):
+                disambiguation = (
+                    f"Tu mensaje es ambiguo. ¿Qué querés hacer?\n\n"
+                    f"• Agregar *{int(quantity)} unidades* de un producto existente "
+                    f"(decime el nombre)\n"
+                    f"• Crear *{int(quantity)} productos distintos* "
+                    f"(pasame los nombres separados por coma)"
+                )
+                return {
+                    "operation_result": None,
+                    "error": disambiguation,
+                    "final_answer": disambiguation,
+                    "messages": [{
+                        "role": "assistant",
+                        "content": "[Write Agent] ADD_STOCK / REGISTER_PRODUCT ambiguity"
+                    }]
+                }
+
             # Translate technical field names to user-friendly Spanish
             field_translations = {
                 "unit_price": "el precio de venta",
