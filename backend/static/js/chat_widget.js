@@ -426,13 +426,32 @@
                 this.send(clean);
             },
 
+            /**
+             * Onboarding bootstrap: silently POST a no-op turn so Timonel
+             * emits the first question (or the next missing field, if the
+             * pending row already has captures) without forcing the user
+             * to type or click anything. The trigger token "Hola" matches
+             * the dispatcher prompt's worked example, so Gemini routes to
+             * the text-only branch instead of trying to call a tool.
+             *
+             * Idempotent: bails the moment any message exists in the
+             * thread (including a seed-pushed user bubble).
+             */
+            bootstrapOpening: function () {
+                if (this.messages.length > 0) return;
+                if (!this.isOnboarding) return;
+                this.send('Hola', { hideUserBubble: true });
+            },
+
             // --- send + receive ---
-            send: function (raw) {
+            send: function (raw, opts) {
                 var text = (raw || '').trim();
                 if (!text) return;
                 if (this.state === 'thinking' || this.state === 'tool_running') return;
 
-                this.messages.push({ id: nextId(), role: 'user', kind: 'text', html: escapeHtml(text) });
+                if (!opts || !opts.hideUserBubble) {
+                    this.messages.push({ id: nextId(), role: 'user', kind: 'text', html: escapeHtml(text) });
+                }
                 this.input = '';
                 this.suggestions = [];
                 this._setState('thinking', null);

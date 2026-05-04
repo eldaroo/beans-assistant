@@ -267,13 +267,13 @@
         }
     </script>
 
-    <link rel="stylesheet" href="/static/css/chat_widget.css?v=20260504a">
+    <link rel="stylesheet" href="/static/css/chat_widget.css?v=20260504b">
 
     {# The chat factory (window.beansChat) lives in the same file the tenant
        dashboard uses. Standalone templates do NOT extend base.html, so the
        script include is required here too — without it the post-handoff chat
        shell crashes with "beansChat is not defined". #}
-    <script src="/static/js/chat_widget.js?v=20260504a"></script>
+    <script src="/static/js/chat_widget.js?v=20260504b"></script>
 </head>
 <body class="bg-[color:var(--color-bg)]">
 
@@ -348,35 +348,13 @@
                 </p>
             </div>
 
-            {# Act 3: hand-off — single chip + pre-focused input.
-               Per beans-first-action-by-agent rule 1: ONE chip, never a rail.
-               This chip is hardcoded for v1 (M3 will source it from
-               /api/onboarding/first-action). Click submits and triggers the
-               crossfade into the chat shell. #}
-            <div
-                class="w-full motion-safe:opacity-0 motion-safe:scale-[0.98]"
-                :class="act >= 3 && 'motion-safe:opacity-100 motion-safe:scale-100'"
-                style="transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out);">
-                <button
-                    type="button"
-                    @click="handoff('Configurar mi negocio')"
-                    :disabled="act < 3"
-                    class="hover-lift focus-bloom block w-full mb-3 rounded-full border border-[color:var(--color-highlight)]/40 bg-[color:var(--color-highlight)]/12 px-4 py-2 text-sm font-semibold text-[color:var(--color-text)] hover:bg-[color:var(--color-highlight)]/20">
-                    Configurar mi negocio
-                </button>
-                <form @submit.prevent="handoff(input)">
-                    <label for="spectacle-input" class="sr-only">Mensaje para Timonel</label>
-                    <input
-                        id="spectacle-input"
-                        x-ref="firstInput"
-                        x-model="input"
-                        type="text"
-                        :disabled="act < 3"
-                        placeholder="O contale a Timonel cómo arrancar"
-                        autocomplete="off"
-                        class="focus-bloom w-full rounded-md border border-[color:var(--color-border-strong)] bg-[color:var(--color-surface)] px-4 py-3 text-base text-[color:var(--color-text)] placeholder:text-[color:var(--color-text-subtle)]">
-                </form>
-            </div>
+            {# Act 3: auto-handoff — no chip, no input. Per Dario's UX
+               feedback (2026-05-04): forcing the user to choose between a
+               chip and an input field is friction. The greeting is the
+               whole spectacle; the chat shell takes over and asks the
+               first question directly. The handoff fires from run() at
+               the Act 3 timeout, so this slot just holds presence space
+               until the crossfade begins. #}
         </div>
     </section>
 
@@ -403,7 +381,11 @@
             class="zone-fade fixed inset-0 bg-[color:var(--color-bg)] z-30">
             <div
                 x-data="beansChat({ mode: 'onboarding', endpoint: '/api/onboarding/web' })"
-                x-init="$nextTick(() => seedFirstMessage(window.__beansOnboardingSeed || ''))"
+                x-init="$nextTick(() => {
+                    var seed = window.__beansOnboardingSeed || '';
+                    if (seed) seedFirstMessage(seed);
+                    else bootstrapOpening();
+                })"
                 x-ref="shell"
                 class="beans-chat mx-auto flex h-full w-full max-w-2xl flex-col">
 
@@ -571,13 +553,11 @@ function onboardingPage() {
             const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             if (reduced) {
                 // prefers-reduced-motion: collapse the choreography to a
-                // single-frame paint. The user can act on first frame.
+                // single-frame paint and hand off immediately.
                 this.typedGreeting = this.fullGreeting;
                 this.isTyping = false;
                 this.act = 3;
-                this.$nextTick(() => {
-                    if (this.$refs.firstInput) this.$refs.firstInput.focus();
-                });
+                this.handoff();
                 return;
             }
 
@@ -590,13 +570,13 @@ function onboardingPage() {
                 this._typeGreeting();
             }, 600);
 
-            // Act 3: hand-off — input + chip become interactive.
+            // Act 3: auto-handoff to the chat shell. No chip, no input — the
+            // shell mounts and bootstrapOpening() POSTs a silent trigger so
+            // Timonel emits the first question directly.
             // Greeting ~70 chars * 28ms = ~1.96s; +200ms buffer = ~2.4s mark.
             setTimeout(() => {
                 this.act = 3;
-                this.$nextTick(() => {
-                    if (this.$refs.firstInput) this.$refs.firstInput.focus();
-                });
+                this.handoff();
             }, 2400);
         },
 
@@ -628,14 +608,13 @@ function onboardingPage() {
         },
 
         handoff(text) {
-            const clean = (text || '').trim();
-            if (!clean) return;
             if (this.handedOff) return;
+            const clean = (text || '').trim();
 
-            // Capture the seed message on a window-scoped slot so the chat
-            // factory's init (which lives in a different Alpine scope) can
-            // pull it without ferrying through $root or props. Cleaner than
-            // an event listener race; the slot is read once and then dies.
+            // Empty seed is the auto-handoff path (no chip, no typed input).
+            // The chat shell mounts and calls bootstrapOpening() to elicit
+            // Timonel's first question silently. With a non-empty seed, the
+            // chat shell pushes the seed as a user bubble via seedFirstMessage.
             this.seedMessage = clean;
             window.__beansOnboardingSeed = clean;
             this._finishTyping();
