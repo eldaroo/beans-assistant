@@ -56,8 +56,20 @@ def _force_deterministic_env() -> None:
 
 
 def _load_cases() -> list[dict[str, Any]]:
+    """Load cases from every known golden file that exists on disk.
+
+    Missing files are skipped with a warning rather than failing the run:
+    some golden files (e.g. router_propose_confirm.json) live behind
+    unmerged feature branches and only appear once that feature ships.
+    Always require at least one file loaded so silent zero-case runs
+    cannot pass CI by accident.
+    """
     cases: list[dict[str, Any]] = []
+    loaded_paths: list[str] = []
     for path in GOLDEN_FILES:
+        if not path.exists():
+            print(f"WARN: golden file not found, skipping: {path.relative_to(REPO_ROOT)}")
+            continue
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         for raw in data.get("cases", []):
@@ -69,6 +81,12 @@ def _load_cases() -> list[dict[str, Any]]:
                 "expected": raw["expected"],
                 "_source": path.name,
             })
+        loaded_paths.append(path.name)
+
+    if not loaded_paths:
+        raise RuntimeError(
+            f"No golden files found. Looked for: {[str(p) for p in GOLDEN_FILES]}"
+        )
     return cases
 
 
