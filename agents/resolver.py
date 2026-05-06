@@ -9,7 +9,7 @@ Responsibilities:
 - NO writes
 - NO final decisions
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from database_config import fetch_one, fetch_all
 
@@ -716,8 +716,11 @@ def llm_disambiguate_product(product_ref: str, candidates: list, llm) -> Dict[st
     from pydantic import BaseModel, Field
 
     class ProductChoice(BaseModel):
-        product_id: int = Field(description="ID of the chosen product")
-        reasoning: str = Field(description="Why this product was chosen")
+        product_id: Optional[int] = Field(
+            default=None,
+            description="ID of the chosen product, or null if no candidate clearly matches the user's request"
+        )
+        reasoning: str = Field(description="Why this product was chosen, or why no candidate matches")
 
     # Build candidates list for prompt
     candidates_str = "\n".join([
@@ -733,12 +736,20 @@ The user asked for: "{product_ref}"
 We found these possible matches:
 {candidates}
 
-Choose the MOST LIKELY product the user meant. Consider:
+Choose the MOST LIKELY product the user meant — but ONLY if a candidate clearly matches the user's request. Consider:
 - Exact word matches (colors, variants)
 - Confidence scores
 - Context clues in the user's query
 
-Return JSON with product_id and reasoning."""),
+If no candidate clearly matches, set product_id to null and explain why in reasoning. Cases where you must reject:
+- The user specified an attribute (color, size, material, length, specific shape) that no candidate has.
+- The user's qualifier is too generic to discriminate (for example "colored", "any", "big") and multiple candidates are equally plausible — do not invent a creative interpretation like equating "colored" with "rainbow".
+- The user combined two real but mutually exclusive attributes that no single candidate has both of.
+- The candidates only overlap on a generic word like the product type ("bracelet", "necklace") with no meaningful qualifier match.
+
+Do NOT pick a candidate just because it is the only one available — being the only fuzzy match is not the same as being a real match.
+
+Return JSON with product_id (an integer ID, or null) and reasoning."""),
         ("user", "Which product did the user mean?")
     ])
 
@@ -751,11 +762,22 @@ Return JSON with product_id and reasoning."""),
             "candidates": candidates_str
         })
 
+        chosen_id = result.get("product_id")
+        reasoning = result.get("reasoning", "")
+
+        # LLM rejected all candidates — no real match
+        if chosen_id is None:
+            print(f"[LLM Disambiguate] Rejected all candidates for '{product_ref}' - Reasoning: {reasoning}")
+            return {
+                "resolution_error": f"No matching product for '{product_ref}': {reasoning}",
+                "llm_used": True
+            }
+
         # Find the chosen candidate
-        chosen = next((c for c in candidates if c["id"] == result["product_id"]), None)
+        chosen = next((c for c in candidates if c["id"] == chosen_id), None)
 
         if chosen:
-            print(f"[LLM Disambiguate] Chose '{chosen['name']}' - Reasoning: {result['reasoning']}")
+            print(f"[LLM Disambiguate] Chose '{chosen['name']}' - Reasoning: {reasoning}")
             return {
                 "product_id": chosen["id"],
                 "resolved_sku": chosen["sku"],

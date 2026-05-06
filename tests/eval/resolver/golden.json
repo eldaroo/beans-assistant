@@ -104,7 +104,7 @@
       "category": "RESOLUTION_ERROR",
       "difficulty": "easy",
       "mode": "deterministic",
-      "_note": "User says 'pulsera celeste' — no celeste product. The deterministic path emits resolution_error. Excluded from --llm gemini because Gemini equates celeste≈turquesa and resolves to TURQUOISE (real prod behavior, not a bug — but the case asserts the deterministic behavior, so we run it deterministic-only). The LLM-mode equivalent is llm_disambig_pulsera_xs_picks_some_bracelet, which tests the prompt's bias for non-rejection.",
+      "_note": "User says 'pulsera celeste' — no celeste product. The deterministic path emits resolution_error. Excluded from --llm gemini because Gemini equates celeste≈turquesa and resolves to TURQUOISE (real prod behavior, not a bug — but the case asserts the deterministic behavior, so we run it deterministic-only). LLM-mode rejection pattern is covered by llm_disambig_pulsera_xs_rejects_underspec and the two collar_*_rejects_only_match cases.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -117,11 +117,11 @@
     },
 
     {
-      "id": "llm_verify_collar_artesanal_clasico",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_verify_collar_artesanal_rejects_attr_mismatch",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "medium",
       "mode": "llm",
-      "_note": "Branch B (single low-confidence). 'collar artesanal clasico' yields one candidate (BC-NECKLACE-CLASSIC, score 0.67). LLM verifies the match.",
+      "_note": "Branch B (single low-confidence). 'collar artesanal clasico' yields one candidate (BC-NECKLACE-CLASSIC, score 0.67). With the prompt allowing null, the LLM rejects because 'artesanal' is not present in the candidate's name. Catalog-level fact ('todo el catálogo es artesanal') is not visible to the LLM, so it treats 'artesanal' as a discriminating attribute and surfaces resolution_error rather than guess. Asking back is the safer prod behavior.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -129,7 +129,7 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku": "BC-NECKLACE-CLASSIC"}]
+        "items": [{"has_resolution_error": true}]
       }
     },
     {
@@ -149,11 +149,11 @@
       }
     },
     {
-      "id": "llm_verify_collar_de_plata_falls_back_to_only_match",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_verify_collar_de_plata_rejects_only_match",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "medium",
       "mode": "llm",
-      "_note": "Branch B (single low-confidence). 'collar de plata' yields BC-NECKLACE-CLASSIC (0.50) only because 'collar' overlaps with the necklace's name. The current llm_disambiguate_product prompt does not allow rejection (it always picks one of the candidates), so the LLM falls back to the only candidate. This case asserts that behavior — if the prompt is later updated to permit rejection, this case should flip to has_resolution_error. Tracking issue: see PR description.",
+      "_note": "Branch B (single low-confidence). 'collar de plata' yields BC-NECKLACE-CLASSIC (0.50) only because 'collar' overlaps with the necklace's name — but 'plata' (silver) is not an attribute of the Classic necklace. With the prompt allowing null, the LLM should reject the only candidate and surface a resolution_error rather than guess.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -161,15 +161,15 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku_in": ["BC-NECKLACE-CLASSIC"]}]
+        "items": [{"has_resolution_error": true}]
       }
     },
     {
-      "id": "llm_verify_collar_largo_falls_back_to_only_match",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_verify_collar_largo_rejects_only_match",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "medium",
       "mode": "llm",
-      "_note": "Branch B (single low-confidence). 'collar largo' yields BC-NECKLACE-CLASSIC (0.50). Same fall-back behavior as collar_de_plata — LLM cannot reject and picks the only available candidate. See PR description.",
+      "_note": "Branch B (single low-confidence). 'collar largo' yields BC-NECKLACE-CLASSIC (0.50) only because 'collar' overlaps — but 'largo' (long) is not an attribute of the Classic necklace. Same rejection pattern as collar_de_plata.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -177,7 +177,7 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku_in": ["BC-NECKLACE-CLASSIC"]}]
+        "items": [{"has_resolution_error": true}]
       }
     },
     {
@@ -229,11 +229,11 @@
       }
     },
     {
-      "id": "llm_disambig_pulsera_xs_picks_some_bracelet",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_disambig_pulsera_xs_rejects_underspec",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "hard",
       "mode": "llm",
-      "_note": "Branch C (multi-candidate). 'pulsera xs' yields all 10 bracelets on 'pulsera' overlap — XS is not a real size variant. The current prompt forces the LLM to pick one. This case asserts it picks *some* bracelet (any of the 10), not a non-bracelet and not error. If the prompt is updated to permit rejection, this case should flip to has_resolution_error. See PR description.",
+      "_note": "Branch C (multi-candidate). 'pulsera xs' yields all 10 bracelets on 'pulsera' overlap — XS is not a real size variant of any of them. With the prompt allowing null, the LLM should reject rather than guess a color when the user specified a size that doesn't exist in the catalog.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -241,20 +241,15 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku_in": [
-          "BC-BRACELET-CLASSIC", "BC-BRACELET-BLACK", "BC-BRACELET-GOLD",
-          "BC-BRACELET-RAINBOW", "BC-BRACELET-TURQUOISE", "BC-BRACELET-PURPLE",
-          "BC-BRACELET-WHITE", "BC-BRACELET-PINK", "BC-BRACELET-GREEN",
-          "BC-BRACELET-BLUE"
-        ]}]
+        "items": [{"has_resolution_error": true}]
       }
     },
     {
-      "id": "llm_disambig_pulsera_de_color_underspec",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_disambig_pulsera_de_color_rejects_generic_qualifier",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "medium",
       "mode": "llm",
-      "_note": "Branch C (multi-candidate). 'pulsera de color' is underspecified. LLM picks some bracelet — any is reasonable.",
+      "_note": "Branch C (multi-candidate). 'pulsera de color' is a generic qualifier — every bracelet variant is 'colored'. With the prompt allowing null, the LLM should reject and ask for the specific color rather than invent a creative interpretation like equating 'colored' with 'rainbow'. The prompt explicitly flags 'generic qualifier' as a reject reason.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -262,20 +257,15 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku_in": [
-          "BC-BRACELET-CLASSIC", "BC-BRACELET-BLACK", "BC-BRACELET-GOLD",
-          "BC-BRACELET-RAINBOW", "BC-BRACELET-TURQUOISE", "BC-BRACELET-PURPLE",
-          "BC-BRACELET-WHITE", "BC-BRACELET-PINK", "BC-BRACELET-GREEN",
-          "BC-BRACELET-BLUE"
-        ]}]
+        "items": [{"has_resolution_error": true}]
       }
     },
     {
-      "id": "llm_disambig_pulsera_dorada_arcoiris_two_attrs",
-      "category": "RESOLVE_PRODUCT",
+      "id": "llm_disambig_pulsera_dorada_arcoiris_rejects_contradiction",
+      "category": "RESOLUTION_ERROR",
       "difficulty": "hard",
       "mode": "llm",
-      "_note": "Branch C (multi-candidate). 'pulsera dorada arcoiris' contains two real but mutually exclusive attributes. LLM should pick one of the two (GOLD or RAINBOW) rather than a third unrelated bracelet.",
+      "_note": "Branch C (multi-candidate). 'pulsera dorada arcoiris' contains two real but mutually exclusive attributes (GOLD and RAINBOW are separate SKUs). With the prompt allowing null, the LLM rejects because no single candidate has both attributes. This is the correct outcome — surfacing resolution_error triggers a clarification flow upstream rather than silently picking one of two equally likely interpretations.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -283,7 +273,7 @@
         }
       },
       "expected": {
-        "items": [{"resolved_sku_in": ["BC-BRACELET-GOLD", "BC-BRACELET-RAINBOW"]}]
+        "items": [{"has_resolution_error": true}]
       }
     }
   ]
