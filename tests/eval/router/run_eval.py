@@ -175,6 +175,12 @@ def _parse_args() -> argparse.Namespace:
         help="Invoke each case N times (default 1). N>1 reports per-case "
              "agreement rate; cases with agreement < 1.0 are flagged unstable."
     )
+    parser.add_argument(
+        "--threshold", type=float, default=None,
+        help="Minimum overall_pass rate (0-100) below which the runner "
+             "exits with code 2. Default: no threshold enforcement. "
+             "PR CI uses 100; nightly typically omits this."
+    )
     return parser.parse_args()
 
 
@@ -327,7 +333,17 @@ def main() -> int:
         }, f, indent=2, ensure_ascii=False)
     print(f"Artifact: {artifact.relative_to(REPO_ROOT)}")
 
-    return 0 if counters["errors"] == 0 else 1
+    if counters["errors"] > 0:
+        return 1
+
+    if args.threshold is not None:
+        passed, total = counters["overall"]
+        rate_pct = 100.0 * passed / total if total else 0.0
+        if rate_pct < args.threshold:
+            print(f"\nFAIL: overall_pass {rate_pct:.1f}% < threshold {args.threshold:.1f}%")
+            return 2
+
+    return 0
 
 
 if __name__ == "__main__":
