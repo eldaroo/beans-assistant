@@ -1,0 +1,56 @@
+name: Resolver Eval LLM (Nightly)
+
+# Nightly counterpart to resolver-eval-llm-pr.yml. N is bumped to 5 (vs.
+# 3 in the PR workflow) for stronger stability signal at low marginal
+# cost — the LLM call is cheap and we want to catch flakiness drift.
+
+on:
+  schedule:
+    # 06:30 UTC daily, offset 15 min from resolver-eval-nightly (06:15)
+    # to spread API quota and let one workflow's logs be readable before
+    # the next starts.
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      GEMINI_TEMPERATURE: '0'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify GOOGLE_API_KEY secret is set
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GOOGLE_API_KEY repo secret is not configured. Add it under Settings -> Secrets -> Actions."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run resolver eval (--llm gemini, N=5, threshold=80)
+        run: python tests/eval/resolver/run_eval.py --llm gemini --n-runs 5 --threshold 80
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-eval-llm-nightly-${{ github.run_id }}
+          path: tests/eval/resolver/results/eval-*.json
+          retention-days: 30
