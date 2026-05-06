@@ -160,6 +160,33 @@ def test_llm_disambiguate_failure_fallback(populated_db, mock_llm):
     assert result["llm_used"] is False
 
 
+@pytest.mark.unit
+def test_llm_disambiguate_null_id_returns_resolution_error(populated_db):
+    """When the LLM rejects all candidates by returning product_id=null,
+    the resolver must surface resolution_error rather than guess.
+    Uses a callable LLM that langchain coerces into a RunnableLambda."""
+    import json
+    from langchain_core.messages import AIMessage
+
+    def null_choice_llm(_prompt_value):
+        # Simulate Gemini deciding none of the candidates is a real match
+        return AIMessage(content=json.dumps({
+            "product_id": None,
+            "reasoning": "no candidate has the requested attribute"
+        }))
+
+    candidates = [
+        {"id": 12, "sku": "BC-NECKLACE-CLASSIC", "name": "Collar Clásico", "score": 0.5},
+    ]
+
+    result = llm_disambiguate_product("collar de plata", candidates, null_choice_llm)
+
+    assert "resolution_error" in result
+    assert "collar de plata" in result["resolution_error"]
+    assert result.get("llm_used") is True
+    assert "product_id" not in result
+
+
 # ==============================================================================
 # Tests for resolve_product_reference_hybrid
 # ==============================================================================
