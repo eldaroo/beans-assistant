@@ -496,10 +496,14 @@ def resolve_product_reference(item: Dict[str, Any]) -> Dict[str, Any]:
                     product_name_norm = normalize_text(product["name"])
                     score = 0
 
-                    # Count how many input words appear in this product name
+                    # Count how many input words appear in this product name.
+                    # Skip list MUST match the meaningful_words skip list below
+                    # (pulsera/pulseras/bracelet are generic — they should not
+                    # contribute to score either, otherwise unknown specific
+                    # words like "celeste" still let "pulsera celeste" match
+                    # any bracelet by virtue of the generic word alone).
                     for word in words:
-                        # Skip common words
-                        if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans"]:
+                        if word in ["de", "granos", "cafe", "con", "la", "el", "coffee", "bean", "beans", "pulsera", "pulseras", "bracelet"]:
                             continue
 
                         # Check word variations (singular/plural)
