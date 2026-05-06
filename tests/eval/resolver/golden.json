@@ -1,0 +1,118 @@
+{
+  "_doc": "Golden set for the resolver agent (M3a — happy path + happy-path negative). Each case provides a synthetic AgentState (operation_type + normalized_entities + optional user_input) that the runner feeds into create_resolver_agent. Assertions target resolved_sku / resolution_error, never autoincrement product_id, so the catalog SQL can grow without breaking the suite. Catalog fixture: tests/eval/resolver/fixtures/catalog.sql layered on top of init_complete_database.sql. M3a runs deterministic only (LLM=None), so no GOOGLE_API_KEY needed in CI. M3b will add LLM-disambiguation cases.",
+
+  "cases": [
+    {
+      "id": "exact_sku_match",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "easy",
+      "_note": "Direct SKU lookup, no fuzzy logic involved.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "BC-BRACELET-BLACK", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-BLACK"}]
+      }
+    },
+    {
+      "id": "fuzzy_translation_negra_to_black",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "easy",
+      "_note": "User says 'pulsera negra' — must map to BC-BRACELET-BLACK via the negra→black translation table.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera negra", "quantity": 2}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-BLACK"}]
+      }
+    },
+    {
+      "id": "variant_hint_dorada",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "_note": "user_input contains the variant 'dorada' → detect_variant_hints triggers → must resolve to GOLD bracelet.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera dorada", "quantity": 1}]
+        },
+        "user_input": "vendi 1 pulsera dorada"
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-GOLD"}]
+      }
+    },
+    {
+      "id": "multi_item_clasica_dorada",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "_note": "ADD_STOCK with two items; both must resolve, in the order the router emitted them.",
+      "input": {
+        "operation_type": "ADD_STOCK",
+        "normalized_entities": {
+          "items": [
+            {"product_ref": "clasicas", "quantity": 400},
+            {"product_ref": "doradas", "quantity": 200}
+          ]
+        }
+      },
+      "expected": {
+        "items": [
+          {"resolved_sku": "BC-BRACELET-CLASSIC"},
+          {"resolved_sku": "BC-BRACELET-GOLD"}
+        ]
+      }
+    },
+    {
+      "id": "generic_pulsera_returns_error",
+      "category": "RESOLUTION_ERROR",
+      "difficulty": "medium",
+      "_note": "Bare 'pulsera' is too generic given multiple bracelet variants in the catalog. Resolver must emit resolution_error rather than guess.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"has_resolution_error": true}]
+      }
+    },
+    {
+      "id": "rainbow_specific_match",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "_note": "User says 'arcoiris' — must match BC-BRACELET-RAINBOW via specific descriptor, not collapse to generic 'pulsera'.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera arcoiris", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-RAINBOW"}]
+      }
+    },
+    {
+      "id": "unknown_product_returns_error",
+      "category": "RESOLUTION_ERROR",
+      "difficulty": "easy",
+      "_note": "User says 'pulsera celeste' — no celeste product in catalog. Must emit resolution_error.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera celeste", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"has_resolution_error": true}]
+      }
+    }
+  ]
+}

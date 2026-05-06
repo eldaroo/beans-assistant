@@ -1,0 +1,44 @@
+name: Resolver Eval (Nightly)
+
+# Nightly counterpart to resolver-eval-pr.yml. M3a is fully deterministic
+# so N>1 is mostly a sanity check — kept at N=3 for symmetry with the
+# router nightly. M3b will add LLM-touching cases for which N=3 actually
+# matters for stability.
+
+on:
+  schedule:
+    # 06:15 UTC daily, offset 15 min from router-eval-nightly to keep
+    # API quota peaks separated even though M3a doesn't use the LLM.
+    - cron: '15 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run resolver eval (N=3, no threshold)
+        run: python tests/eval/resolver/run_eval.py --n-runs 3
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-eval-nightly-${{ github.run_id }}
+          path: tests/eval/resolver/results/eval-*.json
+          retention-days: 30

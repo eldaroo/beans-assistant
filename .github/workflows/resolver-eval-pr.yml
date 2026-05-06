@@ -1,0 +1,57 @@
+name: Resolver Eval (PR)
+
+# M3a: deterministic resolver eval. No GOOGLE_API_KEY needed — the runner
+# instantiates create_resolver_agent(llm=None), so the only Gemini call
+# the resolver might do (hybrid disambiguation) is bypassed.
+#
+# Path filter triggers the workflow when anything that can affect resolver
+# behavior changes: the agent itself, its DB layer, the schema seed, the
+# golden + runner, the catalog fixture, or this workflow file.
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'agents/resolver.py'
+      - 'agents/state.py'
+      - 'database.py'
+      - 'database_config.py'
+      - 'root_archive/init_complete_database.sql'
+      - 'tests/eval/resolver/golden.json'
+      - 'tests/eval/resolver/run_eval.py'
+      - 'tests/eval/resolver/fixtures/**'
+      - 'requirements.txt'
+      - 'backend/requirements.txt'
+      - '.github/workflows/resolver-eval-pr.yml'
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run resolver eval (N=1, threshold=100, deterministic)
+        run: python tests/eval/resolver/run_eval.py --n-runs 1 --threshold 100
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-eval-pr-${{ github.run_id }}
+          path: tests/eval/resolver/results/eval-*.json
+          retention-days: 14
