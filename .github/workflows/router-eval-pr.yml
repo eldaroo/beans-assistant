@@ -1,0 +1,57 @@
+name: Router Eval (PR)
+
+# Per eval principle 8 (trigger tiered): N=1 LLM eval on every PR that
+# touches the router or its inputs. Exits non-zero on regression below
+# the threshold, so it can be used as a required status check.
+#
+# Path filter keeps cost off PRs that cannot affect router behavior.
+# Anything that changes the prompt, the intent registry, the golden set,
+# the runner, the LLM wrapper, or the Gemini SDK pin should re-run.
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'agents/router.py'
+      - 'agents/state.py'
+      - 'llm.py'
+      - 'tests/eval/router/golden.json'
+      - 'tests/eval/router/run_eval.py'
+      - 'tests/eval/router_propose_confirm.json'
+      - 'requirements.txt'
+      - 'backend/requirements.txt'
+      - '.github/workflows/router-eval-pr.yml'
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run router eval (N=1, threshold=100)
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: python tests/eval/router/run_eval.py --n-runs 1 --threshold 100
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-eval-pr-${{ github.run_id }}
+          path: tests/eval/router/results/eval-*.json
+          retention-days: 14

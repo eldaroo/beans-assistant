@@ -1,0 +1,319 @@
+{
+  "_doc": "Golden set for the router agent. Covers the intents currently shipped on master: READ_ANALYTICS, REGISTER_SALE/EXPENSE/PRODUCT, ADD_STOCK, DEACTIVATE_PRODUCT, CANCEL_*, MIXED, GREETING, AMBIGUOUS. Future intents (REGISTER_PRODUCT_WITH_STOCK, DECLINE_PRODUCT_CREATION, UPDATE_PRODUCT_PRICE) live behind unmerged feature branches; their golden cases (and their tests/eval/router_propose_confirm.json file) ship with the same PR that lands the feature in agents/router.py. The runner skips missing golden files with a warning. Run with: python tests/eval/router/run_eval.py — requires GOOGLE_API_KEY and forces GEMINI_TEMPERATURE=0 for determinism.",
+
+  "cases": [
+    {
+      "id": "read_stock_es_simple",
+      "category": "READ_ANALYTICS",
+      "difficulty": "easy",
+      "input": "Mensaje actual: cuantas pulseras tengo?",
+      "expected": {
+        "intent": "READ_ANALYTICS"
+      }
+    },
+    {
+      "id": "read_revenue_en",
+      "category": "READ_ANALYTICS",
+      "difficulty": "easy",
+      "input": "Mensaje actual: what's my total revenue this month?",
+      "expected": {
+        "intent": "READ_ANALYTICS"
+      }
+    },
+    {
+      "id": "read_profit_es",
+      "category": "READ_ANALYTICS",
+      "difficulty": "easy",
+      "input": "Mensaje actual: como viene la ganancia este mes?",
+      "expected": {
+        "intent": "READ_ANALYTICS"
+      }
+    },
+
+    {
+      "id": "sale_simple_es",
+      "category": "REGISTER_SALE",
+      "difficulty": "easy",
+      "input": "Mensaje actual: vendi 2 pulseras negras",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_SALE",
+        "entities": {
+          "items": [{"product_ref": "pulseras negras", "quantity": 2}]
+        }
+      }
+    },
+    {
+      "id": "sale_with_unit_price_es",
+      "category": "REGISTER_SALE",
+      "difficulty": "medium",
+      "input": "Mensaje actual: registrame una venta de 3 pulseras a 10 dolares",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_SALE",
+        "entities": {
+          "items": [{"product_ref": "pulseras", "quantity": 3, "unit_price": 10}]
+        }
+      }
+    },
+
+    {
+      "id": "expense_simple_es",
+      "category": "REGISTER_EXPENSE",
+      "difficulty": "easy",
+      "input": "Mensaje actual: gaste 30 dolares en envios",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_EXPENSE",
+        "entities": {"amount": 30}
+      }
+    },
+    {
+      "id": "expense_register_verb_es",
+      "category": "REGISTER_EXPENSE",
+      "difficulty": "easy",
+      "input": "Mensaje actual: registrar gasto de 50 dolares en publicidad",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_EXPENSE",
+        "entities": {"amount": 50}
+      }
+    },
+
+    {
+      "id": "product_with_price_es",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "medium",
+      "input": "Mensaje actual: crear producto Pulseras Verdes, el precio es de $10",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "Pulseras Verdes", "unit_price": 10}
+      }
+    },
+    {
+      "id": "product_keyword_nuevas_es",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "medium",
+      "_note": "Keyword 'nuevas' must route to REGISTER_PRODUCT, not ADD_STOCK, even with a quantity-like context.",
+      "input": "Mensaje actual: agrego unas nuevas pulseras arcoiris",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT"
+      }
+    },
+
+    {
+      "id": "add_stock_single_es",
+      "category": "ADD_STOCK",
+      "difficulty": "easy",
+      "input": "Mensaje actual: agrego 10 pulseras negras",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "ADD_STOCK"
+      }
+    },
+    {
+      "id": "add_stock_multi_es",
+      "category": "ADD_STOCK",
+      "difficulty": "medium",
+      "input": "Mensaje actual: entraron 400 clasicas y 200 doradas",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "ADD_STOCK",
+        "entities": {
+          "items": [
+            {"product_ref": "clasicas", "quantity": 400},
+            {"product_ref": "doradas", "quantity": 200}
+          ]
+        }
+      }
+    },
+
+    {
+      "id": "deactivate_product_es",
+      "category": "DEACTIVATE_PRODUCT",
+      "difficulty": "easy",
+      "input": "Mensaje actual: elimina las pulseras viejas",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "DEACTIVATE_PRODUCT",
+        "entities": {"product_ref": "pulseras viejas"}
+      }
+    },
+
+    {
+      "id": "cancel_sale_last_es",
+      "category": "CANCEL_SALE",
+      "difficulty": "easy",
+      "input": "Mensaje actual: cancela la ultima venta",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "CANCEL_SALE",
+        "entities": {"target": "last"}
+      }
+    },
+    {
+      "id": "cancel_last_op_es",
+      "category": "CANCEL_LAST_OPERATION",
+      "difficulty": "medium",
+      "input": "Mensaje actual: anula la ultima operacion",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "CANCEL_LAST_OPERATION"
+      }
+    },
+
+    {
+      "id": "greeting_hola_es",
+      "category": "GREETING",
+      "difficulty": "easy",
+      "input": "Mensaje actual: hola!",
+      "expected": {
+        "intent": "GREETING"
+      }
+    },
+
+    {
+      "id": "ambiguous_register_algo_es",
+      "category": "AMBIGUOUS",
+      "difficulty": "easy",
+      "_note": "Bare 'registrar algo' lacks a target — should classify as AMBIGUOUS or fall to low-confidence (which the router maps to AMBIGUOUS).",
+      "input": "Mensaje actual: registrar algo",
+      "expected": {
+        "intent": "AMBIGUOUS"
+      }
+    },
+
+    {
+      "id": "adv_code_switch_sale",
+      "category": "REGISTER_SALE",
+      "difficulty": "hard",
+      "_note": "ES/EN code-switch in a single sentence. Router should still pick REGISTER_SALE.",
+      "input": "Mensaje actual: I sold 4 pulseras negras hoy",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_SALE",
+        "entities": {
+          "items": [{"product_ref": "pulseras negras", "quantity": 4}]
+        }
+      }
+    },
+    {
+      "id": "adv_paraphrase_stock_query_ar_slang",
+      "category": "READ_ANALYTICS",
+      "difficulty": "hard",
+      "_note": "Argentine informal phrasing far from the prompt's ES examples. No 'cuanto/cuantos' keyword.",
+      "input": "Mensaje actual: che, queda algo de las arcoiris?",
+      "expected": {
+        "intent": "READ_ANALYTICS",
+        "entities": {"product_ref": "arcoiris"}
+      }
+    },
+    {
+      "id": "adv_mixed_write_then_read",
+      "category": "MIXED",
+      "difficulty": "medium",
+      "_note": "Action plus follow-up question in one message. Router contract says MIXED.",
+      "input": "Mensaje actual: vendi 2 pulseras negras, cuanto stock me queda?",
+      "expected": {
+        "intent": "MIXED",
+        "entities": {
+          "items": [{"product_ref": "pulseras negras", "quantity": 2}]
+        }
+      }
+    },
+    {
+      "id": "adv_greeting_plus_sale",
+      "category": "REGISTER_SALE",
+      "difficulty": "hard",
+      "_note": "Greeting prefix should not swallow the actionable WRITE intent that follows. Router currently classifies as MIXED with sale entities; we assert intent_not GREETING + entities to lock in the entity extraction.",
+      "input": "Mensaje actual: hola! vendi 3 pulseras negras",
+      "expected": {
+        "intent_not": "GREETING",
+        "entities": {
+          "items": [{"product_ref": "pulseras negras", "quantity": 3}]
+        }
+      }
+    },
+    {
+      "id": "adv_slang_expense_chutar",
+      "category": "REGISTER_EXPENSE",
+      "difficulty": "hard",
+      "_note": "AR slang 'le chute' = 'gaste'. Not in prompt vocabulary. Lock amount only; description and date are free-form and may churn.",
+      "input": "Mensaje actual: le chute 50 dolares al envio de ayer",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_EXPENSE",
+        "entities": {"amount": 50}
+      }
+    },
+    {
+      "id": "adv_slang_add_stock_metele",
+      "category": "ADD_STOCK",
+      "difficulty": "hard",
+      "_note": "AR slang 'metele N al stock'. Not in prompt vocabulary, no 'agregar/anadir' verb.",
+      "input": "Mensaje actual: metele 30 manzanas al stock",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "ADD_STOCK",
+        "entities": {"product_ref": "manzanas", "quantity": 30}
+      }
+    },
+    {
+      "id": "adv_buy_verb_not_sale",
+      "category": "REGISTER_EXPENSE",
+      "difficulty": "hard",
+      "_note": "'compre' (I bought) is an expense from the business's perspective, not a sale. Easy to misclassify as REGISTER_SALE because of the product noun. Bar: must NOT be REGISTER_SALE; lock amount.",
+      "input": "Mensaje actual: compre 100 pulseras de proveedor por 200 dolares",
+      "expected": {
+        "operation_type_not": "REGISTER_SALE",
+        "entities": {"amount": 200}
+      }
+    },
+    {
+      "id": "adv_bare_number_no_context",
+      "category": "AMBIGUOUS",
+      "difficulty": "hard",
+      "_note": "Bare '200' without any prior assistant turn asking for a price. Must NOT classify as UPDATE_PRODUCT_PRICE.",
+      "input": "Mensaje actual: 200",
+      "expected": {
+        "operation_type_not": "UPDATE_PRODUCT_PRICE"
+      }
+    },
+    {
+      "id": "adv_cancel_specific_not_last",
+      "category": "CANCEL_SALE",
+      "difficulty": "hard",
+      "_note": "Cancel referenced by a date/description, not 'last/ultima'. Lock product_ref. Date is normalized to English ('yesterday') by the router — left open because that normalization may evolve.",
+      "input": "Mensaje actual: anulame la venta de las pulseras doradas de ayer",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "CANCEL_SALE",
+        "entities": {"product_ref": "pulseras doradas"}
+      }
+    },
+    {
+      "id": "adv_question_disguised_as_action",
+      "category": "READ_ANALYTICS",
+      "difficulty": "hard",
+      "_note": "Imperative phrasing ('mostrame', 'dame') is a read query, not a write op. Easy to mis-route as WRITE because of the verb.",
+      "input": "Mensaje actual: dame el revenue de la semana pasada",
+      "expected": {
+        "intent": "READ_ANALYTICS"
+      }
+    },
+    {
+      "id": "adv_paraphrase_register_product_no_keyword",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "hard",
+      "_note": "Phrasing without 'crear/nuevo/nueva' keyword. Tests whether the router relies on keyword matching vs semantic understanding.",
+      "input": "Mensaje actual: sumame al catalogo unas pulseras turquesas a 15 dolares",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "pulseras turquesas", "unit_price": 15}
+      }
+    }
+  ]
+}

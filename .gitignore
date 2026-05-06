@@ -30,3 +30,6 @@ configs/
 # Temp files
 nul
 =*
+
+# Eval artifacts (reproducible from goldens; useful for local diff but not versioned)
+tests/eval/*/results/
