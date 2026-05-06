@@ -51,6 +51,10 @@ jobs:
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
             BREVO_API_KEY=${{ secrets.BREVO_API_KEY }}
             AUTH_PASSWORD=${{ secrets.GHCR_READ_TOKEN }}
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
+            SESSION_SECRET=${{ secrets.SESSION_SECRET }}
           deploy_meta: ${{ steps.meta.outputs.value }}
 
   deploy-backend-tenants:
