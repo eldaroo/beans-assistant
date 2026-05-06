@@ -1,12 +1,12 @@
 {
-  "_doc": "Golden set for the resolver agent (M3a — happy path + happy-path negative). Each case provides a synthetic AgentState (operation_type + normalized_entities + optional user_input) that the runner feeds into create_resolver_agent. Assertions target resolved_sku / resolution_error, never autoincrement product_id, so the catalog SQL can grow without breaking the suite. Catalog fixture: tests/eval/resolver/fixtures/catalog.sql layered on top of init_complete_database.sql. M3a runs deterministic only (LLM=None), so no GOOGLE_API_KEY needed in CI. M3b will add LLM-disambiguation cases.",
+  "_doc": "Golden set for the resolver agent. Each case has an optional `mode` field: 'deterministic' (run only with --llm none), 'llm' (run only with --llm gemini), or 'both' / absent (run in both modes). The runner picks which set to load via the --llm flag — see tests/eval/resolver/run_eval.py. Catalog fixture: tests/eval/resolver/fixtures/catalog.sql layered on top of init_complete_database.sql. Assertion shapes: resolved_sku (exact), resolved_sku_in (any-of, for cases where multiple outcomes are acceptable), has_resolution_error (true).",
 
   "cases": [
     {
       "id": "exact_sku_match",
       "category": "RESOLVE_PRODUCT",
       "difficulty": "easy",
-      "_note": "Direct SKU lookup, no fuzzy logic involved.",
+      "_note": "Direct SKU lookup, no fuzzy logic involved. Runs in both modes — exact SKU should never trigger LLM.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -21,7 +21,7 @@
       "id": "fuzzy_translation_negra_to_black",
       "category": "RESOLVE_PRODUCT",
       "difficulty": "easy",
-      "_note": "User says 'pulsera negra' — must map to BC-BRACELET-BLACK via the negra→black translation table.",
+      "_note": "User says 'pulsera negra' — must map to BC-BRACELET-BLACK. In deterministic mode the negra→black translation table handles it; in LLM mode the disambiguator picks BLACK from the multi-candidate set.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -73,7 +73,7 @@
       "id": "generic_pulsera_returns_error",
       "category": "RESOLUTION_ERROR",
       "difficulty": "medium",
-      "_note": "Bare 'pulsera' is too generic given multiple bracelet variants in the catalog. Resolver must emit resolution_error rather than guess.",
+      "_note": "Bare 'pulsera' yields zero candidates from fuzzy_match_with_scores (the word is in the skip list of meaningful_words), so resolve_product_reference fires the standard error. Holds in both modes — branch A0 (no candidates) bypasses the LLM disambiguator entirely.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -88,7 +88,7 @@
       "id": "rainbow_specific_match",
       "category": "RESOLVE_PRODUCT",
       "difficulty": "medium",
-      "_note": "User says 'arcoiris' — must match BC-BRACELET-RAINBOW via specific descriptor, not collapse to generic 'pulsera'.",
+      "_note": "User says 'arcoiris' — must match BC-BRACELET-RAINBOW via specific descriptor.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -103,7 +103,8 @@
       "id": "unknown_product_returns_error",
       "category": "RESOLUTION_ERROR",
       "difficulty": "easy",
-      "_note": "User says 'pulsera celeste' — no celeste product in catalog. Must emit resolution_error.",
+      "mode": "deterministic",
+      "_note": "User says 'pulsera celeste' — no celeste product. The deterministic path emits resolution_error. Excluded from --llm gemini because Gemini equates celeste≈turquesa and resolves to TURQUOISE (real prod behavior, not a bug — but the case asserts the deterministic behavior, so we run it deterministic-only). The LLM-mode equivalent is llm_disambig_pulsera_xs_picks_some_bracelet, which tests the prompt's bias for non-rejection.",
       "input": {
         "operation_type": "REGISTER_SALE",
         "normalized_entities": {
@@ -112,6 +113,177 @@
       },
       "expected": {
         "items": [{"has_resolution_error": true}]
+      }
+    },
+
+    {
+      "id": "llm_verify_collar_artesanal_clasico",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch B (single low-confidence). 'collar artesanal clasico' yields one candidate (BC-NECKLACE-CLASSIC, score 0.67). LLM verifies the match.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "collar artesanal clasico", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-NECKLACE-CLASSIC"}]
+      }
+    },
+    {
+      "id": "llm_verify_aros_silver_translation",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch B (single low-confidence). 'aros silver' yields one candidate (BC-EARRINGS-SILVER, score 0.50) — silver is not in the translation table but the LLM should map it to plateados.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "aros silver", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-EARRINGS-SILVER"}]
+      }
+    },
+    {
+      "id": "llm_verify_collar_de_plata_falls_back_to_only_match",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch B (single low-confidence). 'collar de plata' yields BC-NECKLACE-CLASSIC (0.50) only because 'collar' overlaps with the necklace's name. The current llm_disambiguate_product prompt does not allow rejection (it always picks one of the candidates), so the LLM falls back to the only candidate. This case asserts that behavior — if the prompt is later updated to permit rejection, this case should flip to has_resolution_error. Tracking issue: see PR description.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "collar de plata", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku_in": ["BC-NECKLACE-CLASSIC"]}]
+      }
+    },
+    {
+      "id": "llm_verify_collar_largo_falls_back_to_only_match",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch B (single low-confidence). 'collar largo' yields BC-NECKLACE-CLASSIC (0.50). Same fall-back behavior as collar_de_plata — LLM cannot reject and picks the only available candidate. See PR description.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "collar largo", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku_in": ["BC-NECKLACE-CLASSIC"]}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_turquesa",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). 10 candidates with overlap on 'pulsera'; turquesa is the discriminator. LLM must pick TURQUOISE.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera turquesa", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-TURQUOISE"}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_morada",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). LLM must pick PURPLE.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera morada", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-PURPLE"}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_blanca",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). LLM must pick WHITE.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera blanca", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku": "BC-BRACELET-WHITE"}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_xs_picks_some_bracelet",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "hard",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). 'pulsera xs' yields all 10 bracelets on 'pulsera' overlap — XS is not a real size variant. The current prompt forces the LLM to pick one. This case asserts it picks *some* bracelet (any of the 10), not a non-bracelet and not error. If the prompt is updated to permit rejection, this case should flip to has_resolution_error. See PR description.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera xs", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku_in": [
+          "BC-BRACELET-CLASSIC", "BC-BRACELET-BLACK", "BC-BRACELET-GOLD",
+          "BC-BRACELET-RAINBOW", "BC-BRACELET-TURQUOISE", "BC-BRACELET-PURPLE",
+          "BC-BRACELET-WHITE", "BC-BRACELET-PINK", "BC-BRACELET-GREEN",
+          "BC-BRACELET-BLUE"
+        ]}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_de_color_underspec",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "medium",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). 'pulsera de color' is underspecified. LLM picks some bracelet — any is reasonable.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera de color", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku_in": [
+          "BC-BRACELET-CLASSIC", "BC-BRACELET-BLACK", "BC-BRACELET-GOLD",
+          "BC-BRACELET-RAINBOW", "BC-BRACELET-TURQUOISE", "BC-BRACELET-PURPLE",
+          "BC-BRACELET-WHITE", "BC-BRACELET-PINK", "BC-BRACELET-GREEN",
+          "BC-BRACELET-BLUE"
+        ]}]
+      }
+    },
+    {
+      "id": "llm_disambig_pulsera_dorada_arcoiris_two_attrs",
+      "category": "RESOLVE_PRODUCT",
+      "difficulty": "hard",
+      "mode": "llm",
+      "_note": "Branch C (multi-candidate). 'pulsera dorada arcoiris' contains two real but mutually exclusive attributes. LLM should pick one of the two (GOLD or RAINBOW) rather than a third unrelated bracelet.",
+      "input": {
+        "operation_type": "REGISTER_SALE",
+        "normalized_entities": {
+          "items": [{"product_ref": "pulsera dorada arcoiris", "quantity": 1}]
+        }
+      },
+      "expected": {
+        "items": [{"resolved_sku_in": ["BC-BRACELET-GOLD", "BC-BRACELET-RAINBOW"]}]
       }
     }
   ]

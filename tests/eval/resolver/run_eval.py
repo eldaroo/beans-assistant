@@ -1,17 +1,22 @@
 """
-Resolver eval runner — M3a baseline (deterministic only).
+Resolver eval runner — M3a (deterministic) + M3b (LLM hybrid).
 
 Loads tests/eval/resolver/golden.json, builds a synthetic AgentState per
-case, invokes create_resolver_agent(llm=None) against a fresh SQLite
-catalog (schema from root_archive/init_complete_database.sql plus
+case, invokes create_resolver_agent against a fresh SQLite catalog
+(schema from root_archive/init_complete_database.sql plus
 tests/eval/resolver/fixtures/catalog.sql), and scores per-case.
 
-M3a runs deterministic only — no GOOGLE_API_KEY needed in CI. M3b will
-add LLM-disambiguation cases that exercise resolve_product_reference_hybrid.
+Modes (--llm flag):
+  --llm none    (default) Skip cases marked llm_required: true. Run
+                deterministic baseline only. No GOOGLE_API_KEY needed.
+  --llm gemini  Run all cases. Requires GOOGLE_API_KEY in env. Forces
+                GEMINI_TEMPERATURE=0 for run-to-run stability (mirrors
+                the router runner). Uses get_llm_cheap() — same factory
+                as prod (graph.py:45).
 
 Scoring dimensions (each case opts into the ones it asserts):
   - items_resolved_match: every expected item's resolved_sku /
-    has_resolution_error matches the resolver's emitted item by position.
+    resolved_sku_in / has_resolution_error matches by position.
 
 Output (mirrors router run_eval.py for diff parity):
   - stdout: per-case ok/fail lines + summary block
@@ -20,6 +25,7 @@ Output (mirrors router run_eval.py for diff parity):
 Usage (from beans-assistant repo root):
     python tests/eval/resolver/run_eval.py
     python tests/eval/resolver/run_eval.py --n-runs 3 --threshold 100
+    python tests/eval/resolver/run_eval.py --llm gemini --n-runs 3 --threshold 80
 """
 from __future__ import annotations
 
@@ -58,28 +64,40 @@ def _setup_test_db(tmp_dir: Path) -> Path:
     return db_path
 
 
-def _load_cases() -> list[dict[str, Any]]:
+def _load_cases(use_llm: bool) -> list[dict[str, Any]]:
+    """Filter by `mode`: 'deterministic' runs only with --llm none,
+    'llm' runs only with --llm gemini, missing/'both' runs always."""
     if not GOLDEN_FILE.exists():
         raise RuntimeError(f"Golden file not found: {GOLDEN_FILE}")
     with GOLDEN_FILE.open("r", encoding="utf-8") as f:
         data = json.load(f)
     cases = []
     for raw in data.get("cases", []):
+        mode = raw.get("mode", "both")
+        if mode == "llm" and not use_llm:
+            continue
+        if mode == "deterministic" and use_llm:
+            continue
         cases.append({
             "id": raw.get("id") or "<unnamed>",
             "category": raw.get("category"),
             "difficulty": raw.get("difficulty"),
+            "mode": mode,
             "input": raw["input"],
             "expected": raw["expected"],
         })
     if not cases:
-        raise RuntimeError("Golden file has zero cases")
+        raise RuntimeError("Golden file has zero cases (after filtering)")
     return cases
 
 
 def _score_items(expected_items: list, actual_items: list) -> bool:
-    """Positional comparison. Each expected item asserts either
-    resolved_sku or has_resolution_error. Extra fields in actual ignored."""
+    """Positional comparison. Each expected item asserts one of:
+      - has_resolution_error: true               -> resolution_error must be set
+      - resolved_sku: "X"                        -> exact sku match
+      - resolved_sku_in: ["A", "B", ...]         -> sku must be in the list
+      - resolved_name_contains: "..."            -> substring in resolved_name
+    Extra fields in actual are ignored."""
     if not isinstance(actual_items, list) or len(actual_items) != len(expected_items):
         return False
     for e, a in zip(expected_items, actual_items):
@@ -88,6 +106,9 @@ def _score_items(expected_items: list, actual_items: list) -> bool:
                 return False
         elif "resolved_sku" in e:
             if a.get("resolved_sku") != e["resolved_sku"]:
+                return False
+        elif "resolved_sku_in" in e:
+            if a.get("resolved_sku") not in e["resolved_sku_in"]:
                 return False
         elif "resolved_name_contains" in e:
             name = a.get("resolved_name") or ""
@@ -146,14 +167,19 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Resolver eval runner.")
     parser.add_argument(
         "--n-runs", type=int, default=1,
-        help="Invoke each case N times (default 1). Resolver is mostly "
-             "deterministic in M3a, so N>1 is a sanity check; M3b's LLM "
-             "cases will need it for stability."
+        help="Invoke each case N times (default 1). Deterministic cases "
+             "barely benefit from N>1; LLM cases need it for stability."
     )
     parser.add_argument(
         "--threshold", type=float, default=None,
         help="Minimum overall_pass rate (0-100) below which the runner "
              "exits with code 2."
+    )
+    parser.add_argument(
+        "--llm", choices=("none", "gemini"), default="none",
+        help="'none' (default) skips llm_required cases. 'gemini' loads "
+             "get_llm_cheap() (Gemini 2.5 Flash) and runs all cases. "
+             "Requires GOOGLE_API_KEY in env."
     )
     return parser.parse_args()
 
@@ -161,22 +187,44 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     n_runs = max(1, args.n_runs)
+    use_llm = args.llm == "gemini"
 
     sys.path.insert(0, str(REPO_ROOT))
+    import os
     import tempfile
+
+    if use_llm:
+        # Force temperature=0 BEFORE importing llm.py — same discipline as
+        # tests/eval/router/run_eval.py. The factory reads the env var.
+        os.environ["GEMINI_TEMPERATURE"] = "0"
+        if not os.getenv("GOOGLE_API_KEY"):
+            print("ERROR: --llm gemini requires GOOGLE_API_KEY in environment.", file=sys.stderr)
+            return 3
+
     import database
     from agents.resolver import create_resolver_agent
+
+    llm = None
+    if use_llm:
+        from llm import get_llm_cheap
+        llm = get_llm_cheap()
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="resolver-eval-"))
     db_path = _setup_test_db(tmp_dir)
     db_path_token = database.set_tenant_db_path(str(db_path))
 
     try:
-        # M3a: deterministic only (llm=None). M3b will pass a real LLM here.
-        resolve_entities = create_resolver_agent(llm=None)
+        resolve_entities = create_resolver_agent(llm=llm)
 
-        cases = _load_cases()
-        print(f"Loaded {len(cases)} cases from {GOLDEN_FILE.name}.")
+        cases = _load_cases(use_llm=use_llm)
+        by_mode = {"deterministic": 0, "llm": 0, "both": 0}
+        for c in cases:
+            by_mode[c["mode"]] = by_mode.get(c["mode"], 0) + 1
+        print(f"Loaded {len(cases)} cases from {GOLDEN_FILE.name} "
+              f"(mode: {by_mode['both']} both, {by_mode['deterministic']} det-only, {by_mode['llm']} llm-only).")
+        print(f"Mode: --llm={args.llm}"
+              + (f"  GEMINI_MODEL={os.getenv('GEMINI_MODEL', '<default>')}"
+                 f"  GEMINI_TEMPERATURE={os.getenv('GEMINI_TEMPERATURE')}" if use_llm else ""))
         print(f"DB fixture: {db_path}  N={n_runs}")
         print()
 
@@ -252,6 +300,7 @@ def main() -> int:
                 "id": case_id,
                 "category": case["category"],
                 "difficulty": case["difficulty"],
+                "mode": case["mode"],
                 "expected": case["expected"],
                 "runs": runs,
                 "agreement": case_passes / n_runs if not had_error else None,
@@ -286,6 +335,9 @@ def main() -> int:
                 "started_at": started_at.isoformat(),
                 "wall_seconds": total_wall,
                 "n_runs": n_runs,
+                "llm_mode": args.llm,
+                "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash") if use_llm else None,
+                "temperature": os.getenv("GEMINI_TEMPERATURE") if use_llm else None,
                 "totals": {
                     "cases": len(cases),
                     "trials": len(cases) * n_runs,

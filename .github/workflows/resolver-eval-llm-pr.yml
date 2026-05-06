@@ -1,0 +1,76 @@
+name: Resolver Eval LLM (PR)
+
+# M3b: hybrid resolver eval. Exercises resolve_product_reference_hybrid +
+# llm_disambiguate_product against a real Gemini 2.5 Flash. Cases marked
+# `mode: "llm"` in golden.json gate this workflow's signal; cases marked
+# `mode: "deterministic"` are excluded (handled by the M3a workflow).
+#
+# This workflow is intentionally separate from resolver-eval-pr.yml — it
+# isolates LLM flakiness from the deterministic threshold (M3a stays at
+# 100, M3b at 80) and gates this on a repo secret rather than promoting
+# GOOGLE_API_KEY into the deterministic path.
+#
+# Path filter: triggers when anything that can affect resolver behavior
+# under the LLM path changes — the agent itself, llm.py, the schema seed,
+# the golden + runner, the catalog fixture, or this workflow file.
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'agents/resolver.py'
+      - 'agents/state.py'
+      - 'database.py'
+      - 'database_config.py'
+      - 'llm.py'
+      - 'root_archive/init_complete_database.sql'
+      - 'tests/eval/resolver/golden.json'
+      - 'tests/eval/resolver/run_eval.py'
+      - 'tests/eval/resolver/fixtures/**'
+      - 'requirements.txt'
+      - 'backend/requirements.txt'
+      - '.github/workflows/resolver-eval-llm-pr.yml'
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      GEMINI_TEMPERATURE: '0'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify GOOGLE_API_KEY secret is set
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GOOGLE_API_KEY repo secret is not configured. Add it under Settings -> Secrets -> Actions."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
+
+      - name: Run resolver eval (--llm gemini, N=3, threshold=80)
+        run: python tests/eval/resolver/run_eval.py --llm gemini --n-runs 3 --threshold 80
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-eval-llm-pr-${{ github.run_id }}
+          path: tests/eval/resolver/results/eval-*.json
+          retention-days: 14
