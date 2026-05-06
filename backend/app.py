@@ -4,11 +4,12 @@ FastAPI Backend for Beans&Co Multi-Tenant Business Management System.
 Provides REST API endpoints for managing tenants, products, sales, expenses, and analytics.
 Includes an admin web interface for easy database management.
 """
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 import sys
 import os
 import time
@@ -18,7 +19,14 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, auth
+from backend.auth.dependencies import (
+    get_session_user,
+    require_internal_or_admin,
+    require_pending_session,
+    require_role,
+    require_tenant_match,
+)
 from backend import cache
 
 # Initialize FastAPI app
@@ -29,6 +37,12 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Starlette session middleware (required by authlib OAuth state). The signed
+# session cookie used for portal auth is separate and managed in services/auth_service.
+_session_secret = os.getenv("SESSION_SECRET")
+if _session_secret:
+    app.add_middleware(SessionMiddleware, secret_key=_session_secret, same_site="lax")
 
 # CORS middleware - allow all origins (no auth for now)
 app.add_middleware(
@@ -51,22 +65,68 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 # Include API routers
+# Auth routes are public (login/callback/logout).
+app.include_router(auth.router, prefix="/auth", tags=["Auth"])
+
+# Tenants meta-router has mixed gating per endpoint (see backend/api/tenants.py).
 app.include_router(tenants.router, prefix="/api/tenants", tags=["Tenants"])
-app.include_router(products.router, prefix="/api/tenants", tags=["Products"])
-app.include_router(sales.router, prefix="/api/tenants", tags=["Sales"])
-app.include_router(expenses.router, prefix="/api/tenants", tags=["Expenses"])
-app.include_router(stock.router, prefix="/api/tenants", tags=["Stock"])
-app.include_router(analytics.router, prefix="/api/tenants", tags=["Analytics"])
-app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"])
-app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat"])
-app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"])
+
+# Tenant-scoped routers: require_tenant_match (owner-of-phone, admin, or internal token).
+_tenant_scoped_deps = [Depends(require_tenant_match)]
+app.include_router(products.router, prefix="/api/tenants", tags=["Products"], dependencies=_tenant_scoped_deps)
+app.include_router(sales.router, prefix="/api/tenants", tags=["Sales"], dependencies=_tenant_scoped_deps)
+app.include_router(expenses.router, prefix="/api/tenants", tags=["Expenses"], dependencies=_tenant_scoped_deps)
+app.include_router(stock.router, prefix="/api/tenants", tags=["Stock"], dependencies=_tenant_scoped_deps)
+app.include_router(analytics.router, prefix="/api/tenants", tags=["Analytics"], dependencies=_tenant_scoped_deps)
+app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat"], dependencies=_tenant_scoped_deps)
+
+# Chat simulation: admin-only (debug tool, takes phone from body, not URL).
+app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], dependencies=[Depends(require_role("admin"))])
+
+# WhatsApp onboarding endpoint: service token or admin (called by the bot).
+# (Web onboarding router is part of M2 — not landing in this M1 cherry-pick.)
+app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"], dependencies=[Depends(require_internal_or_admin)])
 
 
 
-# HTML Routes (Admin UI)
+# HTML Routes
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    """Home page - list of all tenants."""
+    """Root: route based on session kind/role."""
+    user = get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    if user.get("kind") == "pending":
+        return RedirectResponse(url="/onboarding", status_code=302)
+    if user.get("role") == "admin":
+        return RedirectResponse(url="/admin", status_code=302)
+    phone = user.get("phone_number")
+    return RedirectResponse(url=f"/tenants/{phone}", status_code=302)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    user = get_session_user(request)
+    if user:
+        if user.get("kind") == "pending":
+            return RedirectResponse(url="/onboarding", status_code=302)
+        return RedirectResponse(url="/", status_code=302)
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+
+@app.get("/onboarding", response_class=HTMLResponse, dependencies=[Depends(require_pending_session)])
+async def onboarding_page(request: Request):
+    """Render the onboarding spectacle (M2). Standalone full-screen page;
+    does not extend base.html (no global nav, no footer)."""
+    return templates.TemplateResponse(
+        "onboarding.html",
+        {"request": request, "pending": request.state.pending},
+    )
+
+
+@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_role("admin"))])
+async def admin_home(request: Request):
+    """Admin tenant list (formerly /)."""
     from backend.services.tenants_service import TenantsService
 
     tenants_service = TenantsService()
@@ -115,7 +175,7 @@ async def home(request: Request):
 
 
 @app.get("/tenants/{phone}", response_class=HTMLResponse)
-async def tenant_detail(request: Request, phone: str):
+async def tenant_detail(request: Request, phone: str, _user: dict = Depends(require_tenant_match)):
     """Tenant detail page - dashboard with tabs."""
     from database_config import db as database, tenant_context
     from backend.services.tenants_service import TenantsService, TenantNotFoundError
@@ -124,13 +184,9 @@ async def tenant_detail(request: Request, phone: str):
     try:
         tenant = tenants_service.get_tenant(phone)
     except TenantNotFoundError:
-        return templates.TemplateResponse(
-            "error.html",
-            {
-                "request": request,
-                "error": f"Tenant {phone} not found"
-            },
-            status_code=404
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Tenant {phone} not found"},
         )
 
     tenant_phone = tenant.phone_number
