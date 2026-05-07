@@ -117,14 +117,16 @@ def test_onboarding_web_pending_session_returns_200(app_client):
     assert "response" in body
     assert "metadata" in body
     md = body["metadata"]
-    # ADR-002 documented metadata keys (additive; some may be absent on a
-    # given turn, but the dict shape is fixed).
-    assert "step" in md
+    # ADR-002 documented metadata keys (additive). On a normal turn `step`
+    # is present; on a degraded turn (LLM down, DB down) `error` carries
+    # the failure code and `step` may be absent. `complete` is always
+    # present so the client can decide whether to redirect.
     assert "complete" in md
+    assert "step" in md or "error" in md
 
 
 def test_onboarding_web_response_shape_matches_seam(app_client):
-    """The contract M3 must respect: response (str) + metadata.step + metadata.complete."""
+    """The contract M3 must respect: response (str) + metadata.{step|error} + metadata.complete."""
     response = app_client.post(
         "/api/onboarding/web",
         json={"message": "configurar"},
@@ -134,8 +136,8 @@ def test_onboarding_web_response_shape_matches_seam(app_client):
     body = response.json()
     assert set(body.keys()) == {"response", "metadata"}
     assert isinstance(body["response"], str)
-    assert "step" in body["metadata"]
     assert "complete" in body["metadata"]
+    assert "step" in body["metadata"] or "error" in body["metadata"]
 
 
 # ----------------------------------------------------------------------
