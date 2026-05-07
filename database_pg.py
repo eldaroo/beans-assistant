@@ -357,6 +357,59 @@ def register_product(data: dict):
             raise
 
 
+def register_products_batch(products: list[dict]) -> list[dict]:
+    """Register N products in a single transaction.
+
+    Per Atlas review of PR-4: all-or-nothing. If any insert fails
+    (duplicate SKU, validation), the whole batch rolls back and the
+    caller surfaces an error naming the offending row. Mirror of the
+    sqlite version in database.py for the Postgres backend.
+    """
+    if not products:
+        raise ValueError("La lista de productos está vacía")
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                for product in products:
+                    cur.execute(
+                        """
+                        INSERT INTO products (
+                          sku,
+                          name,
+                          description,
+                          unit_price_cents,
+                          unit_cost_cents
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            product["sku"],
+                            product["name"],
+                            product.get("description"),
+                            product.get("unit_price_cents"),
+                            product["unit_cost_cents"],
+                        ),
+                    )
+        return [
+            {"status": "ok", "sku": p["sku"], "name": p["name"]}
+            for p in products
+        ]
+    except psycopg2.IntegrityError as e:
+        # get_conn's context manager rolled back on the way out; nothing
+        # landed.
+        error_msg = str(e)
+        offending = next(
+            (p for p in products if p["sku"] in error_msg),
+            products[0],
+        )
+        raise ValueError(
+            f"No pude crear los productos: el código '{offending['sku']}' "
+            f"({offending['name']}) ya existe. Ningún producto fue creado. "
+            f"Revisá la lista y volvé a intentar."
+        )
+
+
 def add_stock(data: dict):
     """
     Add stock to a product.

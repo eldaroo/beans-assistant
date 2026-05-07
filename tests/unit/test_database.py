@@ -14,6 +14,7 @@ import pytest
 from database import (
     register_product,
     register_product_with_stock,
+    register_products_batch,
     add_stock,
     register_sale,
     register_expense,
@@ -680,3 +681,65 @@ class TestCancellationOperations:
 
         # Profit should be restored to $350
         assert cancel_result["profit_usd"] == 350.0
+
+
+# ==============================================================================
+# REGISTER_PRODUCTS_BATCH (atomic multi-product creation, PR-4)
+# ==============================================================================
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestRegisterProductsBatch:
+    """All-or-nothing batch creation. Per Atlas review of PR-4, the contract
+    is atomic: any failure rolls back the entire batch."""
+
+    def test_creates_three_products_in_one_call(self, test_db):
+        result = register_products_batch([
+            {"sku": "BATCH-1", "name": "Peras verdes", "unit_price_cents": 500, "unit_cost_cents": 0},
+            {"sku": "BATCH-2", "name": "Manzanas rojas", "unit_price_cents": 300, "unit_cost_cents": 0},
+            {"sku": "BATCH-3", "name": "Bananas", "unit_price_cents": 200, "unit_cost_cents": 0},
+        ])
+
+        assert len(result) == 3
+        assert result[0]["sku"] == "BATCH-1"
+        assert result[1]["sku"] == "BATCH-2"
+        assert result[2]["sku"] == "BATCH-3"
+        rows = fetch_all("SELECT sku FROM products WHERE sku LIKE 'BATCH-%' ORDER BY sku")
+        assert [r["sku"] for r in rows] == ["BATCH-1", "BATCH-2", "BATCH-3"]
+
+    def test_duplicate_sku_rolls_back_entire_batch(self, test_db):
+        # Pre-existing product whose SKU collides with item 2 of the batch.
+        register_product({
+            "sku": "EXISTS-1",
+            "name": "Pre-existing",
+            "unit_price_cents": 100,
+            "unit_cost_cents": 0,
+        })
+
+        with pytest.raises(ValueError) as exc:
+            register_products_batch([
+                {"sku": "BATCH-A", "name": "First", "unit_price_cents": 500, "unit_cost_cents": 0},
+                {"sku": "EXISTS-1", "name": "Second (collides)", "unit_price_cents": 500, "unit_cost_cents": 0},
+                {"sku": "BATCH-C", "name": "Third", "unit_price_cents": 500, "unit_cost_cents": 0},
+            ])
+
+        # Error must name the offending row so the user can fix it.
+        assert "EXISTS-1" in str(exc.value) or "Second" in str(exc.value)
+
+        # Atomicity: neither BATCH-A nor BATCH-C must have landed.
+        rows = fetch_all("SELECT sku FROM products WHERE sku IN ('BATCH-A', 'BATCH-C')")
+        assert len(rows) == 0
+
+    def test_accepts_null_unit_price_cents(self, test_db):
+        """Multi-product create should support price-pending items so the
+        user can populate stock first and price later."""
+        register_products_batch([
+            {"sku": "NPRC-1", "name": "Sin precio", "unit_price_cents": None, "unit_cost_cents": 0},
+        ])
+        row = fetch_one("SELECT name, unit_price_cents FROM products WHERE sku = ?", ("NPRC-1",))
+        assert row["name"] == "Sin precio"
+        assert row["unit_price_cents"] is None
+
+    def test_empty_list_raises(self, test_db):
+        with pytest.raises(ValueError):
+            register_products_batch([])

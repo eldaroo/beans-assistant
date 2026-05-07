@@ -1014,19 +1014,35 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
             missing.append("description")
 
     elif operation_type == "REGISTER_PRODUCT":
-        # SKU is now auto-generated, so only check other required fields
-        required = ["name", "unit_price_cents"]
-        for field in required:
-            if field not in entities:
-                missing.append(field)
+        # Two shapes accepted:
+        #   - Single: top-level name (+ optional unit_price_cents/sku).
+        #   - Batch: items: [{name, unit_price_cents?, sku?}].
+        # Per Atlas review of PR-4, the batch shape does NOT carry quantity
+        # per item. Mixing quantity with a multi-product create is genuinely
+        # ambiguous (price vs stock); the router prompt is responsible for
+        # classifying those mixed cases as AMBIGUOUS upstream.
+        items = entities.get("items")
+        if items:
+            for index, item in enumerate(items):
+                if "name" not in item or not item["name"]:
+                    missing.append(f"items[{index}].name")
+                if "sku" not in item:
+                    item["sku"] = generate_sku_from_name(item["name"]) if item.get("name") else None
+                if "unit_cost_cents" not in item:
+                    item["unit_cost_cents"] = 0
+        else:
+            required = ["name", "unit_price_cents"]
+            for field in required:
+                if field not in entities:
+                    missing.append(field)
 
-        # Auto-generate SKU if not provided
-        if "sku" not in entities and "name" in entities:
-            entities["sku"] = generate_sku_from_name(entities["name"])
+            # Auto-generate SKU if not provided
+            if "sku" not in entities and "name" in entities:
+                entities["sku"] = generate_sku_from_name(entities["name"])
 
-        # Default unit_cost_cents to 0 if not provided
-        if "unit_cost_cents" not in entities:
-            entities["unit_cost_cents"] = 0
+            # Default unit_cost_cents to 0 if not provided
+            if "unit_cost_cents" not in entities:
+                entities["unit_cost_cents"] = 0
 
     elif operation_type == "ADD_STOCK":
         # ADD_STOCK can work with either:

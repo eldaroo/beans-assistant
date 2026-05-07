@@ -376,6 +376,63 @@ class TestAddStockHandler:
 
 
 @pytest.mark.unit
+@pytest.mark.database
+class TestRegisterProductBatchHandler:
+    """REGISTER_PRODUCT with items array invokes register_products_batch."""
+
+    def test_creates_three_products_atomically(self, test_db):
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "intent": "WRITE_OPERATION",
+            "missing_fields": [],
+            "normalized_entities": {
+                "items": [
+                    {"name": "Peras verdes", "sku": "BC-PERA", "unit_price_cents": 500, "unit_cost_cents": 0},
+                    {"name": "Manzanas rojas", "sku": "BC-MANZ", "unit_price_cents": 300, "unit_cost_cents": 0},
+                    {"name": "Bananas", "sku": "BC-BAN", "unit_price_cents": 200, "unit_cost_cents": 0},
+                ],
+            },
+        }
+
+        result = write_agent(state)
+
+        assert result.get("error") is None
+        assert "3 productos" in result["final_answer"]
+        assert "Peras verdes" in result["final_answer"]
+        assert "Manzanas rojas" in result["final_answer"]
+        assert "Bananas" in result["final_answer"]
+
+    def test_atomic_rollback_on_duplicate_in_batch(self, test_db):
+        from database import register_product
+        register_product({
+            "sku": "EXISTS",
+            "name": "Pre",
+            "unit_price_cents": 100,
+            "unit_cost_cents": 0,
+        })
+
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "intent": "WRITE_OPERATION",
+            "missing_fields": [],
+            "normalized_entities": {
+                "items": [
+                    {"name": "Nuevo 1", "sku": "BAT-1", "unit_price_cents": 500, "unit_cost_cents": 0},
+                    {"name": "Conflicto", "sku": "EXISTS", "unit_price_cents": 500, "unit_cost_cents": 0},
+                    {"name": "Nuevo 3", "sku": "BAT-3", "unit_price_cents": 500, "unit_cost_cents": 0},
+                ],
+            },
+        }
+
+        result = write_agent(state)
+
+        assert "EXISTS" in result["final_answer"] or "Conflicto" in result["final_answer"]
+        assert "Ningún producto fue creado" in result["final_answer"]
+
+
+@pytest.mark.unit
 class TestMissingFieldsMessage:
     """Tests for the missing-fields message: never leak schema column names."""
 

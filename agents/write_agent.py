@@ -14,6 +14,7 @@ from database_config import (
     register_sale,
     register_product,
     register_product_with_stock,
+    register_products_batch,
     update_product_price,
     add_stock,
     register_expense,
@@ -244,27 +245,68 @@ def create_write_agent():
                         operation_summary += f"\n\n_Pérdida acumulada: ${abs(profit):.2f}_"
 
             elif operation_type == "REGISTER_PRODUCT":
-                # Prepare product data (validation already done by Resolver)
-                sku = entities.get("sku")
-                name = entities.get("name")
-                unit_price_cents = entities.get("unit_price_cents")
-                unit_cost_cents = entities.get("unit_cost_cents", 0)  # Default to 0
-                description = entities.get("description")
+                # Two shapes accepted:
+                #   - Single: top-level name/sku/unit_price_cents (legacy).
+                #   - Batch: items: [{name, sku, unit_price_cents?, unit_cost_cents?}].
+                # Per Atlas review of PR-4, the batch path is atomic: all
+                # rows land or none do.
+                items = entities.get("items")
+                if items:
+                    products_data = []
+                    for raw in items:
+                        item_name = raw.get("name")
+                        if not item_name:
+                            raise ValueError(
+                                "Cada producto necesita un nombre"
+                            )
+                        item_sku = raw.get("sku")
+                        if not item_sku:
+                            from agents.resolver import generate_sku_from_name
+                            item_sku = generate_sku_from_name(item_name)
+                        products_data.append({
+                            "sku": item_sku,
+                            "name": item_name,
+                            "description": raw.get("description"),
+                            "unit_price_cents": raw.get("unit_price_cents"),
+                            "unit_cost_cents": raw.get("unit_cost_cents", 0),
+                        })
 
-                product_data = {
-                    "sku": sku,
-                    "name": name,
-                    "description": description,
-                    "unit_price_cents": unit_price_cents,
-                    "unit_cost_cents": unit_cost_cents
-                }
+                    result = register_products_batch(products_data)
 
-                result = register_product(product_data)
+                    operation_summary = f"*✨ {len(products_data)} productos creados!*\n\n"
+                    for product, row in zip(products_data, result):
+                        price_cents = product.get("unit_price_cents")
+                        if price_cents is not None:
+                            price_str = f"${price_cents/100:.2f}"
+                        else:
+                            price_str = "_precio pendiente_"
+                        operation_summary += (
+                            f"• *{product['name']}* — {price_str} "
+                            f"(_código {row['sku']}_)\n"
+                        )
+                    operation_summary = operation_summary.rstrip()
+                else:
+                    # Legacy single-product path. Validation already done by Resolver.
+                    sku = entities.get("sku")
+                    name = entities.get("name")
+                    unit_price_cents = entities.get("unit_price_cents")
+                    unit_cost_cents = entities.get("unit_cost_cents", 0)
+                    description = entities.get("description")
 
-                operation_summary = f"*✨ Producto creado!*\n\n"
-                operation_summary += f"• {name}\n"
-                operation_summary += f"• Código: _{sku}_\n"
-                operation_summary += f"• Precio: *${unit_price_cents/100:.2f}*"
+                    product_data = {
+                        "sku": sku,
+                        "name": name,
+                        "description": description,
+                        "unit_price_cents": unit_price_cents,
+                        "unit_cost_cents": unit_cost_cents
+                    }
+
+                    result = register_product(product_data)
+
+                    operation_summary = f"*✨ Producto creado!*\n\n"
+                    operation_summary += f"• {name}\n"
+                    operation_summary += f"• Código: _{sku}_\n"
+                    operation_summary += f"• Precio: *${unit_price_cents/100:.2f}*"
 
             elif operation_type == "UPDATE_PRODUCT_PRICE":
                 # Set or change the sale price of an existing product.

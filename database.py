@@ -119,6 +119,79 @@ def register_product(data: dict):
         else:
             raise  # Re-raise if it's a different integrity error
 
+
+def register_products_batch(products: list[dict]) -> list[dict]:
+    """Register N products in a single transaction.
+
+    Per Atlas review of PR-4: a non-technical user does not parse
+    "Created 2 of 3" well. They see the first checkmark and assume the
+    rest landed. So this op is all-or-nothing: if any product fails
+    (duplicate SKU, validation), the whole batch rolls back and the
+    caller surfaces an error naming the offending row.
+
+    Each product dict requires `name`, `sku`, `unit_cost_cents`. The
+    fields `unit_price_cents` (NULLable post-PR-1) and `description`
+    are optional.
+
+    Returns the list of created rows in input order on success, or
+    raises ValueError naming the offending product on conflict.
+    """
+    import sqlite3
+
+    if not products:
+        raise ValueError("La lista de productos está vacía")
+
+    try:
+        with get_conn() as conn:
+            for product in products:
+                conn.execute(
+                    """
+                    INSERT INTO products (
+                      sku,
+                      name,
+                      description,
+                      unit_price_cents,
+                      unit_cost_cents
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        product["sku"],
+                        product["name"],
+                        product.get("description"),
+                        product.get("unit_price_cents"),
+                        product["unit_cost_cents"],
+                    ),
+                )
+        return [
+            {"status": "ok", "sku": p["sku"], "name": p["name"]}
+            for p in products
+        ]
+    except sqlite3.IntegrityError as e:
+        # The connection context manager already rolled back; the entire
+        # batch is gone. SQLite's UNIQUE error text does not include the
+        # conflicting value, so we re-query to identify the row the user
+        # needs to fix.
+        offending = None
+        try:
+            with get_conn() as probe_conn:
+                for p in products:
+                    row = probe_conn.execute(
+                        "SELECT sku FROM products WHERE sku = ?", (p["sku"],)
+                    ).fetchone()
+                    if row:
+                        offending = p
+                        break
+        except sqlite3.Error:
+            pass
+        if offending is None:
+            offending = products[0]
+        raise ValueError(
+            f"No pude crear los productos: el código '{offending['sku']}' "
+            f"({offending['name']}) ya existe. Ningún producto fue creado. "
+            f"Revisá la lista y volvé a intentar."
+        )
+
 def add_stock(data: dict):
     """
     data = { product_id, quantity, reason?, movement_type? }
