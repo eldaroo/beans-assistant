@@ -205,7 +205,23 @@ MISSING FIELDS:
 For WRITE_OPERATION, identify if required fields are missing:
 - REGISTER_SALE: needs items (product_ref + quantity)
 - REGISTER_EXPENSE: needs amount and description
-- REGISTER_PRODUCT: needs name and unit_price (sku and cost are auto-generated/optional)
+- REGISTER_PRODUCT: needs name and unit_price (sku and cost are auto-generated/optional).
+  * MULTI-PRODUCT shape: when the user lists multiple products to create in
+    one message, emit `items: [{{name, unit_price?, sku?}}]` instead of the
+    single-product top-level shape. Each item REQUIRES `name`. `unit_price`
+    and `sku` are optional per item.
+  * Trigger phrases for multi-product REGISTER_PRODUCT: a list of names
+    separated by commas, "y", or newlines, with all items being product
+    names (not stock quantities). Examples:
+      - "crear productos Peras verdes, Manzanas rojas, Bananas"
+      - "agregar nuevas pulseras: arcoiris, fucsias, pasteles"
+      - "registrar 3 productos: Coffee Bean Classic a $5, Coffee Bean Black
+        a $7, Coffee Bean Gold a $10"  (prices per item)
+  * If the list mixes product names with bare numbers ("Peras 22, Manzanas
+    15"), the user's intent is genuinely ambiguous between price-per-item
+    and stock-per-item. Emit AMBIGUOUS with clarifier "Esos numeros son
+    *precios* o *cantidades de stock*?" so the user disambiguates before
+    we write anything. Do NOT guess.
 - ADD_STOCK: needs items (product_ref + quantity) OR single product_ref and quantity
   * Can handle MULTIPLE products in one message using items array
   * Example: "entraron 400 clasicas y 200 doradas" → {{"items": [{{"product_ref": "clasicas", "quantity": 400}}, {{"product_ref": "doradas", "quantity": 200}}]}}

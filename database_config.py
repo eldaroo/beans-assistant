@@ -111,6 +111,7 @@ fetch_all = db.fetch_all
 execute = db.execute
 register_product = db.register_product
 register_product_with_stock = db.register_product_with_stock
+register_products_batch = db.register_products_batch
 update_product_price = db.update_product_price
 add_stock = db.add_stock
 remove_stock = db.remove_stock
