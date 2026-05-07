@@ -183,7 +183,9 @@ def create_final_answer_node():
                 "sku": "el código del producto",
             }
 
-            friendly_missing = [field_translations.get(field, field) for field in missing]
+            # Generic fallback so a column name we forgot to translate never
+            # leaks to the user. Better to say "ese dato" than "product_id".
+            friendly_missing = [field_translations.get(field, "ese dato") for field in missing]
 
             # Create a friendly message
             if len(friendly_missing) == 1:

@@ -115,7 +115,9 @@ def create_write_agent():
                 "items": "los productos",
             }
 
-            friendly_missing = [field_translations.get(field, field) for field in missing_fields]
+            # Generic fallback so a column name we forgot to translate never
+            # leaks to the user. Better to say "ese dato" than "product_id".
+            friendly_missing = [field_translations.get(field, "ese dato") for field in missing_fields]
 
             if len(friendly_missing) == 1:
                 error_msg = f"Me falta un dato: *{friendly_missing[0]}*\n\n¿Me lo podés decir?"
