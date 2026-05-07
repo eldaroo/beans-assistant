@@ -38,11 +38,17 @@ class TenantsService:
         ]
 
     def get_tenant(self, phone: str) -> TenantResponse:
-        resolved_phone = self.repository.tenant_manager.resolve_tenant_phone(phone)
-        if not resolved_phone:
+        # Authorization-aware lookup: strict equality only. Alias resolution
+        # (which maps Argentine +54... ↔ +549... variants) is correct for
+        # the WhatsApp bot path where the inbound phone format is messy,
+        # but it is unsafe here: require_tenant_match upstream authorizes
+        # this caller against the URL phone via strict equality, so any
+        # alias hop on the read side is a cross-tenant leak. Get-by-LID
+        # and bot-side lookups still go through resolve_tenant_phone.
+        config = self.repository.get_tenant_config_strict(phone)
+        if not config:
             raise TenantNotFoundError(f"Tenant {phone} not found")
-
-        config = self.repository.get_tenant_config(resolved_phone)
+        resolved_phone = phone
         if not config:
             raise TenantNotFoundError(f"Tenant {phone} config not found")
 
