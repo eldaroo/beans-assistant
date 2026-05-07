@@ -62,20 +62,56 @@ class ChatService:
         if not history_lines:
             return message
 
+        # If the previous assistant turn left the conversation in an AMBIGUOUS
+        # disambiguation state (the bot asked which of two intents the user
+        # meant), prepend a marker the router can read so the next turn
+        # interprets the user's reply as the disambiguation answer instead of
+        # re-classifying cold.
+        last_assistant = next(
+            (entry for entry in reversed(history) if entry.get("role") == "assistant"),
+            None,
+        )
+        ambiguity_marker = ""
+        if last_assistant and (last_assistant.get("metadata") or {}).get("last_intent") == "AMBIGUOUS":
+            ambiguity_marker = (
+                "[Nota: el turno anterior del asistente fue una pregunta de "
+                "aclaracion entre dos intents. El usuario responde abajo.]\n"
+            )
+
         context_text = "\n".join(history_lines)
         return (
             "Contexto de conversación reciente:\n"
             f"{context_text}\n\n"
+            f"{ambiguity_marker}"
             f"Mensaje actual: {message}"
         )
 
     @classmethod
-    def _append_history(cls, phone: str, user_message: str, bot_response: str):
+    def _append_history(
+        cls,
+        phone: str,
+        user_message: str,
+        bot_response: str,
+        bot_metadata: dict | None = None,
+    ):
         history_key = cls._history_key(phone)
         cls._expire_if_stale(history_key)
         history = cls._history_by_key[history_key]
         history.append({"role": "user", "content": user_message})
-        history.append({"role": "assistant", "content": bot_response or ""})
+        assistant_entry: dict[str, Any] = {
+            "role": "assistant",
+            "content": bot_response or "",
+        }
+        if bot_metadata:
+            # Only persist the lean shape the router actually reads back.
+            persisted = {
+                key: bot_metadata.get(key)
+                for key in ("last_intent", "operation_type")
+                if bot_metadata.get(key) is not None
+            }
+            if persisted:
+                assistant_entry["metadata"] = persisted
+        history.append(assistant_entry)
 
     @staticmethod
     def _extract_message_content(message_obj: Any) -> str:
@@ -196,6 +232,14 @@ class ChatService:
                 "confidence": result.get("confidence"),
             }
             logger.info(f"chat_with_tenant: appending to history for phone={resolved_phone}")
-            cls._append_history(phone=resolved_phone, user_message=message, bot_response=bot_response)
+            cls._append_history(
+                phone=resolved_phone,
+                user_message=message,
+                bot_response=bot_response,
+                bot_metadata={
+                    "last_intent": result.get("intent"),
+                    "operation_type": result.get("operation_type"),
+                },
+            )
             logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
             return bot_response, metadata

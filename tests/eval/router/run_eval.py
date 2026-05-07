@@ -46,6 +46,7 @@ RESULTS_DIR = ROUTER_EVAL_DIR / "results"
 
 GOLDEN_FILES = [
     EVAL_DIR / "router_propose_confirm.json",
+    EVAL_DIR / "router_ambiguity.json",
     ROUTER_EVAL_DIR / "golden.json",
 ]
 

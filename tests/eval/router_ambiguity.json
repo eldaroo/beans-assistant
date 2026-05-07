@@ -1,0 +1,106 @@
+{
+  "_doc": "Eval set for the AMBIGUOUS branch in the router prompt. Phrases like 'agregar productos al inventario' look like ADD_STOCK by keyword but a non-technical user usually means REGISTER_PRODUCT. The router must classify these as AMBIGUOUS rather than guess, and emit a clarifier asking which intent the user meant. Reproduces Dario's chat from 2026-05-07 plus 14 paraphrases. Negative cases pin behavior for phrases that ARE specific enough to disambiguate without asking.",
+
+  "cases": [
+    {
+      "name": "amb_dario_exact",
+      "input": "timo, me agregarias unos productos a mi inventario?",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregar_productos_inventario",
+      "input": "me agregarias unos productos a mi inventario?",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_quiero_cargar_productos",
+      "input": "quiero cargar productos",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_sumar_productos_stock",
+      "input": "voy a sumar productos al stock",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregame_articulos",
+      "input": "agregame algunos articulos",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_cargame_cosas_catalogo",
+      "input": "cargame cosas al catalogo",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregar_productos_inventario_short",
+      "input": "agregar productos al inventario",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregar_items_stock",
+      "input": "agregar items al stock",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_incorporar_productos",
+      "input": "incorporar varios productos",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_meter_productos",
+      "input": "necesito meter productos",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_cargar_unas_cosas",
+      "input": "puedo cargar unas cosas?",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregar_mercaderia",
+      "input": "queria agregar mercaderia",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_sumar_items",
+      "input": "me ayudas a sumar items?",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_incorporar_productos_voy",
+      "input": "voy a incorporar productos",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+    {
+      "name": "amb_agregame_productos",
+      "input": "agregame productos por favor",
+      "expected": {"intent": "AMBIGUOUS"}
+    },
+
+    {
+      "name": "neg_specific_quantity_specific_product",
+      "input": "agregar 10 pulseras negras",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "ADD_STOCK"
+      }
+    },
+    {
+      "name": "neg_nuevas_keyword_forces_register_product",
+      "input": "agregar nuevas pulseras arcoiris",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT"
+      }
+    },
+    {
+      "name": "neg_cargar_units_named_product",
+      "input": "cargar 50 unidades de Peras verdes",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "ADD_STOCK"
+      }
+    }
+  ]
+}
