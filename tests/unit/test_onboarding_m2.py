@@ -149,8 +149,9 @@ def test_onboarding_page_renders_for_pending_session(app_client):
     body = response.text
     # The greeting copy is rendered inside an sr-only node so AT picks it up.
     assert "Soy Timonel" in body
-    # The chip text is hardcoded for v1.
-    assert "Configurar mi negocio" in body
+    # Auto-handoff path: the spectacle wires the seed handoff that mounts
+    # the chat shell without a chip+input choice (chip dropped post-M2).
+    assert "__beansOnboardingSeed" in body
     # The factory mounts in onboarding mode.
     assert "mode: 'onboarding'" in body or 'mode: "onboarding"' in body
 
