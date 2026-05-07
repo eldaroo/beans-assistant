@@ -1036,12 +1036,15 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         has_items = "items" in entities and len(entities.get("items", [])) > 0
 
         if not has_single and not has_items:
-            # Need either single product OR items array
-            if "items" not in entities:
-                missing.append("product_id")
-                missing.append("quantity")
-            else:
-                missing.append("items")
+            # Report only the fields actually missing. The prior version of
+            # this branch appended both product_id and quantity even when
+            # quantity was already in entities, surfacing
+            # "Me falta la cantidad" to a user who had supplied it.
+            if not has_items:
+                if "product_id" not in entities:
+                    missing.append("product_id")
+                if "quantity" not in entities:
+                    missing.append("quantity")
 
     elif operation_type == "DEACTIVATE_PRODUCT":
         # Need product_id (should be resolved from product_ref)

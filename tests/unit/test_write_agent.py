@@ -376,6 +376,41 @@ class TestAddStockHandler:
 
 
 @pytest.mark.unit
+class TestMissingFieldsMessage:
+    """Tests for the missing-fields message: never leak schema column names."""
+
+    def test_known_field_uses_friendly_label(self):
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "ADD_STOCK",
+            "normalized_entities": {"quantity": 22},
+            "missing_fields": ["product_id"],
+            "intent": "WRITE_OPERATION",
+            "user_input": "agregame Peras verdes",
+        }
+        result = write_agent(state)
+
+        assert "product_id" not in result["final_answer"]
+        assert "el producto" in result["final_answer"]
+
+    def test_unknown_field_falls_back_to_generic_label(self):
+        """If we forget to translate a column name, the user sees a
+        generic label instead of the raw column name."""
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "normalized_entities": {},
+            "missing_fields": ["mystery_internal_field"],
+            "intent": "WRITE_OPERATION",
+            "user_input": "registrame algo",
+        }
+        result = write_agent(state)
+
+        assert "mystery_internal_field" not in result["final_answer"]
+        assert "ese dato" in result["final_answer"]
+
+
+@pytest.mark.unit
 @pytest.mark.database
 class TestRegisterSalePriceGuard:
     """REGISTER_SALE must block when any product has NULL unit_price_cents."""

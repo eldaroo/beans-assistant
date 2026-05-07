@@ -308,6 +308,28 @@ class TestFieldValidation:
         missing = validate_required_fields("ADD_STOCK", entities)
 
         assert "quantity" in missing
+        assert "product_id" not in missing  # do not flag fields already present
+
+    def test_validate_add_stock_missing_only_product_when_quantity_present(self):
+        """Quantity already in entities; should not be reported missing.
+
+        Reproduces the chat from Dario's bug report: turn 1 is the "agregame
+        productos" ambiguous message; turn 2 is "Peras verdes son, y la
+        cantidad 22". Quantity=22 lands in entities; only product_id is
+        actually missing because the resolver could not match "Peras verdes".
+        """
+        entities = {"quantity": 22}
+        missing = validate_required_fields("ADD_STOCK", entities)
+
+        assert missing == ["product_id"]
+
+    def test_validate_add_stock_missing_both_when_neither_present(self):
+        """Both fields missing should still report both."""
+        entities = {}
+        missing = validate_required_fields("ADD_STOCK", entities)
+
+        assert "product_id" in missing
+        assert "quantity" in missing
 
 
 @pytest.mark.unit
