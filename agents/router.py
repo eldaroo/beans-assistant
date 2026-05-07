@@ -9,7 +9,7 @@ Responsibilities:
 - NO SQL execution
 - NO database writes
 """
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
@@ -25,6 +25,13 @@ class IntentClassification(BaseModel):
     missing_fields: list[str] = Field(description="List of missing required fields")
     normalized_entities: dict = Field(description="Extracted entities with normalized values")
     reasoning: str = Field(description="Brief explanation of classification decision")
+    clarifier: Optional[str] = Field(
+        default=None,
+        description=(
+            "When intent=AMBIGUOUS, the question to ask the user. Phrased as a "
+            "concrete two-option choice when possible. Null otherwise."
+        ),
+    )
 
 
 ROUTER_PROMPT = ChatPromptTemplate.from_messages([
@@ -119,11 +126,46 @@ INTENT CATEGORIES:
    - IMPORTANT: Respond naturally and friendly, keep it brief
 
 5. AMBIGUOUS
-   - Missing critical information
-   - Unclear intent
+   - Missing critical information OR genuinely ambiguous between two intents.
+   - When intent is AMBIGUOUS you MUST also fill the `clarifier` field with
+     the question to ask the user. Phrase it as a concrete two-option choice
+     when possible (not an open-ended "que querés hacer?").
    - Examples:
-     * "registrar algo" (what?)
-     * "cuánto tengo" (of what?)
+     * "registrar algo" (what?) → clarifier: "Que querés registrar: una
+       venta, un gasto, un producto nuevo o stock?"
+     * "cuánto tengo" (of what?) → clarifier: "De qué? ¿stock, ventas o
+       ganancia?"
+
+   AMBIGUOUS bucket: "agregar productos al inventario" family.
+   - Spanish phrases like "agregar productos a mi inventario", "cargar
+     productos", "sumar X al inventario", "agregame unos productos a stock",
+     "voy a meter productos al catalogo" are NOT obviously ADD_STOCK and NOT
+     obviously REGISTER_PRODUCT. A non-technical user usually means
+     REGISTER_PRODUCT (create new SKUs to start selling) but the surface
+     keywords ("agregar", "inventario", "stock") match ADD_STOCK in our
+     keyword table. Do NOT pick. Emit AMBIGUOUS with this clarifier:
+       "¿Querés *crear productos nuevos* en tu catálogo, o *sumar stock* a
+       productos que ya tenés?"
+   - Apply this rule when ALL of:
+     (a) Verb is "agregar" / "cargar" / "sumar" / "meter" / "incorporar"
+         (or English equivalents: "add", "load").
+     (b) Object is plural and generic ("productos", "items", "articulos",
+         "cosas", "stuff", "things") OR the object is "inventario" /
+         "catalogo" without a specific product name.
+     (c) NO specific quantity attached to a specific product name in the
+         same message ("agregar 10 pulseras negras" is NOT ambiguous, that
+         is ADD_STOCK).
+     (d) NO explicit "nuevo/nueva" keyword (which forces REGISTER_PRODUCT).
+   - Examples that ARE ambiguous (emit AMBIGUOUS + clarifier):
+     * "me agregarías unos productos a mi inventario?"
+     * "quiero cargar productos"
+     * "voy a sumar productos al stock"
+     * "agregame algunos articulos"
+     * "cargame cosas al catalogo"
+   - Examples that are NOT ambiguous (do NOT emit AMBIGUOUS):
+     * "agregar 10 pulseras negras" → ADD_STOCK
+     * "agregar nuevas pulseras arcoiris" → REGISTER_PRODUCT
+     * "cargar 50 unidades de Peras verdes" → ADD_STOCK
 
 6. DECLINE_PRODUCT_CREATION
    - User declines a previously proposed product creation
@@ -318,6 +360,62 @@ IMPORTANT:
 ])
 
 
+def classification_to_state(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a parsed router classification to the next AgentState delta.
+
+    Pure function so the AMBIGUOUS / low-confidence branching is testable
+    without touching the LLM. Returns the same dict shape `route_intent`
+    yields to the graph.
+    """
+    if result["confidence"] < 0.6:
+        clarification = (
+            "Tengo dudas sobre lo que necesitas. "
+            "Puedes decirme si quieres consultar datos (stock, ventas, precios) "
+            "o registrar algo (venta, gasto, producto nuevo, agregar stock)?"
+        )
+        return {
+            "intent": "AMBIGUOUS",
+            "operation_type": result.get("operation_type", "UNKNOWN"),
+            "confidence": result["confidence"],
+            "missing_fields": [],
+            "normalized_entities": result.get("normalized_entities", {}),
+            "final_answer": clarification,
+            "messages": [{
+                "role": "assistant",
+                "content": f"[Router] Confianza baja ({result['confidence']:.2f}). Pido aclaracion al usuario.",
+            }],
+        }
+
+    if result["intent"] == "AMBIGUOUS":
+        clarifier = result.get("clarifier") or (
+            "Tu pedido es ambiguo. Podés contarme un poco más sobre qué querés hacer?"
+        )
+        return {
+            "intent": "AMBIGUOUS",
+            "operation_type": result.get("operation_type", "UNKNOWN"),
+            "confidence": result["confidence"],
+            "missing_fields": [],
+            "normalized_entities": result.get("normalized_entities", {}),
+            "final_answer": clarifier,
+            "messages": [{
+                "role": "assistant",
+                "content": f"[Router] AMBIGUOUS. Clarifier: {clarifier}",
+            }],
+        }
+
+    return {
+        "intent": result["intent"],
+        "operation_type": result.get("operation_type", "UNKNOWN"),
+        "confidence": result["confidence"],
+        "missing_fields": result.get("missing_fields", []),
+        "normalized_entities": result.get("normalized_entities", {}),
+        "messages": [{
+            "role": "assistant",
+            "content": f"[Router] Intent classified as {result['intent']}. Reasoning: {result.get('reasoning', 'N/A')}",
+        }],
+    }
+
+
 def create_router_agent(llm):
     """
     Create the router agent that classifies user intent.
@@ -345,38 +443,7 @@ def create_router_agent(llm):
 
         try:
             result = chain.invoke({"input": user_input})
-
-            # If classification is low confidence, ask for clarification instead of guessing
-            if result["confidence"] < 0.6:
-                clarification = (
-                    "Tengo dudas sobre lo que necesitas. "
-                    "Puedes decirme si quieres consultar datos (stock, ventas, precios) "
-                    "o registrar algo (venta, gasto, producto nuevo, agregar stock)?"
-                )
-                return {
-                    "intent": "AMBIGUOUS",
-                    "operation_type": result.get("operation_type", "UNKNOWN"),
-                    "confidence": result["confidence"],
-                    "missing_fields": [],
-                    "normalized_entities": result.get("normalized_entities", {}),
-                    "final_answer": clarification,
-                    "messages": [{
-                        "role": "assistant",
-                        "content": f"[Router] Confianza baja ({result['confidence']:.2f}). Pido aclaracion al usuario."
-                    }]
-                }
-
-            return {
-                "intent": result["intent"],
-                "operation_type": result.get("operation_type", "UNKNOWN"),
-                "confidence": result["confidence"],
-                "missing_fields": result.get("missing_fields", []),
-                "normalized_entities": result.get("normalized_entities", {}),
-                "messages": [{
-                    "role": "assistant",
-                    "content": f"[Router] Intent classified as {result['intent']}. Reasoning: {result.get('reasoning', 'N/A')}"
-                }]
-            }
+            return classification_to_state(result)
 
         except Exception as e:
             # Debug: print the actual error
