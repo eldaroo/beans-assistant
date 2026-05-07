@@ -305,6 +305,45 @@
                         self._installFocusTrap();
                     });
                 }
+
+                // Tenant mode: ask the backend for a proactive greeting based
+                // on tenant state (empty catalog → onboarding nudge). Gated
+                // by localStorage so we only show it once per browser per
+                // phone. Suppressed in onboarding mode entirely.
+                if (!isOnboarding && cfg.phone) {
+                    self._maybeFetchGreeting();
+                }
+            },
+
+            _maybeFetchGreeting: function () {
+                var self = this;
+                var greetingKey = 'beans:greeting:seen:' + this._tenantPhone;
+                var alreadySeen = false;
+                try {
+                    alreadySeen = localStorage.getItem(greetingKey) === '1';
+                } catch (_) { /* private mode etc.; treat as not seen */ }
+                if (alreadySeen) return;
+
+                var url = '/api/tenants/' + encodeURIComponent(this._tenantPhone) + '/chat/greeting';
+                fetch(url, { credentials: 'same-origin' })
+                    .then(function (resp) {
+                        if (!resp.ok) return null;
+                        return resp.json();
+                    })
+                    .then(function (payload) {
+                        if (!payload || !payload.greeting) return;
+                        // Only push if the thread is still empty: the user
+                        // may have raced and typed something already.
+                        if (self.messages.length > 0) return;
+                        self.messages.push({
+                            id: nextId(),
+                            role: 'assistant',
+                            kind: 'text',
+                            html: escapeHtml(payload.greeting),
+                        });
+                        try { localStorage.setItem(greetingKey, '1'); } catch (_) { /* no-op */ }
+                    })
+                    .catch(function () { /* network error: skip greeting silently */ });
             },
 
             // --- dock control ---
