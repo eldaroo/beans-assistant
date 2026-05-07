@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, auth
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -83,8 +83,20 @@ app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat
 # Chat simulation: admin-only (debug tool, takes phone from body, not URL).
 app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], dependencies=[Depends(require_role("admin"))])
 
+# Onboarding routers, both mounted under /api/onboarding.
+# Order matters: the web router exposes the literal path /web, the WhatsApp
+# router exposes the path-parameter /{phone}. FastAPI matches in registration
+# order, so the web router MUST be registered first; otherwise /web would be
+# captured as a phone value by the WhatsApp router and gated by the wrong
+# dependency (require_internal_or_admin vs require_pending_session).
+app.include_router(
+    onboarding_web.router,
+    prefix="/api/onboarding",
+    tags=["Onboarding Web"],
+    dependencies=[Depends(require_pending_session)],
+)
+
 # WhatsApp onboarding endpoint: service token or admin (called by the bot).
-# (Web onboarding router is part of M2 — not landing in this M1 cherry-pick.)
 app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"], dependencies=[Depends(require_internal_or_admin)])
 
 
