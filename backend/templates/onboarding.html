@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activando tu bitácora · Bitácora AI</title>
+
+    <!-- TailwindCSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Brand font (Inter, weights 400/600/700). -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <!-- Alpine.js CDN -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    {#
+      Brand tokens — copied from base.html so this page can render without
+      the global nav/footer chrome. Onboarding is a single full-screen
+      spectacle; the user is not logged into a tenant yet, so reusing
+      base.html (with its top nav and "Cerrar sesión" link tied to
+      request.state.user) would be a category error.
+    #}
+    <style>
+        :root {
+            --color-coffee-50:  oklch(0.97 0.02 55);
+            --color-coffee-100: oklch(0.93 0.04 55);
+            --color-coffee-300: oklch(0.72 0.09 55);
+            --color-coffee-500: oklch(0.50 0.13 55);
+            --color-coffee-700: oklch(0.34 0.10 55);
+            --color-coffee-900: oklch(0.20 0.05 55);
+
+            --color-cream-50:  oklch(0.985 0.012 80);
+            --color-cream-100: oklch(0.965 0.020 80);
+            --color-cream-200: oklch(0.93  0.030 80);
+            --color-cream-300: oklch(0.86  0.035 80);
+
+            --color-jade-300: oklch(0.78 0.10 175);
+            --color-jade-500: oklch(0.62 0.13 175);
+            --color-jade-700: oklch(0.45 0.11 175);
+
+            --color-gold-300: oklch(0.88 0.10 85);
+            --color-gold-500: oklch(0.78 0.14 85);
+            --color-gold-700: oklch(0.62 0.13 85);
+
+            --color-bg:             var(--color-cream-50);
+            --color-bg-subtle:      var(--color-cream-100);
+            --color-surface:        oklch(0.995 0.005 80);
+            --color-surface-raised: oklch(1 0 0);
+            --color-border:         var(--color-cream-200);
+            --color-border-strong:  var(--color-cream-300);
+            --color-text:           var(--color-coffee-900);
+            --color-text-muted:     var(--color-coffee-700);
+            --color-text-subtle:    var(--color-coffee-300);
+
+            --color-brand:          var(--color-coffee-500);
+            --color-brand-hover:    oklch(0.45 0.14 55);
+            --color-brand-fg:       var(--color-cream-50);
+            --color-accent:         var(--color-jade-500);
+            --color-accent-hover:   oklch(0.66 0.14 175);
+            --color-accent-fg:      oklch(0.99 0.01 175);
+            --color-highlight:      var(--color-gold-500);
+            --color-highlight-fg:   oklch(0.25 0.05 85);
+
+            --color-success:        var(--color-jade-500);
+            --color-success-bg:     oklch(0.94 0.04 175);
+            --color-warning:        oklch(0.76 0.16 75);
+            --color-warning-bg:     oklch(0.96 0.06 75);
+            --color-danger:         oklch(0.58 0.20 28);
+            --color-danger-bg:      oklch(0.96 0.05 28);
+            --color-info:           oklch(0.65 0.10 230);
+            --color-focus-ring:     var(--color-jade-500);
+
+            --gradient-brand:        linear-gradient(135deg, oklch(0.50 0.13 55), oklch(0.55 0.14 65));
+            --gradient-accent-halo:  radial-gradient(circle at 30% 30%, oklch(0.72 0.13 175 / 0.45), transparent 70%);
+
+            --color-glow-accent: color-mix(in oklch, var(--color-accent) 40%, transparent);
+            --color-glow-brand:  color-mix(in oklch, var(--color-brand)  30%, transparent);
+            --color-glow-focus:  color-mix(in oklch, var(--color-accent) 35%, transparent);
+            --color-glow-danger: color-mix(in oklch, var(--color-danger) 35%, transparent);
+
+            --shadow-card:     0 1px 0 oklch(0.20 0.01 70 / 0.04),
+                               0 4px 12px -2px oklch(0.20 0.01 70 / 0.06);
+            --shadow-raised:   0 2px 0 oklch(0.20 0.01 70 / 0.04),
+                               0 8px 24px -4px oklch(0.20 0.01 70 / 0.10);
+            --shadow-floating: 0 4px 0 oklch(0.20 0.01 70 / 0.05),
+                               0 16px 40px -8px oklch(0.20 0.01 70 / 0.16);
+
+            --ease-out:    cubic-bezier(0.2, 0, 0.2, 1);
+            --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+            --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--color-bg);
+            color: var(--color-text);
+            font-feature-settings: "ss01", "cv11";
+            margin: 0;
+        }
+
+        [x-cloak] { display: none !important; }
+
+        /* Visually hidden, still announced by AT (typewriter rule 6). */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* Named motion patterns from beans-motion. */
+        .hover-lift {
+            transition: transform 150ms var(--ease-out),
+                        border-color 150ms var(--ease-out),
+                        box-shadow 150ms var(--ease-out);
+        }
+        .hover-lift:hover {
+            transform: translateY(-1px);
+            border-color: var(--color-border-strong);
+            box-shadow: var(--shadow-raised);
+        }
+
+        .focus-bloom:focus-visible {
+            outline: 2px solid transparent;
+            outline-offset: 2px;
+            box-shadow: 0 0 0 3px var(--color-glow-accent);
+            transition: box-shadow 100ms var(--ease-out);
+        }
+
+        @keyframes agent-pulse {
+            0%, 100% { transform: scale(1);    opacity: 1; }
+            50%      { transform: scale(1.04); opacity: 0.92; }
+        }
+        .agent-pulse {
+            animation: agent-pulse 1.6s var(--ease-in-out) infinite;
+            transform-origin: center;
+        }
+
+        .btn-brand {
+            background-color: var(--color-brand);
+            color: var(--color-brand-fg);
+            transition: background-image 150ms var(--ease-out),
+                        background-color 150ms var(--ease-out),
+                        transform 150ms var(--ease-out),
+                        box-shadow 100ms var(--ease-out);
+        }
+        .btn-brand:hover:not(:disabled) {
+            background-image: var(--gradient-brand);
+            transform: translateY(-1px);
+        }
+        .btn-brand:focus-visible {
+            outline: 2px solid transparent;
+            outline-offset: 2px;
+            box-shadow: 0 0 0 3px var(--color-glow-accent);
+        }
+        .btn-brand:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        :focus-visible {
+            outline: 2px solid var(--color-focus-ring);
+            outline-offset: 2px;
+        }
+
+        /*
+         * Typewriter cursor — same visual language as the chat's streaming
+         * cursor (beans-typed-text-reveal rule 5). Hidden the moment the
+         * last character lands; rule 5 is non-negotiable.
+         */
+        .typewriter-cursor {
+            display: inline-block;
+            width: 6px;
+            height: 1em;
+            background: var(--color-text-muted);
+            margin-left: 2px;
+            vertical-align: -0.15em;
+            animation: typewriter-blink 1.2s steps(2, end) infinite;
+        }
+        @keyframes typewriter-blink {
+            0%, 49%   { opacity: 1; }
+            50%, 100% { opacity: 0; }
+        }
+
+        /*
+         * Crossfade between the spectacle zone and the chat zone (rule 8 of
+         * beans-onboarding-spectacle: crossfade, never translate). 200ms
+         * each direction, pointer-events guarded so the inactive zone does
+         * not eat clicks.
+         */
+        .zone-fade {
+            transition: opacity 200ms var(--ease-out);
+        }
+        .zone-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .zone-visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /*
+         * prefers-reduced-motion: collapse the spectacle to a single-frame
+         * paint. Act 3 is active immediately, the typewriter renders the
+         * full text instantly, no transitions. The Alpine helper also
+         * branches on matchMedia; this CSS is the floor.
+         */
+        @media (prefers-reduced-motion: reduce) {
+            .agent-pulse {
+                animation: none;
+                transform: none;
+                opacity: 1;
+            }
+            .typewriter-cursor {
+                animation: none;
+                opacity: 0;
+                width: 0;
+            }
+            .zone-fade {
+                transition: none;
+            }
+            .hover-lift { transition: border-color 150ms var(--ease-out), box-shadow 150ms var(--ease-out); }
+            .hover-lift:hover { transform: none; }
+            .btn-brand:hover:not(:disabled) { transform: none; }
+        }
+
+        /* Reduce vertical avatar size on phones (skill: avatar at full size on
+           mobile competes with the keyboard for vertical space). */
+        @media (max-width: 639px) {
+            .spectacle-avatar { height: 64px; width: 64px; }
+            .spectacle-avatar-svg { height: 32px; width: 32px; }
+        }
+    </style>
+
+    <script>
+        if (window.tailwind) {
+            tailwind.config = {
+                theme: {
+                    extend: {
+                        colors: {
+                            brand: 'var(--color-brand)',
+                            'brand-hover': 'var(--color-brand-hover)',
+                            'brand-fg': 'var(--color-brand-fg)',
+                            accent: 'var(--color-accent)',
+                            'accent-hover': 'var(--color-accent-hover)',
+                            'accent-fg': 'var(--color-accent-fg)',
+                            highlight: 'var(--color-highlight)',
+                            'highlight-fg': 'var(--color-highlight-fg)',
+                            success: 'var(--color-success)',
+                            danger: 'var(--color-danger)',
+                            warning: 'var(--color-warning)',
+                            info: 'var(--color-info)',
+                        },
+                        fontFamily: {
+                            sans: 'var(--font-sans)',
+                        },
+                    }
+                }
+            };
+        }
+    </script>
+
+    <link rel="stylesheet" href="/static/css/chat_widget.css?v=20260504c">
+
+    {# The chat factory (window.beansChat) lives in the same file the tenant
+       dashboard uses. Standalone templates do NOT extend base.html, so the
+       script include is required here too — without it the post-handoff chat
+       shell crashes with "beansChat is not defined". #}
+    <script src="/static/js/chat_widget.js?v=20260504c"></script>
+</head>
+<body class="bg-[color:var(--color-bg)]">
+
+{#
+  Outer Alpine scope.
+  - `act`: the spectacle's state (0 pre-arrival, 1 avatar in, 2 typing,
+    3 hand-off ready, 4 chat shell mounted and visible).
+  - `seedMessage`: text of the chip clicked (or input submitted) at the
+    end of Act 3. Read by the chat factory on init via seedFirstMessage.
+  - `chatMounted`: gates the right-panel render so the chat factory only
+    mounts after the user commits a first message. Once mounted, the
+    factory injects the seed message immediately and POSTs.
+#}
+<div
+    x-data="onboardingPage()"
+    x-init="run()"
+    class="relative min-h-screen w-full overflow-hidden bg-[color:var(--color-bg)]">
+
+    {# ===========================================================================
+       Zone 1: spectacle (acts 1-3). Centered in the viewport. Crossfades out
+       on hand-off. The avatar here is 96px (3x the chat header at 32px).
+       Per rule 8: avatar in zone 1 and avatar in zone 2 are different DOM
+       nodes; do not translate one into the other.
+       =========================================================================== #}
+    <section
+        x-show="!handedOff"
+        :class="handedOff ? 'zone-hidden' : 'zone-visible'"
+        class="zone-fade absolute inset-0 grid place-items-center px-6">
+        <div class="flex flex-col items-center gap-6 max-w-md w-full">
+
+            {# Act 1: avatar fades in 0-600ms with the agent-pulse halo.
+               No chrome, no logo, no headline competes here.
+               Same Timonel glyph SVG as the chat header (re-used path). #}
+            <div
+                class="relative grid place-items-center spectacle-avatar h-24 w-24 motion-safe:opacity-0"
+                :class="act >= 1 && 'motion-safe:opacity-100'"
+                style="transition: opacity 600ms var(--ease-out);"
+                aria-hidden="true">
+                <span
+                    :class="(act >= 1 && act < 3) && 'agent-pulse'"
+                    class="absolute inset-[-12px] rounded-full"
+                    style="background: var(--gradient-accent-halo);"></span>
+                <span class="relative grid place-items-center h-24 w-24 spectacle-avatar rounded-full bg-[color:var(--color-surface)] border border-[color:var(--color-accent)]/40">
+                    <svg viewBox="0 0 24 24" class="h-12 w-12 spectacle-avatar-svg text-[color:var(--color-accent)]" fill="currentColor">
+                        <path d="M12 3.5c3.3 0 6 2.4 6 5.4 0 2.6-2 4.8-4.7 5.3-.6 1.6-2 2.9-3.8 3.3-.5.1-.9-.3-.8-.8.3-1.1.2-2.2-.2-3.2-1.4-.9-2.5-2.4-2.5-4.6 0-3 2.7-5.4 6-5.4Zm-1.6 4.3c-.4.4-.4 1 0 1.4l3.4 3.4c.4.4 1 .4 1.4 0 .4-.4.4-1 0-1.4l-3.4-3.4c-.4-.4-1-.4-1.4 0Z"/>
+                    </svg>
+                </span>
+            </div>
+
+            {# Act 2: greeting (typed) + sub-line (instant after typewriter).
+               Per beans-typed-text-reveal rule 6: full sentence in a
+               visually-hidden node for AT, visible typed copy is aria-hidden,
+               cursor-style caret while typing. min-height reserves vertical
+               space so the layout does not thrash (rule 8). #}
+            <div class="text-center w-full">
+                <p
+                    role="status"
+                    aria-live="polite"
+                    class="text-lg leading-snug text-[color:var(--color-text)] min-h-[3.5rem]">
+                    <span class="sr-only" x-text="fullGreeting"></span>
+                    <span aria-hidden="true" x-text="typedGreeting"></span><span
+                        x-show="isTyping"
+                        x-cloak
+                        aria-hidden="true"
+                        class="typewriter-cursor"></span>
+                </p>
+                <p
+                    class="mt-2 text-sm text-[color:var(--color-text-muted)] motion-safe:opacity-0"
+                    :class="act >= 3 && 'motion-safe:opacity-100'"
+                    style="transition: opacity 220ms var(--ease-out);">
+                    Bitácora AI. Tu negocio, anotado y al día.
+                </p>
+            </div>
+
+            {# Act 3: auto-handoff — no chip, no input. Per Dario's UX
+               feedback (2026-05-04): forcing the user to choose between a
+               chip and an input field is friction. The greeting is the
+               whole spectacle; the chat shell takes over and asks the
+               first question directly. The handoff fires from run() at
+               the Act 3 timeout, so this slot just holds presence space
+               until the crossfade begins. #}
+        </div>
+    </section>
+
+    {# ===========================================================================
+       Zone 2: chat shell (post-handoff). Pinned to the right panel. The
+       chat factory mounts only after `chatMounted` flips, which guarantees
+       the seedFirstMessage hand-off path is well-defined: at the moment of
+       mount, the factory's init() runs, then we call seedFirstMessage with
+       the captured text in the same tick.
+
+       No global nav above this page → top-0 (not top-14 like in
+       tenant_detail.html). The launcher button does NOT render in
+       onboarding mode (the factory's mode flag suppresses it; the template
+       does not include a launcher at all here).
+       =========================================================================== #}
+    {# ADR-002 Part A: post-handoff is full-screen single-column on /onboarding.
+       No side panel, no left empty canvas, no dashboard underneath. The shell
+       fills the viewport (fixed inset-0) and constrains its inner content to
+       max-w-2xl so line lengths stay readable on wide monitors. #}
+    <template x-if="chatMounted">
+        <section
+            x-show="handedOff"
+            :class="handedOff ? 'zone-visible' : 'zone-hidden'"
+            class="zone-fade fixed inset-0 bg-[color:var(--color-bg)] z-30">
+            <div
+                x-data="beansChat({ mode: 'onboarding', endpoint: '/api/onboarding/web' })"
+                x-init="$nextTick(() => {
+                    var seed = window.__beansOnboardingSeed || '';
+                    if (seed) seedFirstMessage(seed);
+                    else bootstrapOpening();
+                })"
+                x-ref="shell"
+                class="beans-chat mx-auto flex h-full w-full max-w-2xl flex-col">
+
+                {# Header: avatar (32px, with halo + agent-pulse when busy),
+                   name, live subtitle. No pin button in onboarding mode (the
+                   shell is structurally pinned). No close button either —
+                   the user has nowhere else to go on this surface. #}
+                <header class="flex items-center gap-3 border-b border-[color:var(--color-border)] px-4 py-3">
+                    <div class="relative grid h-9 w-9 place-items-center" aria-hidden="true">
+                        <span
+                            :class="(state === 'thinking' || state === 'tool_running') && 'agent-pulse'"
+                            class="absolute inset-[-4px] rounded-full"
+                            style="background: var(--gradient-accent-halo);"></span>
+                        <span class="relative grid h-9 w-9 place-items-center rounded-full bg-[color:var(--color-surface)] border border-[color:var(--color-accent)]/40">
+                            <svg viewBox="0 0 24 24" class="h-5 w-5 text-[color:var(--color-accent)]" fill="currentColor">
+                                <path d="M12 3.5c3.3 0 6 2.4 6 5.4 0 2.6-2 4.8-4.7 5.3-.6 1.6-2 2.9-3.8 3.3-.5.1-.9-.3-.8-.8.3-1.1.2-2.2-.2-3.2-1.4-.9-2.5-2.4-2.5-4.6 0-3 2.7-5.4 6-5.4Zm-1.6 4.3c-.4.4-.4 1 0 1.4l3.4 3.4c.4.4 1 .4 1.4 0 .4-.4.4-1 0-1.4l-3.4-3.4c-.4-.4-1-.4-1.4 0Z"/>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-semibold text-[color:var(--color-text)]">Timonel</p>
+                        <p class="text-xs text-[color:var(--color-text-muted)] truncate" x-text="status" aria-live="polite"></p>
+                    </div>
+                </header>
+
+                {# Thread #}
+                <div
+                    x-ref="thread"
+                    class="beans-thread flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4"
+                    role="log"
+                    aria-live="polite">
+                    {# Empty state: identity statement + 3 onboarding chips.
+                       In practice the user almost never sees this state in
+                       onboarding mode because seedFirstMessage fires on mount;
+                       it remains as a graceful fallback if the seed text is
+                       somehow empty. #}
+                    <template x-if="messages.length === 0">
+                        <div class="my-auto flex flex-col items-center gap-3 px-2 text-center">
+                            <p class="text-sm font-semibold text-[color:var(--color-text)]">Bitácora AI. Tu negocio, anotado y al día.</p>
+                            <p class="text-xs text-[color:var(--color-text-muted)]">Pedile a Timonel que arranque cuando quieras.</p>
+                        </div>
+                    </template>
+
+                    <template x-for="m in messages" :key="m.id">
+                        <div>
+                            {#
+                              M3.4 tool-call card branch (beans-tool-call-cards).
+                              Rendered inline in the thread, separate from the
+                              text bubble. Rectangular `rounded-lg` (not bubble-
+                              shaped). Token-driven colors only.
+                            #}
+                            <template x-if="m.kind === 'tool-card'">
+                                <article
+                                    class="my-2 self-start max-w-[85%] rounded-lg border px-3 py-2.5"
+                                    :class="{
+                                        'border-[color:var(--color-success)]/30 bg-[color:var(--color-success-bg)]': m.toolCall.state === 'success',
+                                        'border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger-bg)]': m.toolCall.state === 'failure'
+                                    }"
+                                    role="status"
+                                    :aria-busy="m.toolCall.state === 'running' ? 'true' : 'false'">
+                                    <div class="flex items-center gap-2">
+                                        <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full"
+                                            :class="{
+                                                'bg-[color:var(--color-success)]': m.toolCall.state === 'success',
+                                                'bg-[color:var(--color-danger)]': m.toolCall.state === 'failure'
+                                            }"></span>
+                                        <p class="text-sm font-semibold text-[color:var(--color-text)]" x-text="m.toolCall.label"></p>
+                                    </div>
+                                </article>
+                            </template>
+
+                            {# Standard chat bubble (text). The tool-card branch
+                               above is mutually exclusive — messages without
+                               kind === 'tool-card' fall through here. #}
+                            <template x-if="m.kind !== 'tool-card'">
+                                <div :class="bubbleClass(m)">
+                                    <span x-html="m.html"></span><span x-show="m.streaming" class="beans-cursor" aria-hidden="true"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+
+                    <div x-show="state === 'thinking'" x-cloak class="self-start rounded-2xl rounded-bl-md bg-[color:var(--color-bg-subtle)] px-4 py-3">
+                        <span class="beans-thinking" aria-label="El timonel está pensando">
+                            <span></span><span></span><span></span>
+                        </span>
+                    </div>
+                </div>
+
+                {# Input + suggested-prompts chip rail (onboarding copy lists). #}
+                <div class="border-t border-[color:var(--color-border)] px-3 py-3 space-y-2">
+                    <template x-if="!input.trim() && suggestions.length && state === 'idle'">
+                        <div class="flex flex-wrap gap-2" role="group" aria-label="Sugerencias del timonel">
+                            <template x-for="(s, idx) in suggestions" :key="s">
+                                <button
+                                    type="button"
+                                    @click="send(s)"
+                                    :class="idx === 0
+                                        ? 'border-[color:var(--color-highlight)]/40 bg-[color:var(--color-highlight)]/12 text-[color:var(--color-text)] hover:bg-[color:var(--color-highlight)]/20'
+                                        : 'border-[color:var(--color-border)] bg-[color:var(--color-surface)] text-[color:var(--color-text)] hover:bg-[color:var(--color-bg-subtle)]'"
+                                    class="hover-lift focus-bloom rounded-full border px-3 py-1 text-xs font-semibold"
+                                    x-text="s"></button>
+                            </template>
+                        </div>
+                    </template>
+                    <form @submit.prevent="send(input)" class="flex items-end gap-2">
+                        <textarea
+                            x-ref="input"
+                            x-model="input"
+                            @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(input) }"
+                            rows="1"
+                            placeholder="Pedile algo al timonel..."
+                            aria-label="Mensaje para tu timonel"
+                            class="focus-bloom min-h-[44px] max-h-32 flex-1 resize-none rounded-md border border-[color:var(--color-border-strong)] bg-[color:var(--color-bg-subtle)] px-3 py-2 text-sm text-[color:var(--color-text)] placeholder:text-[color:var(--color-text-subtle)]"></textarea>
+                        <button
+                            type="submit"
+                            :disabled="!input.trim() || state === 'thinking' || state === 'tool_running'"
+                            class="btn-brand inline-flex h-11 items-center rounded-md px-4 text-sm font-semibold">
+                            Enviar
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </template>
+
+</div>
+
+<script>
+/*
+ * Onboarding page Alpine controller.
+ *
+ * Owns the spectacle's three acts and the seed-message hand-off into the
+ * chat shell. Pacing matches beans-typed-text-reveal rule 2 (28ms per
+ * character) and beans-onboarding-spectacle rule 1 (≤4s total budget
+ * before the user can act).
+ *
+ * Seed-message contract:
+ *   1. handoff(text) is called by the chip (or the input form submit).
+ *   2. seedMessage is captured.
+ *   3. handedOff flips → zone 2 fades in, zone 1 fades out.
+ *   4. chatMounted flips → the <template x-if> renders the chat shell.
+ *   5. The chat shell's x-init calls seedFirstMessage(seedMessage), which
+ *      pushes the user bubble and POSTs to /api/onboarding/web in one tick.
+ */
+function onboardingPage() {
+    return {
+        // act 0: pre-arrival; act 1: avatar in; act 2: typing; act 3: hand-off ready.
+        act: 0,
+
+        // Typewriter state. Pulled into the page scope (rather than a nested
+        // component) so the spectacle can move from act 2 to act 3 cleanly.
+        fullGreeting: 'Soy Timonel. Llevo el registro de tu negocio mientras vos lo manejás.',
+        typedGreeting: '',
+        isTyping: false,
+        _typeTimer: null,
+
+        // Hand-off state.
+        input: '',
+        seedMessage: '',
+        handedOff: false,
+        chatMounted: false,
+
+        run() {
+            const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            if (reduced) {
+                // prefers-reduced-motion: collapse the choreography to a
+                // single-frame paint and hand off immediately.
+                this.typedGreeting = this.fullGreeting;
+                this.isTyping = false;
+                this.act = 3;
+                this.handoff();
+                return;
+            }
+
+            // Act 1: avatar fades in.
+            requestAnimationFrame(() => { this.act = 1; });
+
+            // Act 2: type the greeting after the avatar has settled (~600ms in).
+            setTimeout(() => {
+                this.act = 2;
+                this._typeGreeting();
+            }, 600);
+
+            // Act 3: auto-handoff to the chat shell. No chip, no input — the
+            // shell mounts and bootstrapOpening() POSTs a silent trigger so
+            // Timonel emits the first question directly.
+            // Greeting ~70 chars * 28ms = ~1.96s; +200ms buffer = ~2.4s mark.
+            setTimeout(() => {
+                this.act = 3;
+                this.handoff();
+            }, 2400);
+        },
+
+        _typeGreeting() {
+            this.isTyping = true;
+            const chars = [...this.fullGreeting];
+            let i = 0;
+            const tick = () => {
+                if (i >= chars.length) {
+                    this.isTyping = false;
+                    return;
+                }
+                this.typedGreeting += chars[i++];
+                this._typeTimer = setTimeout(tick, 28);
+            };
+            tick();
+        },
+
+        // Skip-to-end: any click or keypress while typing completes the reveal
+        // immediately (beans-typed-text-reveal rule 9). Wired via @click/@keydown
+        // bindings would require global listeners; instead, a manual finish is
+        // exposed for users who type into the input before act 3 — Alpine's
+        // x-model already gives them that path.
+        _finishTyping() {
+            if (!this.isTyping) return;
+            if (this._typeTimer) clearTimeout(this._typeTimer);
+            this.typedGreeting = this.fullGreeting;
+            this.isTyping = false;
+        },
+
+        handoff(text) {
+            if (this.handedOff) return;
+            const clean = (text || '').trim();
+
+            // Empty seed is the auto-handoff path (no chip, no typed input).
+            // The chat shell mounts and calls bootstrapOpening() to elicit
+            // Timonel's first question silently. With a non-empty seed, the
+            // chat shell pushes the seed as a user bubble via seedFirstMessage.
+            this.seedMessage = clean;
+            window.__beansOnboardingSeed = clean;
+            this._finishTyping();
+
+            // Crossfade: zone 1 fades out (200ms), zone 2 fades in (200ms).
+            // Mount the chat shell first so it has a frame to attach
+            // observers / set up Alpine reactivity before the fade swaps.
+            this.chatMounted = true;
+            requestAnimationFrame(() => {
+                this.handedOff = true;
+            });
+        },
+    };
+}
+</script>
+
+</body>
+</html>
