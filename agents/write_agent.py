@@ -8,10 +8,13 @@ Responsibilities:
 - Summarize business impact after execution
 - NEVER use sql_db_query
 """
+import re
 from typing import Dict, Any
 from database_config import (
     register_sale,
     register_product,
+    register_product_with_stock,
+    update_product_price,
     add_stock,
     register_expense,
     deactivate_product,
@@ -22,6 +25,7 @@ from database_config import (
     get_last_expense,
     get_last_stock_movement,
     get_last_operation,
+    fetch_one,
 )
 
 from .state import AgentState
@@ -54,6 +58,47 @@ def create_write_agent():
 
         # Check if we have missing required fields
         if missing_fields:
+            # Disambiguation seam: "agregame N productos a stock" reads to the
+            # router as ADD_STOCK with quantity=N and a missing product_ref,
+            # but the user's intent is genuinely ambiguous between
+            #   (a) add N units of one product (ADD_STOCK), and
+            #   (b) create N distinct products (REGISTER_PRODUCT × N).
+            # The generic "Me falta un dato: el producto" answers neither
+            # cleanly. Detect the pattern and ask the user to pick.
+            user_input = state.get("user_input") or ""
+            quantity = entities.get("quantity")
+            product_field_missing = any(
+                f in missing_fields for f in ("product_ref", "product_id", "items")
+            )
+            if (
+                operation_type == "ADD_STOCK"
+                and quantity is not None
+                and isinstance(quantity, (int, float))
+                and quantity >= 2
+                and product_field_missing
+                and re.search(
+                    r"\b" + re.escape(str(int(quantity))) + r"\s+(productos|articulos|artículos|items|cosas)\b",
+                    user_input,
+                    flags=re.IGNORECASE,
+                )
+            ):
+                disambiguation = (
+                    f"Tu mensaje es ambiguo. ¿Qué querés hacer?\n\n"
+                    f"• Agregar *{int(quantity)} unidades* de un producto existente "
+                    f"(decime el nombre)\n"
+                    f"• Crear *{int(quantity)} productos distintos* "
+                    f"(pasame los nombres separados por coma)"
+                )
+                return {
+                    "operation_result": None,
+                    "error": disambiguation,
+                    "final_answer": disambiguation,
+                    "messages": [{
+                        "role": "assistant",
+                        "content": "[Write Agent] ADD_STOCK / REGISTER_PRODUCT ambiguity"
+                    }]
+                }
+
             # Translate technical field names to user-friendly Spanish
             field_translations = {
                 "unit_price": "el precio de venta",
@@ -65,6 +110,7 @@ def create_write_agent():
                 "amount_cents": "el monto",
                 "description": "la descripción",
                 "product_ref": "el producto",
+                "product_id": "el producto",
                 "quantity": "la cantidad",
                 "items": "los productos",
             }
@@ -103,6 +149,39 @@ def create_write_agent():
                 for item in items:
                     if "resolution_error" in item:
                         raise ValueError(item["resolution_error"])
+
+                # Block sale if any item refers to a product with NULL price.
+                # If the user provided an inline override (item["unit_price_cents"]),
+                # the sale proceeds with that override and the catalog price stays
+                # untouched.
+                for item in items:
+                    if item.get("unit_price_cents") is not None:
+                        continue
+                    product_id = item.get("product_id")
+                    if product_id is None:
+                        continue
+                    row = fetch_one(
+                        "SELECT name, unit_price_cents FROM products WHERE id = %s",
+                        (product_id,),
+                    )
+                    if row is not None and row["unit_price_cents"] is None:
+                        product_name = row["name"]
+                        block_msg = (
+                            f"Necesito el precio de venta de *{product_name}* antes "
+                            f"de cobrar. A cuanto la vendes?"
+                        )
+                        return {
+                            "operation_result": None,
+                            "error": block_msg,
+                            "final_answer": block_msg,
+                            "messages": [{
+                                "role": "assistant",
+                                "content": (
+                                    f"[Write Agent] REGISTER_SALE blocked: "
+                                    f"product {product_id} has NULL price"
+                                )
+                            }]
+                        }
 
                 sale_data = {
                     "items": items,
@@ -184,6 +263,61 @@ def create_write_agent():
                 operation_summary += f"• {name}\n"
                 operation_summary += f"• Código: _{sku}_\n"
                 operation_summary += f"• Precio: *${unit_price_cents/100:.2f}*"
+
+            elif operation_type == "UPDATE_PRODUCT_PRICE":
+                # Set or change the sale price of an existing product.
+                # Resolver has already turned product_ref -> product_id and
+                # unit_price -> unit_price_cents.
+                product_id = entities.get("product_id")
+                unit_price_cents = entities.get("unit_price_cents")
+
+                if product_id is None or unit_price_cents is None:
+                    raise ValueError(
+                        "Faltan datos para actualizar el precio del producto"
+                    )
+
+                row = update_product_price(product_id, int(unit_price_cents))
+                result = row
+
+                product_name = (
+                    row.get("name") if row else entities.get("resolved_name", "el producto")
+                )
+                price_usd = unit_price_cents / 100.0
+                operation_summary = (
+                    f"Listo. *{product_name}* ahora se vende a *${price_usd:.2f}*."
+                )
+
+            elif operation_type == "REGISTER_PRODUCT_WITH_STOCK":
+                # Atomic op: create product (price pending) + register initial stock entry.
+                # Triggered by user confirming a PROPOSE_PRODUCT_CREATION turn.
+                from agents.resolver import generate_sku_from_name
+
+                name = entities.get("name")
+                initial_stock = entities.get("initial_stock")
+
+                if not name or initial_stock is None:
+                    raise ValueError(
+                        "Faltan datos para crear producto y registrar stock"
+                    )
+
+                sku = entities.get("sku") or generate_sku_from_name(name)
+
+                result = register_product_with_stock({
+                    "sku": sku,
+                    "name": name,
+                    "description": entities.get("description"),
+                    "unit_price_cents": None,  # precio pendiente
+                    "unit_cost_cents": entities.get("unit_cost_cents", 0),
+                    "initial_stock": initial_stock,
+                    "stock_reason": entities.get("stock_reason", "Entrada inicial"),
+                })
+
+                current_stock = result.get("current_stock", initial_stock)
+                operation_summary = (
+                    f"Listo. Cree *{name}* y registre {initial_stock} unidades de entrada "
+                    f"(stock actual: {current_stock}).\n\n"
+                    f"Querés cargar el precio de venta ahora o lo dejamos para la primera venta?"
+                )
 
             elif operation_type == "ADD_STOCK":
                 # ADD_STOCK can handle either single product or multiple items

@@ -375,6 +375,173 @@ class TestAddStockHandler:
         assert "cantidad" in result["final_answer"].lower()
 
 
+@pytest.mark.unit
+@pytest.mark.database
+class TestRegisterSalePriceGuard:
+    """REGISTER_SALE must block when any product has NULL unit_price_cents."""
+
+    def _state(self, items):
+        return {
+            "operation_type": "REGISTER_SALE",
+            "normalized_entities": {"items": items, "status": "PAID"},
+            "missing_fields": [],
+            "intent": "WRITE_OPERATION",
+        }
+
+    def test_blocks_sale_when_product_has_null_price(self, populated_db):
+        """A product created via REGISTER_PRODUCT_WITH_STOCK has NULL price.
+        Selling it without an inline price must be blocked."""
+        from database import register_product_with_stock, add_stock
+
+        result_create = register_product_with_stock({
+            "sku": "BC-NULLPRICE",
+            "name": "Manzanas",
+            "initial_stock": 50,
+        })
+        product_id = result_create["product_id"]
+
+        write_agent = create_write_agent()
+        result = write_agent(self._state([
+            {"product_id": product_id, "quantity": 3, "resolved_name": "Manzanas"}
+        ]))
+
+        assert result["operation_result"] is None
+        assert "error" in result
+        msg = result["final_answer"]
+        assert "Manzanas" in msg
+        assert "precio" in msg.lower()
+        # No registró venta ni line item
+        from database import fetch_one
+        row = fetch_one(
+            "SELECT COUNT(*) AS n FROM sale_items WHERE product_id = ?",
+            (product_id,),
+        )
+        assert row["n"] == 0
+
+    def test_inline_price_override_allows_sale(self, populated_db):
+        """If the user gives an explicit per-item price, the sale proceeds
+        even when the catalog price is NULL."""
+        from database import register_product_with_stock
+
+        result_create = register_product_with_stock({
+            "sku": "BC-NULLPRICE-OK",
+            "name": "Peras",
+            "initial_stock": 20,
+        })
+        product_id = result_create["product_id"]
+
+        write_agent = create_write_agent()
+        result = write_agent(self._state([
+            {
+                "product_id": product_id,
+                "quantity": 2,
+                "resolved_name": "Peras",
+                "unit_price_cents": 250,
+            }
+        ]))
+
+        assert result["operation_result"] is not None
+        assert result["operation_result"]["status"] == "ok"
+
+    def test_existing_priced_product_sale_unchanged(self, populated_db):
+        """Regression: products with a normal price still sell as before."""
+        from database import add_stock
+        add_stock({"product_id": 1, "quantity": 100})
+
+        write_agent = create_write_agent()
+        result = write_agent(self._state([
+            {"product_id": 1, "quantity": 5, "resolved_name": "Pulsera Clásica"}
+        ]))
+
+        assert result["operation_result"] is not None
+        assert result["operation_result"]["status"] == "ok"
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestRegisterProductWithStockHandler:
+    """Tests for REGISTER_PRODUCT_WITH_STOCK operation handler."""
+
+    def _state(self, entities):
+        return {
+            "operation_type": "REGISTER_PRODUCT_WITH_STOCK",
+            "normalized_entities": entities,
+            "missing_fields": [],
+            "intent": "WRITE_OPERATION",
+        }
+
+    def test_creates_product_and_registers_stock(self, populated_db):
+        from database import fetch_one
+
+        write_agent = create_write_agent()
+        result = write_agent(self._state({
+            "name": "Manzanas",
+            "initial_stock": 15,
+        }))
+
+        assert result["operation_result"] is not None
+        assert result["operation_result"]["initial_stock"] == 15
+        assert result["operation_result"]["current_stock"] == 15
+
+        # Producto creado en DB con precio NULL
+        product = fetch_one(
+            "SELECT * FROM products WHERE name = ?",
+            ("Manzanas",),
+        )
+        assert product is not None
+        assert product["unit_price_cents"] is None
+
+    def test_summary_asks_for_price(self, populated_db):
+        write_agent = create_write_agent()
+        result = write_agent(self._state({
+            "name": "Peras",
+            "initial_stock": 10,
+        }))
+
+        msg = result["final_answer"]
+        assert "Peras" in msg
+        assert "10" in msg
+        assert "precio" in msg.lower()
+        # Promete primera venta como hook tardío
+        assert "primera venta" in msg.lower()
+
+    def test_missing_name_returns_error(self, populated_db):
+        write_agent = create_write_agent()
+        result = write_agent(self._state({
+            "initial_stock": 5,
+        }))
+
+        assert result["operation_result"] is None
+        assert "error" in result
+        assert "fall" in result["error"].lower() or "falt" in result["error"].lower()
+
+    def test_missing_stock_returns_error(self, populated_db):
+        write_agent = create_write_agent()
+        result = write_agent(self._state({
+            "name": "Bananas",
+        }))
+
+        assert result["operation_result"] is None
+        assert "error" in result
+
+    def test_uses_provided_sku(self, populated_db):
+        from database import fetch_one
+
+        write_agent = create_write_agent()
+        result = write_agent(self._state({
+            "name": "Sandias",
+            "initial_stock": 8,
+            "sku": "BC-CUSTOM-SKU",
+        }))
+
+        assert result["operation_result"]["sku"] == "BC-CUSTOM-SKU"
+        product = fetch_one(
+            "SELECT * FROM products WHERE sku = ?",
+            ("BC-CUSTOM-SKU",),
+        )
+        assert product is not None
+
+
 # ==============================================================================
 # CANCEL_SALE HANDLER TESTS (3 tests)
 # ==============================================================================

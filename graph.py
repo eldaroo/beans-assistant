@@ -177,6 +177,7 @@ def create_final_answer_node():
                 "amount_cents": "el monto",
                 "description": "la descripción",
                 "product_ref": "el producto",
+                "product_id": "el producto",
                 "quantity": "la cantidad",
                 "items": "los productos",
                 "sku": "el código del producto",
@@ -227,6 +228,18 @@ def create_final_answer_node():
                 "- \"Muestrame el stock actual\" (consultar)\n"
                 "- \"Registra una venta de 5 pulseras\" (operacion)\n"
                 "- \"Gaste 50 en envios\" (gasto)"
+            }
+
+        # If user declined a proposed product creation, ack and close.
+        # Nothing is persisted (ack-and-forget by design).
+        if state.get("intent") == "DECLINE_PRODUCT_CREATION":
+            entities = state.get("normalized_entities") or {}
+            candidate = (entities.get("candidate_name") or "").strip() or "el producto"
+            return {
+                "final_answer": (
+                    f"Ok. No registro las unidades por ahora.\n"
+                    f"Cuando agregues *{candidate}* al catalogo, repetimos."
+                )
             }
 
         # Default fallback

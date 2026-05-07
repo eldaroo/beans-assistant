@@ -19,8 +19,8 @@ from .state import AgentState
 
 class IntentClassification(BaseModel):
     """Structured output for intent classification."""
-    intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, GREETING, or AMBIGUOUS")
-    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, DEACTIVATE_PRODUCT, or UNKNOWN")
+    intent: str = Field(description="Intent type: READ_ANALYTICS, WRITE_OPERATION, MIXED, GREETING, AMBIGUOUS, or DECLINE_PRODUCT_CREATION")
+    operation_type: str = Field(description="For WRITE_OPERATION: REGISTER_SALE, REGISTER_EXPENSE, REGISTER_PRODUCT, REGISTER_PRODUCT_WITH_STOCK, UPDATE_PRODUCT_PRICE, ADD_STOCK, CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, DEACTIVATE_PRODUCT, or UNKNOWN")
     confidence: float = Field(description="Confidence score between 0 and 1")
     missing_fields: list[str] = Field(description="List of missing required fields")
     normalized_entities: dict = Field(description="Extracted entities with normalized values")
@@ -70,6 +70,23 @@ INTENT CATEGORIES:
      * DEACTIVATE_PRODUCT: "eliminar producto", "borrar producto", "desactivar producto", "sacar producto"
        - IMPORTANT: This deactivates a product (not deleting data, just marking as inactive)
        - Use when user wants to remove a product from catalog
+     * REGISTER_PRODUCT_WITH_STOCK: confirmation ("si", "dale", "ok", "hacelo")
+       given AFTER an assistant turn that asks "No tengo X en el catalogo. La creo
+       y registro N unidades de entrada?". Atomically creates the product (price
+       pending) and registers the initial stock entry. ONLY emit when that prior
+       proposal is in the conversation context. Extract `name` (the candidate)
+       and `initial_stock` (the N) from the prior turn.
+     * UPDATE_PRODUCT_PRICE: setting or changing the sale price of an existing
+       product. Triggered by:
+         (a) User answering an assistant turn that asked for the price of a
+             specific product ("Necesito el precio de venta de *X*..." or
+             "Querés cargar el precio de venta ahora..."): the user replies
+             with a number ("200", "$200", "200 dolares", "a 200"). Extract
+             `product_ref` from the prior turn, `unit_price` from the current
+             message.
+         (b) User volunteering a price for an existing product: "manzanas a
+             $200", "el precio de las peras es 150", "ponele 12 dolares a las
+             pulseras negras". Extract `product_ref` and `unit_price`.
    - Examples:
      * "registrame una venta de 20 pulseras negras"
      * "gasté 30 dólares en envíos"
@@ -107,6 +124,18 @@ INTENT CATEGORIES:
    - Examples:
      * "registrar algo" (what?)
      * "cuánto tengo" (of what?)
+
+6. DECLINE_PRODUCT_CREATION
+   - User declines a previously proposed product creation
+   - ONLY valid when the prior assistant turn proposed creating a product
+     ("No tengo X en el catalogo. La creo y registro N unidades de entrada?")
+   - Examples (only AFTER such a proposal):
+     * "no, despues la creo"
+     * "ahora no"
+     * "deja"
+     * "no"
+   - Extract `candidate_name` from the prior turn so the acknowledgement can
+     name the product
 
 ENTITY EXTRACTION:
 
@@ -202,6 +231,83 @@ Output:
   "normalized_entities": {{}},
   "reasoning": "User asking about remaining stock after a sale"
 }}
+
+Example 3 (Confirming product creation from a prior turn):
+Input:
+```
+Contexto de conversación reciente:
+Usuario: me entraron manzanas
+Asistente: Me falta un dato: la cantidad
+Usuario: 15
+Asistente: No tengo manzanas en el catalogo. La creo y registro 15 unidades de entrada?
+
+Mensaje actual: si
+```
+Output:
+{{
+  "intent": "WRITE_OPERATION",
+  "operation_type": "REGISTER_PRODUCT_WITH_STOCK",
+  "confidence": 0.95,
+  "missing_fields": [],
+  "normalized_entities": {{
+    "name": "manzanas",
+    "initial_stock": 15
+  }},
+  "reasoning": "User confirms ('si') the proposed product creation. Extract candidate name and quantity from the prior assistant turn."
+}}
+
+Example 3b (Setting price after assistant asked for it):
+Input:
+```
+Contexto de conversacion reciente:
+Usuario: vendi 3 manzanas
+Asistente: Necesito el precio de venta de manzanas antes de cobrar. A cuanto la vendes?
+
+Mensaje actual: 200
+```
+Output:
+{{
+  "intent": "WRITE_OPERATION",
+  "operation_type": "UPDATE_PRODUCT_PRICE",
+  "confidence": 0.95,
+  "missing_fields": [],
+  "normalized_entities": {{
+    "product_ref": "manzanas",
+    "unit_price": 200
+  }},
+  "reasoning": "User provides the price requested by the prior assistant turn for product 'manzanas'."
+}}
+
+Example 4 (Declining the proposed product creation):
+Input:
+```
+Contexto de conversación reciente:
+Usuario: me entraron 8 peras
+Asistente: No tengo peras en el catalogo. La creo y registro 8 unidades de entrada?
+
+Mensaje actual: no, despues la creo
+```
+Output:
+{{
+  "intent": "DECLINE_PRODUCT_CREATION",
+  "operation_type": "UNKNOWN",
+  "confidence": 0.9,
+  "missing_fields": [],
+  "normalized_entities": {{
+    "candidate_name": "peras"
+  }},
+  "reasoning": "User declines the proposed creation. Acknowledge and close the turn without persisting anything."
+}}
+
+IMPORTANT FOR CONFIRMATION/DECLINE:
+- The classifications REGISTER_PRODUCT_WITH_STOCK and DECLINE_PRODUCT_CREATION
+  are ONLY valid when the prior assistant turn proposed creating a product
+  (the assistant text starts with "No tengo" and asks "La creo y registro N
+  unidades de entrada?").
+- A bare "si" or "no" without that prior context should NOT be classified as
+  these intents. Fall back to AMBIGUOUS or GREETING as appropriate.
+- For REGISTER_PRODUCT_WITH_STOCK, extract `name` and `initial_stock` from the
+  prior turn's proposal (the candidate name and the quantity it mentions).
 
 IMPORTANT:
 - DO NOT execute SQL
@@ -311,6 +417,10 @@ def route_to_next_node(state: AgentState) -> str:
 
     # If greeting, respond immediately with friendly message
     if intent == "GREETING":
+        return "final_answer"
+
+    # If user declined a previously proposed product creation, ack and close
+    if intent == "DECLINE_PRODUCT_CREATION":
         return "final_answer"
 
     # If ambiguous or missing fields, ask for clarification

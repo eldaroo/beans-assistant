@@ -50,17 +50,18 @@ class ProductsService:
         if isinstance(created_at, datetime):
             created_at = created_at.isoformat()
 
+        unit_price_cents = row_dict["unit_price_cents"]
         return ProductResponse(
             id=row_dict["id"],
             sku=row_dict["sku"],
             name=row_dict["name"],
             description=row_dict.get("description"),
             unit_cost_cents=row_dict["unit_cost_cents"],
-            unit_price_cents=row_dict["unit_price_cents"],
+            unit_price_cents=unit_price_cents,
             is_active=bool(row_dict["is_active"]),
             created_at=created_at,
             unit_cost_usd=round(row_dict["unit_cost_cents"] / 100.0, 2),
-            unit_price_usd=round(row_dict["unit_price_cents"] / 100.0, 2),
+            unit_price_usd=round(unit_price_cents / 100.0, 2) if unit_price_cents is not None else None,
         )
 
     @staticmethod

@@ -159,11 +159,11 @@ def create_tenant_schema(schema_name: str):
                     name VARCHAR(255) NOT NULL,
                     description TEXT,
                     unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-                    unit_price_cents INTEGER NOT NULL,
+                    unit_price_cents INTEGER,
                     is_active BOOLEAN DEFAULT TRUE NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     CONSTRAINT check_unit_cost_positive CHECK (unit_cost_cents >= 0),
-                    CONSTRAINT check_unit_price_positive CHECK (unit_price_cents >= 0)
+                    CONSTRAINT check_unit_price_positive CHECK (unit_price_cents IS NULL OR unit_price_cents >= 0)
                 )
                 """
             )
@@ -400,6 +400,98 @@ def add_stock(data: dict):
         "product_id": data["product_id"],
         "current_stock": stock["stock_qty"] if stock else None,
     }
+
+
+def update_product_price(product_id: int, unit_price_cents: int):
+    """
+    Update unit_price_cents for an existing product. Mirror of the sqlite
+    counterpart in database.py.
+    """
+    if unit_price_cents is None or unit_price_cents < 0:
+        raise ValueError("unit_price_cents debe ser >= 0")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE products SET unit_price_cents = %s WHERE id = %s",
+                (unit_price_cents, product_id),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"No existe producto con id {product_id}")
+
+            cur.execute(
+                "SELECT id, sku, name, unit_price_cents FROM products WHERE id = %s",
+                (product_id,),
+            )
+            row = cur.fetchone()
+
+    return dict(row) if row else None
+
+
+def register_product_with_stock(data: dict):
+    """
+    Atomically: register a new product + add initial stock entry.
+
+    Same contract as the sqlite counterpart in database.py.
+    Both INSERTs run inside a single connection transaction; if the
+    stock insert fails, the product insert is rolled back.
+    """
+    initial_stock = data["initial_stock"]
+    if initial_stock <= 0:
+        raise ValueError("initial_stock debe ser mayor a 0")
+
+    stock_reason = data.get("stock_reason", "Entrada inicial")
+    unit_cost_cents = data.get("unit_cost_cents", 0) or 0
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO products (
+                      sku, name, description, unit_price_cents, unit_cost_cents
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        data["sku"],
+                        data["name"],
+                        data.get("description"),
+                        data.get("unit_price_cents"),
+                        unit_cost_cents,
+                    ),
+                )
+                product_id = cur.fetchone()["id"]
+
+                cur.execute(
+                    """
+                    INSERT INTO stock_movements (
+                        product_id, movement_type, quantity, reason, created_at
+                    )
+                    VALUES (%s, 'IN', %s, %s, CURRENT_TIMESTAMP)
+                    """,
+                    (product_id, initial_stock, stock_reason),
+                )
+
+                cur.execute(
+                    "SELECT stock_qty FROM stock_current WHERE product_id = %s",
+                    (product_id,),
+                )
+                stock = cur.fetchone()
+
+        return {
+            "product_id": product_id,
+            "sku": data["sku"],
+            "name": data["name"],
+            "initial_stock": initial_stock,
+            "current_stock": stock["stock_qty"] if stock else initial_stock,
+        }
+    except psycopg2.IntegrityError as e:
+        error_msg = str(e)
+        if "unique constraint" in error_msg.lower() and "sku" in error_msg.lower():
+            raise ValueError(f"El SKU '{data['sku']}' ya existe.")
+        raise
 
 
 def remove_stock(data: dict):

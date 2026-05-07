@@ -22,6 +22,8 @@ from agents.resolver import (
     generate_word_variations,
     translate_product_terms,
     generate_sku_from_name,
+    create_resolver_agent,
+    route_after_resolver,
 )
 
 
@@ -306,6 +308,94 @@ class TestFieldValidation:
         missing = validate_required_fields("ADD_STOCK", entities)
 
         assert "quantity" in missing
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestProposeProductCreation:
+    """Tests for the PROPOSE_PRODUCT_CREATION branch in the resolver."""
+
+    def _resolver(self):
+        return create_resolver_agent(llm=None)
+
+    def _state(self, entities, operation_type="ADD_STOCK", user_input=""):
+        return {
+            "normalized_entities": entities,
+            "operation_type": operation_type,
+            "user_input": user_input,
+        }
+
+    def test_top_level_unresolved_product_with_quantity_triggers_propose(
+        self, populated_db
+    ):
+        resolver = self._resolver()
+        state = self._state({"product_ref": "manzanas", "quantity": 15})
+
+        result = resolver(state)
+
+        assert result["intent"] == "PROPOSE_PRODUCT_CREATION"
+        assert result["operation_type"] is None
+        assert result["missing_fields"] == []
+        assert result["normalized_entities"]["candidate_name"] == "manzanas"
+        assert result["normalized_entities"]["quantity"] == 15
+        assert "manzanas" in result["final_answer"]
+        assert "15" in result["final_answer"]
+        assert "product_id" not in result["final_answer"]
+
+    def test_single_item_unresolved_with_quantity_triggers_propose(
+        self, populated_db
+    ):
+        resolver = self._resolver()
+        state = self._state(
+            {"items": [{"product_ref": "manzanas", "quantity": 15}]}
+        )
+
+        result = resolver(state)
+
+        assert result["intent"] == "PROPOSE_PRODUCT_CREATION"
+        assert result["normalized_entities"]["candidate_name"] == "manzanas"
+        assert result["normalized_entities"]["quantity"] == 15
+
+    def test_resolved_product_does_not_trigger_propose(self, populated_db):
+        """Producto que SÍ existe en catálogo: no debe disparar propose."""
+        resolver = self._resolver()
+        state = self._state(
+            {"product_ref": "BC-BRACELET-BLACK", "quantity": 10}
+        )
+
+        result = resolver(state)
+
+        assert result.get("intent") != "PROPOSE_PRODUCT_CREATION"
+        assert "product_id" in result["normalized_entities"]
+
+    def test_unresolved_product_without_quantity_does_not_trigger_propose(
+        self, populated_db
+    ):
+        """Sin quantity, cae al flow normal de missing_fields."""
+        resolver = self._resolver()
+        state = self._state({"product_ref": "manzanas"})
+
+        result = resolver(state)
+
+        # No es PROPOSE; el flow normal mete product_id/quantity como missing
+        assert result.get("intent") != "PROPOSE_PRODUCT_CREATION"
+        assert "missing_fields" in result
+
+    def test_propose_only_for_add_stock(self, populated_db):
+        """REGISTER_SALE con producto inexistente no dispara propose (no es su flow)."""
+        resolver = self._resolver()
+        state = self._state(
+            {"items": [{"product_ref": "manzanas", "quantity": 3}]},
+            operation_type="REGISTER_SALE",
+        )
+
+        result = resolver(state)
+
+        assert result.get("intent") != "PROPOSE_PRODUCT_CREATION"
+
+    def test_route_after_resolver_propose_goes_to_final_answer(self):
+        state = {"intent": "PROPOSE_PRODUCT_CREATION"}
+        assert route_after_resolver(state) == "final_answer"
 
 
 # ==============================================================================

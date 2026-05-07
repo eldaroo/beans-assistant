@@ -160,6 +160,101 @@ def add_stock(data: dict):
     }
 
 
+def update_product_price(product_id: int, unit_price_cents: int):
+    """
+    Update unit_price_cents for an existing product (typically after the
+    chat user gives a price for a product previously created with a pending
+    price).
+
+    Returns: { id, sku, name, unit_price_cents } of the updated row.
+    """
+    if unit_price_cents is None or unit_price_cents < 0:
+        raise ValueError("unit_price_cents debe ser >= 0")
+
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE products SET unit_price_cents = ? WHERE id = ?",
+            (unit_price_cents, product_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"No existe producto con id {product_id}")
+
+        row = conn.execute(
+            "SELECT id, sku, name, unit_price_cents FROM products WHERE id = ?",
+            (product_id,),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def register_product_with_stock(data: dict):
+    """
+    Atomically: register a new product + add initial stock entry.
+
+    data = {
+        sku, name, description?,
+        unit_price_cents (None allowed = price pending),
+        unit_cost_cents (default 0),
+        initial_stock (>0),
+        stock_reason (default "Entrada inicial"),
+    }
+    Returns: { product_id, sku, name, initial_stock, current_stock }
+    """
+    initial_stock = data["initial_stock"]
+    if initial_stock <= 0:
+        raise ValueError("initial_stock debe ser mayor a 0")
+
+    stock_reason = data.get("stock_reason", "Entrada inicial")
+    unit_cost_cents = data.get("unit_cost_cents", 0) or 0
+
+    try:
+        with get_conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO products (
+                  sku, name, description, unit_price_cents, unit_cost_cents
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    data["sku"],
+                    data["name"],
+                    data.get("description"),
+                    data.get("unit_price_cents"),
+                    unit_cost_cents,
+                ),
+            )
+            product_id = cur.lastrowid
+
+            conn.execute(
+                """
+                INSERT INTO stock_movements (
+                    product_id, movement_type, quantity, reason, created_at
+                )
+                VALUES (?, 'IN', ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (product_id, initial_stock, stock_reason),
+            )
+
+            stock = conn.execute(
+                "SELECT stock_qty FROM stock_current WHERE product_id = ?",
+                (product_id,),
+            ).fetchone()
+
+        return {
+            "product_id": product_id,
+            "sku": data["sku"],
+            "name": data["name"],
+            "initial_stock": initial_stock,
+            "current_stock": stock["stock_qty"] if stock else initial_stock,
+        }
+    except sqlite3.IntegrityError as e:
+        error_msg = str(e)
+        if "UNIQUE constraint failed: products.sku" in error_msg:
+            raise ValueError(f"El SKU '{data['sku']}' ya existe.")
+        raise
+
+
 def remove_stock(data: dict):
     """
     Remove stock from a product.
