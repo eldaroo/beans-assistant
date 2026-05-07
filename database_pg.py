@@ -159,11 +159,11 @@ def create_tenant_schema(schema_name: str):
                     name VARCHAR(255) NOT NULL,
                     description TEXT,
                     unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-                    unit_price_cents INTEGER NOT NULL,
+                    unit_price_cents INTEGER,
                     is_active BOOLEAN DEFAULT TRUE NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     CONSTRAINT check_unit_cost_positive CHECK (unit_cost_cents >= 0),
-                    CONSTRAINT check_unit_price_positive CHECK (unit_price_cents >= 0)
+                    CONSTRAINT check_unit_price_positive CHECK (unit_price_cents IS NULL OR unit_price_cents >= 0)
                 )
                 """
             )
