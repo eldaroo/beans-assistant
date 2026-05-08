@@ -71,11 +71,47 @@ class ChatService:
             (entry for entry in reversed(history) if entry.get("role") == "assistant"),
             None,
         )
+        last_metadata = (last_assistant.get("metadata") if last_assistant else None) or {}
         ambiguity_marker = ""
-        if last_assistant and (last_assistant.get("metadata") or {}).get("last_intent") == "AMBIGUOUS":
+        if last_metadata.get("last_intent") == "AMBIGUOUS":
             ambiguity_marker = (
                 "[Nota: el turno anterior del asistente fue una pregunta de "
                 "aclaracion entre dos intents. El usuario responde abajo.]\n"
+            )
+
+        # PR-A fix #3: when the previous turn left the conversation waiting
+        # on missing fields (e.g. user said "vendo medias, pantaletas y
+        # soquetes" and the bot replied asking for prices), the router on
+        # the next turn re-classifies cold and loses the product names.
+        # Inject a context marker that names the products and the pending
+        # fields so the user's reply ("las medias 15, las pantaletas 20")
+        # can be bound to the right entities downstream.
+        pending_marker = ""
+        pending_entities = last_metadata.get("pending_entities") or {}
+        items = pending_entities.get("items") or []
+        if items:
+            names = [item.get("name") for item in items if item.get("name")]
+            field_set: list[str] = []
+            for item in items:
+                for field in item.get("missing_fields") or []:
+                    if field not in field_set:
+                        field_set.append(field)
+            field_translations = {
+                "unit_price_cents": "el precio",
+                "unit_price": "el precio",
+                "unit_cost_cents": "el costo",
+                "unit_cost": "el costo",
+                "name": "el nombre",
+                "quantity": "la cantidad",
+                "amount_cents": "el monto",
+                "description": "la descripcion",
+            }
+            friendly_fields = [field_translations.get(f, f) for f in field_set] or ["datos"]
+            fields_str = ", ".join(friendly_fields)
+            names_str = ", ".join(names) if names else "los productos previos"
+            pending_marker = (
+                f"[Contexto: turno anterior pidio {fields_str} para los productos: "
+                f"{names_str}. El usuario ahora puede estar respondiendo con esos datos.]\n"
             )
 
         context_text = "\n".join(history_lines)
@@ -83,8 +119,65 @@ class ChatService:
             "Contexto de conversación reciente:\n"
             f"{context_text}\n\n"
             f"{ambiguity_marker}"
+            f"{pending_marker}"
             f"Mensaje actual: {message}"
         )
+
+    @classmethod
+    def _build_pending_entities(
+        cls,
+        operation_type: str | None,
+        normalized_entities: dict | None,
+        missing_fields: list[str] | None,
+    ) -> dict | None:
+        """Build the pending_entities metadata shape for the next turn.
+
+        Designed to support N items (post-PR-B decomposer can populate
+        multiple) but populates a single-item shape from the available
+        normalized_entities when the resolver is on the legacy direct
+        path. Returns None when there is nothing pending to track.
+        """
+        if not missing_fields:
+            return None
+        normalized_entities = normalized_entities or {}
+
+        # Exclude marker fields. ambiguous_comma_name_split is consumed by
+        # the final_answer node as a clarifier signal, not a real missing
+        # data point we want to chase across turns.
+        real_missing = [
+            f for f in missing_fields if f != "ambiguous_comma_name_split"
+        ]
+        if not real_missing:
+            return None
+
+        items: list[dict] = []
+        items_field = normalized_entities.get("items")
+        if isinstance(items_field, list) and items_field:
+            for raw in items_field:
+                if not isinstance(raw, dict):
+                    continue
+                name = raw.get("name")
+                if not name:
+                    continue
+                items.append({
+                    "name": name,
+                    "missing_fields": list(real_missing),
+                })
+        else:
+            name = normalized_entities.get("name")
+            if name:
+                items.append({
+                    "name": name,
+                    "missing_fields": list(real_missing),
+                })
+
+        if not items:
+            return None
+
+        return {
+            "operation_type": operation_type,
+            "items": items,
+        }
 
     @classmethod
     def _append_history(
@@ -109,6 +202,14 @@ class ChatService:
                 for key in ("last_intent", "operation_type")
                 if bot_metadata.get(key) is not None
             }
+            # PR-A fix #3: cross-turn missing-fields context. Persist
+            # pending_entities only when the previous turn left fields
+            # unresolved. Cleared automatically on the next assistant turn
+            # because the caller only passes pending_entities when the
+            # current turn still has missing_fields.
+            pending = bot_metadata.get("pending_entities")
+            if pending:
+                persisted["pending_entities"] = pending
             if persisted:
                 assistant_entry["metadata"] = persisted
         history.append(assistant_entry)
@@ -231,6 +332,14 @@ class ChatService:
                 "operation_type": result.get("operation_type"),
                 "confidence": result.get("confidence"),
             }
+            # PR-A fix #3: capture pending_entities when the current turn
+            # finished with missing_fields, so the next turn can resolve
+            # the user's reply against the named products.
+            pending_entities = cls._build_pending_entities(
+                operation_type=result.get("operation_type"),
+                normalized_entities=result.get("normalized_entities"),
+                missing_fields=result.get("missing_fields"),
+            )
             logger.info(f"chat_with_tenant: appending to history for phone={resolved_phone}")
             cls._append_history(
                 phone=resolved_phone,
@@ -239,6 +348,7 @@ class ChatService:
                 bot_metadata={
                     "last_intent": result.get("intent"),
                     "operation_type": result.get("operation_type"),
+                    "pending_entities": pending_entities,
                 },
             )
             logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
