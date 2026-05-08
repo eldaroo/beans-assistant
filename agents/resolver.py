@@ -1031,7 +1031,14 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
                 if "unit_cost_cents" not in item:
                     item["unit_cost_cents"] = 0
         else:
-            required = ["name", "unit_price_cents"]
+            # PR-A fix #2: post-greeting captura demonstrated that tenants
+            # responding "vendo medias, pantaletas y soquetes" obey the
+            # empty-catalog greeting copy literally and provide names only.
+            # PR-1 made unit_price_cents nullable in the schema; the direct
+            # REGISTER_PRODUCT path must mirror the items[] branch (already
+            # name-only) and accept None for unit_price_cents. The bot then
+            # creates the product with price pending and asks for it later.
+            required = ["name"]
             for field in required:
                 if field not in entities:
                     missing.append(field)

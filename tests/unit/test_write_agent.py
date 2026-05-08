@@ -280,6 +280,31 @@ class TestRegisterProductHandler:
         assert "PRETTY-PRODUCT" in final_answer
         assert "$45" in final_answer or "$45.00" in final_answer
 
+    def test_execute_register_product_null_price(self, test_db):
+        """PR-A fix #2: empty-catalog captura where the user replies with
+        names only. Resolver lets it through with unit_price_cents=None;
+        write agent must not crash on the price f-string and must surface
+        "precio pendiente" in the summary."""
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "normalized_entities": {
+                "sku": "MEDIAS-001",
+                "name": "medias",
+                "unit_price_cents": None,
+                "unit_cost_cents": 0,
+            },
+            "missing_fields": [],
+            "intent": "WRITE_OPERATION",
+        }
+
+        result = write_agent(state)
+
+        assert result.get("operation_result") is not None
+        assert result["operation_result"]["status"] == "ok"
+        assert "medias" in result["final_answer"]
+        assert "precio pendiente" in result["final_answer"]
+
 
 # ==============================================================================
 # ADD_STOCK HANDLER TESTS (4 tests)

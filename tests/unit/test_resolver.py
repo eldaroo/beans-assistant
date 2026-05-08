@@ -302,6 +302,25 @@ class TestFieldValidation:
 
         assert "name" in missing
 
+    def test_register_product_required_name_only(self, test_db):
+        """PR-A fix #2: tenants responding to the empty-catalog greeting
+        with names only ("vendo medias") must pass validation. The schema
+        is nullable post PR-1; the resolver no longer demands a price.
+        test_db fixture is required because the validation path lazily
+        generates a SKU which queries the products table."""
+        entities = {"name": "medias"}
+        missing = validate_required_fields("REGISTER_PRODUCT", entities)
+
+        assert missing == []
+
+    def test_register_product_null_price_does_not_validate_missing(self, test_db):
+        """A REGISTER_PRODUCT with explicit unit_price_cents=None must
+        be accepted. NULL price means "precio pendiente" downstream."""
+        entities = {"name": "medias", "unit_price_cents": None}
+        missing = validate_required_fields("REGISTER_PRODUCT", entities)
+
+        assert missing == []
+
     def test_validate_add_stock_missing_quantity(self):
         """Test validation for ADD_STOCK without quantity."""
         entities = {"product_id": 1}  # Missing quantity

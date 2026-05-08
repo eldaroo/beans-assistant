@@ -287,6 +287,11 @@ def create_write_agent():
                     operation_summary = operation_summary.rstrip()
                 else:
                     # Legacy single-product path. Validation already done by Resolver.
+                    # PR-A fix #2: unit_price_cents may be None when the user
+                    # responded to the empty-catalog greeting with names-only.
+                    # The schema is nullable (PR-1) and the resolver no longer
+                    # forces the field; render "precio pendiente" in the
+                    # summary instead of crashing on the f-string division.
                     sku = entities.get("sku")
                     name = entities.get("name")
                     unit_price_cents = entities.get("unit_price_cents")
@@ -303,10 +308,15 @@ def create_write_agent():
 
                     result = register_product(product_data)
 
+                    if unit_price_cents is not None:
+                        price_line = f"• Precio: *${unit_price_cents/100:.2f}*"
+                    else:
+                        price_line = "• Precio: _precio pendiente_"
+
                     operation_summary = f"*✨ Producto creado!*\n\n"
                     operation_summary += f"• {name}\n"
                     operation_summary += f"• Código: _{sku}_\n"
-                    operation_summary += f"• Precio: *${unit_price_cents/100:.2f}*"
+                    operation_summary += price_line
 
             elif operation_type == "UPDATE_PRODUCT_PRICE":
                 # Set or change the sale price of an existing product.
