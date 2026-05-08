@@ -1,0 +1,153 @@
+{
+  "_doc": "Eval set for the decomposer node (PR-B). Pinned cases per ADR _brain/output/architecture/timonel-decomposer-adr.md. Each case asserts (a) whether the regex gate fires (should_decompose), and (b) the expected sub_inputs list. Pass-through cases must keep the exact input as the only sub_input. Run with: python tests/eval/decomposer/run_eval.py --n-runs 1 (use --n-runs 3 for stability check; that triples LLM cost so default to 1 for first pass).",
+
+  "cases": [
+    {
+      "name": "multi_register_product_vendo",
+      "category": "multi_intent",
+      "input": "vendo medias, pantaletas y soquetes",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "vendo medias",
+          "vendo pantaletas",
+          "vendo soquetes"
+        ]
+      }
+    },
+    {
+      "name": "two_items_with_prices_passthrough",
+      "category": "edge",
+      "input": "vendo medias 15, pantaletas 20",
+      "context": null,
+      "expected": {
+        "should_decompose": false,
+        "sub_inputs": ["vendo medias 15, pantaletas 20"]
+      }
+    },
+    {
+      "name": "mixed_sale_and_purchase",
+      "category": "multi_intent",
+      "input": "vendi 5 medias y compre 3 peras",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "vendi 5 medias",
+          "compre 3 peras"
+        ]
+      }
+    },
+    {
+      "name": "expense_and_sale",
+      "category": "multi_intent",
+      "input": "registro gasto de envios y vendo soquetes",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "registro gasto de envios",
+          "vendo soquetes"
+        ]
+      }
+    },
+    {
+      "name": "three_capitalized_nouns",
+      "category": "multi_intent",
+      "input": "creo medias, peras, bananas",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "creo medias",
+          "creo peras",
+          "creo bananas"
+        ]
+      }
+    },
+    {
+      "name": "multi_sale_with_quantities",
+      "category": "multi_intent",
+      "input": "vendi 2 medias, 3 pantaletas y 4 soquetes",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "vendi 2 medias",
+          "vendi 3 pantaletas",
+          "vendi 4 soquetes"
+        ]
+      }
+    },
+    {
+      "name": "compre_y_anula_multi_verb",
+      "category": "multi_intent",
+      "input": "compre 5 peras y anula la ultima venta",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "compre 5 peras",
+          "anula la ultima venta"
+        ]
+      }
+    },
+
+    {
+      "name": "single_register_sale_passthrough",
+      "category": "passthrough",
+      "input": "vendi 5 pulseras negras",
+      "context": null,
+      "expected": {
+        "should_decompose": false,
+        "sub_inputs": ["vendi 5 pulseras negras"]
+      }
+    },
+    {
+      "name": "single_read_query_passthrough",
+      "category": "passthrough",
+      "input": "cuanto stock tengo",
+      "context": null,
+      "expected": {
+        "should_decompose": false,
+        "sub_inputs": ["cuanto stock tengo"]
+      }
+    },
+    {
+      "name": "single_greeting_passthrough",
+      "category": "passthrough",
+      "input": "hola",
+      "context": null,
+      "expected": {
+        "should_decompose": false,
+        "sub_inputs": ["hola"]
+      }
+    },
+
+    {
+      "name": "two_items_no_verb_edge",
+      "category": "edge",
+      "input": "manzanas, peras",
+      "context": null,
+      "expected": {
+        "should_decompose": false,
+        "sub_inputs": ["manzanas, peras"]
+      }
+    },
+    {
+      "name": "newline_separated_three_items_edge",
+      "category": "edge",
+      "input": "vendo medias\nvendo pantaletas\nvendo soquetes",
+      "context": null,
+      "expected": {
+        "should_decompose": true,
+        "sub_inputs": [
+          "vendo medias",
+          "vendo pantaletas",
+          "vendo soquetes"
+        ]
+      }
+    }
+  ]
+}
