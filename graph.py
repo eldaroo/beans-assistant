@@ -7,6 +7,7 @@ through specialized agents based on intent classification.
 Flow:
     User Input → Router → [Read Agent | Resolver → Write Agent → (Read Agent)] → Final Answer
 """
+import re
 from typing import Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableConfig
@@ -166,6 +167,32 @@ def create_final_answer_node():
         # If we have missing fields, ask for them
         missing = state.get("missing_fields", [])
         if missing:
+            # PR-A fix #1: comma-name corruption guard from the resolver.
+            # When the single REGISTER_PRODUCT branch sees a name with
+            # commas or " y " connector, it appends this marker so we
+            # translate it here into an explicit clarifier instead of
+            # listing it as a missing field to the user.
+            if "ambiguous_comma_name_split" in missing:
+                entities = state.get("normalized_entities") or {}
+                raw_name = (entities.get("name") or "").strip()
+                hint = ""
+                if raw_name:
+                    # Show the user the names we parsed so they can confirm
+                    # or correct without having to retype the whole list.
+                    candidates = [
+                        token.strip()
+                        for token in re.split(r",|\s+y\s+", raw_name)
+                        if token.strip()
+                    ]
+                    if candidates:
+                        hint = " (" + ", ".join(candidates) + ")"
+                return {
+                    "final_answer": (
+                        "Vi varios nombres en tu mensaje" + hint + ". "
+                        "Querés que cree estos como productos separados? "
+                        "Pasame la lista o decime que sea uno solo."
+                    )
+                }
             # Translate technical field names to user-friendly Spanish
             field_translations = {
                 "unit_price": "el precio de venta",

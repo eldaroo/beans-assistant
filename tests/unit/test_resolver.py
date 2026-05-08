@@ -321,6 +321,57 @@ class TestFieldValidation:
 
         assert missing == []
 
+    def test_register_product_comma_name_split_emits_ambiguous_marker(self, test_db):
+        """PR-A fix #1: comma-separated name on the single-product branch
+        must emit the marker so the next turn surfaces a clarifier instead
+        of locking in the pathological name when the price arrives."""
+        entities = {"name": "medias, pantaletas y soquetes"}
+        missing = validate_required_fields("REGISTER_PRODUCT", entities)
+
+        assert "ambiguous_comma_name_split" in missing
+        assert entities.get("_comma_name_detected") is True
+
+    def test_register_product_name_with_y_emits_ambiguous_marker(self, test_db):
+        """The connector " y " (with surrounding whitespace) must also
+        trigger the guard, even without a comma."""
+        entities = {"name": "medias y pantaletas"}
+        missing = validate_required_fields("REGISTER_PRODUCT", entities)
+
+        assert "ambiguous_comma_name_split" in missing
+
+    def test_register_product_normal_name_no_marker(self, test_db):
+        """A normal multi-word name like "remera azul" must NOT trip
+        the guard; the bare letter "y" inside a token is irrelevant."""
+        entities = {"name": "remera azul"}
+        missing = validate_required_fields("REGISTER_PRODUCT", entities)
+
+        assert "ambiguous_comma_name_split" not in missing
+        assert entities.get("_comma_name_detected") is not True
+
+    def test_comma_name_marker_renders_clarifier_in_final_answer(self):
+        """PR-A fix #1: the marker is translated by the final_answer node
+        into a user-facing clarifier listing the parsed candidates."""
+        from graph import create_final_answer_node
+
+        node = create_final_answer_node()
+        state = {
+            "intent": "WRITE_OPERATION",
+            "operation_type": "REGISTER_PRODUCT",
+            "missing_fields": ["ambiguous_comma_name_split"],
+            "normalized_entities": {
+                "name": "medias, pantaletas y soquetes",
+                "_comma_name_detected": True,
+            },
+        }
+        result = node(state)
+        answer = result["final_answer"]
+        assert "Vi varios nombres" in answer
+        assert "medias" in answer
+        assert "pantaletas" in answer
+        assert "soquetes" in answer
+        # The technical marker must not leak to the user.
+        assert "ambiguous_comma_name_split" not in answer
+
     def test_validate_add_stock_missing_quantity(self):
         """Test validation for ADD_STOCK without quantity."""
         entities = {"product_id": 1}  # Missing quantity
