@@ -257,6 +257,10 @@
             _focusReturn: null,
             _trapHandler: null,
             _seedMessage: '',
+            // PR-A fix #4: set true when the greeting endpoint reports
+            // kind="empty_catalog". Used to suppress the post-reply chip
+            // rail and to drive the .empty-catalog wrapper class.
+            _catalogEmpty: false,
 
             // --- lifecycle ---
             init: function () {
@@ -332,6 +336,22 @@
                     })
                     .then(function (payload) {
                         if (!payload || !payload.greeting) return;
+                        // PR-A fix #4: when the backend reports the catalog
+                        // is empty, suppress quick-action chips (Detalle por
+                        // producto / Comparar con la semana pasada) for the
+                        // life of this session. Those CTAs are off-context
+                        // for tenants that have not loaded products yet and
+                        // create the false expectation that the buttons do
+                        // something useful pre-onboarding.
+                        if (payload.kind === 'empty_catalog') {
+                            self._catalogEmpty = true;
+                            self.suggestions = [];
+                            try {
+                                if (self.$refs.shell && self.$refs.shell.classList) {
+                                    self.$refs.shell.classList.add('empty-catalog');
+                                }
+                            } catch (_) { /* no shell ref yet, CSS class is belt; suggestions = [] is suspenders */ }
+                        }
                         // Only push if the thread is still empty: the user
                         // may have raced and typed something already.
                         if (self.messages.length > 0) return;
@@ -592,7 +612,11 @@
                         }
                         // Post-reply chip rail (different copy per mode). Only
                         // re-show chips on a clean turn (no error, not redirecting).
-                        if (!errorCode && !metadata.complete && !self.input.trim()) {
+                        // PR-A fix #4: also suppress chips when the catalog
+                        // is still empty; the post-reply CTAs ("Detalle por
+                        // producto", "Comparar con la semana pasada") have
+                        // no surface to land on yet.
+                        if (!errorCode && !metadata.complete && !self.input.trim() && !self._catalogEmpty) {
                             self.suggestions = self.isOnboarding
                                 ? ONBOARDING_POST_REPLY_SUGGESTIONS.slice()
                                 : POST_REPLY_SUGGESTIONS.slice();

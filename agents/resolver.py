@@ -9,6 +9,7 @@ Responsibilities:
 - NO writes
 - NO final decisions
 """
+import re
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from database_config import fetch_one, fetch_all
@@ -1031,10 +1032,39 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
                 if "unit_cost_cents" not in item:
                     item["unit_cost_cents"] = 0
         else:
-            required = ["name", "unit_price_cents"]
+            # PR-A fix #2: post-greeting captura demonstrated that tenants
+            # responding "vendo medias, pantaletas y soquetes" obey the
+            # empty-catalog greeting copy literally and provide names only.
+            # PR-1 made unit_price_cents nullable in the schema; the direct
+            # REGISTER_PRODUCT path must mirror the items[] branch (already
+            # name-only) and accept None for unit_price_cents. The bot then
+            # creates the product with price pending and asks for it later.
+            required = ["name"]
             for field in required:
                 if field not in entities:
                     missing.append(field)
+
+            # PR-A fix #1: guard against silent comma-name corruption. A
+            # single-product create whose `name` looks like a list
+            # ("medias, pantaletas y soquetes") would otherwise persist a
+            # single product with that pathological name when the user
+            # provides a price. Reescalate to a clarifier signal so the
+            # next turn surfaces the choice instead of locking in the
+            # corruption. PR-B's decomposer is the structural fix; this
+            # guard is the bridge until that lands.
+            name_value = entities.get("name") or ""
+            if re.search(r",|\s+y\s+", name_value):
+                entities["_comma_name_detected"] = True
+                # Use a sentinel marker in missing_fields so route_after_resolver
+                # still routes to final_answer naturally and the final_answer
+                # node translates the marker into a user-facing clarifier.
+                missing.append("ambiguous_comma_name_split")
+                # Skip SKU autogeneration: we do not want a SKU for a
+                # pathological name and we do not want to pollute the DB
+                # cache.
+                if "unit_cost_cents" not in entities:
+                    entities["unit_cost_cents"] = 0
+                return missing
 
             # Auto-generate SKU if not provided
             if "sku" not in entities and "name" in entities:

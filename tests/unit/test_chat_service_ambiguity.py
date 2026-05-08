@@ -95,3 +95,174 @@ class TestAmbiguityMarkerInjection:
 
         assert "confidence" not in assistant_entry["metadata"]
         assert "extra_garbage" not in assistant_entry["metadata"]
+
+
+@pytest.mark.unit
+class TestPendingEntitiesMetadata:
+    """PR-A fix #3: cross-turn missing-fields context.
+
+    When the previous assistant turn finished with missing_fields, the
+    next turn router needs to know which named products are still
+    waiting on data. Without this, "las medias 15" reaches the router
+    cold and the bot loses the binding to the products from turn 1.
+    """
+    PHONE = "+5491153695627"
+
+    def test_build_pending_entities_single_product(self):
+        result = ChatService._build_pending_entities(
+            operation_type="REGISTER_PRODUCT",
+            normalized_entities={"name": "medias", "sku": "MEDIAS"},
+            missing_fields=["unit_price_cents"],
+        )
+        assert result == {
+            "operation_type": "REGISTER_PRODUCT",
+            "items": [
+                {"name": "medias", "missing_fields": ["unit_price_cents"]},
+            ],
+        }
+
+    def test_build_pending_entities_items_list(self):
+        result = ChatService._build_pending_entities(
+            operation_type="REGISTER_PRODUCT",
+            normalized_entities={
+                "items": [
+                    {"name": "medias"},
+                    {"name": "pantaletas"},
+                ],
+            },
+            missing_fields=["unit_price_cents"],
+        )
+        assert result["operation_type"] == "REGISTER_PRODUCT"
+        names = [item["name"] for item in result["items"]]
+        assert names == ["medias", "pantaletas"]
+        for item in result["items"]:
+            assert item["missing_fields"] == ["unit_price_cents"]
+
+    def test_build_pending_entities_empty_missing_fields_returns_none(self):
+        result = ChatService._build_pending_entities(
+            operation_type="REGISTER_PRODUCT",
+            normalized_entities={"name": "medias"},
+            missing_fields=[],
+        )
+        assert result is None
+
+    def test_build_pending_entities_no_named_items_returns_none(self):
+        result = ChatService._build_pending_entities(
+            operation_type="REGISTER_PRODUCT",
+            normalized_entities={},
+            missing_fields=["name"],
+        )
+        assert result is None
+
+    def test_build_pending_entities_skips_marker_only(self):
+        """If the only missing field is the comma-name marker (PR-A fix #1),
+        treat as nothing real to chase across turns."""
+        result = ChatService._build_pending_entities(
+            operation_type="REGISTER_PRODUCT",
+            normalized_entities={"name": "medias, pantaletas"},
+            missing_fields=["ambiguous_comma_name_split"],
+        )
+        assert result is None
+
+    def test_pending_entities_persisted_when_missing_fields_present(self):
+        """The full _append_history flow records pending_entities."""
+        ChatService._append_history(
+            self.PHONE,
+            "vendo medias",
+            "Me falta un dato: el precio de venta",
+            bot_metadata={
+                "last_intent": "WRITE_OPERATION",
+                "operation_type": "REGISTER_PRODUCT",
+                "pending_entities": {
+                    "operation_type": "REGISTER_PRODUCT",
+                    "items": [
+                        {"name": "medias", "missing_fields": ["unit_price_cents"]},
+                    ],
+                },
+            },
+        )
+        history = ChatService._history_by_key[ChatService._history_key(self.PHONE)]
+        assistant_entry = next(e for e in history if e.get("role") == "assistant")
+
+        assert "pending_entities" in assistant_entry["metadata"]
+        assert assistant_entry["metadata"]["pending_entities"]["items"][0]["name"] == "medias"
+
+    def test_pending_entities_cleared_when_resolved(self):
+        """Turn N had pending_entities; turn N+1 resolves all (no missing
+        fields). The N+1 entry must NOT carry pending_entities forward.
+        Cleanup happens because the caller only passes pending_entities
+        when the current turn still has missing_fields."""
+        ChatService._append_history(
+            self.PHONE,
+            "vendo medias",
+            "Me falta el precio",
+            bot_metadata={
+                "last_intent": "WRITE_OPERATION",
+                "operation_type": "REGISTER_PRODUCT",
+                "pending_entities": {
+                    "operation_type": "REGISTER_PRODUCT",
+                    "items": [
+                        {"name": "medias", "missing_fields": ["unit_price_cents"]},
+                    ],
+                },
+            },
+        )
+        ChatService._append_history(
+            self.PHONE,
+            "las medias 15",
+            "Listo, cargué medias a $15.",
+            bot_metadata={
+                "last_intent": "WRITE_OPERATION",
+                "operation_type": "REGISTER_PRODUCT",
+                "pending_entities": None,
+            },
+        )
+
+        history = ChatService._history_by_key[ChatService._history_key(self.PHONE)]
+        assistant_entries = [e for e in history if e.get("role") == "assistant"]
+        latest = assistant_entries[-1]
+        assert "pending_entities" not in (latest.get("metadata") or {})
+
+    def test_pending_marker_injected_in_message_with_context(self):
+        """Turn N+1 router sees the [Contexto:...] marker."""
+        ChatService._append_history(
+            self.PHONE,
+            "vendo medias, pantaletas y soquetes",
+            "Me falta un dato: el precio de venta",
+            bot_metadata={
+                "last_intent": "WRITE_OPERATION",
+                "operation_type": "REGISTER_PRODUCT",
+                "pending_entities": {
+                    "operation_type": "REGISTER_PRODUCT",
+                    "items": [
+                        {"name": "medias", "missing_fields": ["unit_price_cents"]},
+                        {"name": "pantaletas", "missing_fields": ["unit_price_cents"]},
+                        {"name": "soquetes", "missing_fields": ["unit_price_cents"]},
+                    ],
+                },
+            },
+        )
+        msg = ChatService._build_message_with_context(
+            self.PHONE,
+            "las medias 15, las pantaletas 20",
+        )
+        assert "[Contexto: turno anterior pidio el precio" in msg
+        assert "medias" in msg
+        assert "pantaletas" in msg
+        assert "soquetes" in msg
+        assert "Mensaje actual: las medias 15, las pantaletas 20" in msg
+
+    def test_no_pending_marker_when_last_assistant_has_no_pending(self):
+        """When pending_entities was cleared, the [Contexto:...] marker
+        must not appear in the next router input."""
+        ChatService._append_history(
+            self.PHONE,
+            "vendi 3 pulseras",
+            "Venta registrada!",
+            bot_metadata={
+                "last_intent": "WRITE_OPERATION",
+                "operation_type": "REGISTER_SALE",
+            },
+        )
+        msg = ChatService._build_message_with_context(self.PHONE, "cuanto stock?")
+        assert "[Contexto:" not in msg
