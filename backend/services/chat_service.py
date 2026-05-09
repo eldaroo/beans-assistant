@@ -20,6 +20,7 @@ class ChatService:
     _graph = None
     _context_max_turns = int(os.getenv("CHAT_CONTEXT_MAX_TURNS", "6"))
     _context_ttl_seconds = int(os.getenv("CHAT_CONTEXT_TTL_SECONDS", "1800"))
+    _pending_lookback_window = int(os.getenv("CHAT_PENDING_LOOKBACK", "2"))
     _history_by_key: dict[str, deque[dict[str, str]]] = defaultdict(
         lambda: deque(maxlen=ChatService._context_max_turns * 2)
     )
@@ -79,15 +80,35 @@ class ChatService:
                 "aclaracion entre dos intents. El usuario responde abajo.]\n"
             )
 
-        # PR-A fix #3: when the previous turn left the conversation waiting
-        # on missing fields (e.g. user said "vendo medias, pantaletas y
-        # soquetes" and the bot replied asking for prices), the router on
-        # the next turn re-classifies cold and loses the product names.
-        # Inject a context marker that names the products and the pending
-        # fields so the user's reply ("las medias 15, las pantaletas 20")
-        # can be bound to the right entities downstream.
+        # PR-A fix #3 + Voss-captura fix: when an earlier assistant turn left
+        # the conversation waiting on missing fields (e.g. bot asked for the
+        # price of "medias planas"), inject a context marker so the router
+        # knows to bind the user's reply to that pending slot instead of
+        # re-classifying cold.
+        #
+        # Look-back window: scan the last N assistant entries in history,
+        # most-recent first, for the first one that carries pending_entities.
+        # This survives interim AMBIGUOUS turns where the router emits a
+        # clarifier (no missing_fields → no new pending). Without this, a
+        # single mis-classified turn (e.g. "22 usd" → router emits
+        # "is it a price or an expense?") drops the pending state and the
+        # next turn cannot recover. Reproduced directly from the Voss captura
+        # at cp:20260508T064740Z follow-up.
         pending_marker = ""
-        pending_entities = last_metadata.get("pending_entities") or {}
+        pending_entities = (
+            last_metadata.get("pending_entities") if isinstance(last_metadata, dict) else None
+        ) or {}
+        if not pending_entities.get("items"):
+            assistant_entries = [
+                e for e in reversed(history) if e.get("role") == "assistant"
+            ]
+            for prior in assistant_entries[1:cls._pending_lookback_window + 1]:
+                meta = prior.get("metadata") or {}
+                pe = meta.get("pending_entities") or {}
+                if pe.get("items"):
+                    pending_entities = pe
+                    break
+
         items = pending_entities.get("items") or []
         if items:
             names = [item.get("name") for item in items if item.get("name")]
@@ -109,9 +130,11 @@ class ChatService:
             friendly_fields = [field_translations.get(f, f) for f in field_set] or ["datos"]
             fields_str = ", ".join(friendly_fields)
             names_str = ", ".join(names) if names else "los productos previos"
+            op_type = pending_entities.get("operation_type") or "REGISTER_PRODUCT"
             pending_marker = (
                 f"[Contexto: turno anterior pidio {fields_str} para los productos: "
-                f"{names_str}. El usuario ahora puede estar respondiendo con esos datos.]\n"
+                f"{names_str} (operacion {op_type}). El usuario ahora puede estar "
+                f"respondiendo con esos datos.]\n"
             )
 
         context_text = "\n".join(history_lines)

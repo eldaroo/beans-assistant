@@ -9,12 +9,162 @@ Responsibilities:
 - NO SQL execution
 - NO database writes
 """
+import re
 from typing import Dict, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
 from .state import AgentState
+
+
+# Pattern matches the pending-slot marker built by chat_service when the
+# previous turn left missing_fields (e.g. bot asked for a price, user is
+# expected to reply with one). Capturing groups: 1=field label (Spanish),
+# 2=product names (comma-separated), 3=operation type.
+_PENDING_MARKER_RE = re.compile(
+    r"\[Contexto:\s*turno anterior pidio\s+(?P<field>[^\(\[]+?)\s+"
+    r"para los productos:\s+(?P<names>[^\(\[]+?)\s+"
+    r"\(operacion\s+(?P<op>[A-Z_]+)\)",
+    re.IGNORECASE,
+)
+
+# Pattern to find the user's actual message (the line after the marker).
+_MENSAJE_ACTUAL_RE = re.compile(r"Mensaje actual:\s*(?P<msg>.+?)\s*$", re.MULTILINE | re.DOTALL)
+
+# Spanish field labels (as built by chat_service) → entity key + parser kind.
+_FIELD_TO_ENTITY: dict[str, tuple[str, str]] = {
+    "el precio": ("unit_price", "number"),
+    "el costo": ("unit_cost", "number"),
+    "la cantidad": ("quantity", "number"),
+    "el monto": ("amount", "number"),
+    "el nombre": ("name", "name"),
+    "la descripcion": ("description", "name"),
+}
+
+# Numeric reply with optional currency / article. Captures e.g. "22",
+# "22 usd", "$22", "a 22", "22 dolares", "22 dólares", "veintidos" (NO
+# digit words — only digits). Falls through to LLM if not matched.
+_NUMERIC_REPLY_RE = re.compile(
+    r"^\s*(?:a\s+|\$\s*)?(?P<value>\d+(?:[.,]\d+)?)"
+    r"\s*(?:usd|usdt|dolares|d[oó]lares|dollars|pesos|\$|€|eur)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_pending_marker(user_input: str) -> Optional[Dict[str, Any]]:
+    """Detect the pending-slot marker and return the parsed shape.
+
+    Returns None if the marker is absent or malformed. Caller should fall
+    through to the LLM in that case.
+    """
+    m = _PENDING_MARKER_RE.search(user_input or "")
+    if not m:
+        return None
+    field_label = m.group("field").strip().lower()
+    names_raw = m.group("names").strip()
+    op = m.group("op").strip().upper()
+
+    msg_match = _MENSAJE_ACTUAL_RE.search(user_input or "")
+    user_reply = (msg_match.group("msg") if msg_match else "").strip()
+
+    return {
+        "field_label": field_label,
+        "names_raw": names_raw,
+        "operation_type": op,
+        "user_reply": user_reply,
+    }
+
+
+def _short_circuit_pending_marker(user_input: str) -> Optional[Dict[str, Any]]:
+    """Deterministically resolve a pending-slot marker WITHOUT calling the LLM.
+
+    The router's prompt has multiple competing examples (UPDATE_PRODUCT_PRICE
+    bare-number reply, EXPENSE bare amount, AMBIGUOUS clarifier) that pull
+    Gemini-flash toward AMBIGUOUS even when the marker is present. This
+    short-circuit removes the LLM from the loop for the cases we can resolve
+    by pattern alone, and only those.
+
+    Returns the same shape as `classification_to_state` would. Returns None
+    when the input doesn't match — the caller falls through to the LLM.
+    """
+    parsed = _parse_pending_marker(user_input)
+    if not parsed:
+        return None
+
+    field_label = parsed["field_label"]
+    entity_meta = _FIELD_TO_ENTITY.get(field_label)
+    if entity_meta is None:
+        return None  # Unknown field shape — let the LLM try.
+
+    entity_key, kind = entity_meta
+    op = parsed["operation_type"]
+    names_raw = parsed["names_raw"]
+    user_reply = parsed["user_reply"]
+
+    # Build base entities from the marker's product names.
+    primary_name = names_raw
+    if "," in names_raw:
+        primary_name = names_raw.split(",", 1)[0].strip()
+    if not primary_name or primary_name == "los productos previos":
+        primary_name = ""
+    entities: Dict[str, Any] = {}
+    if primary_name:
+        entities["name"] = primary_name
+
+    missing: list[str] = []
+
+    # Parse the user's reply against the expected field shape.
+    if kind == "number":
+        m = _NUMERIC_REPLY_RE.match(user_reply)
+        if m:
+            raw = m.group("value").replace(",", ".")
+            try:
+                value = float(raw)
+                if value.is_integer():
+                    value = int(value)
+                entities[entity_key] = value
+            except ValueError:
+                missing.append(entity_key)
+        else:
+            # User did not give a number (e.g. "el precio de venta q me
+            # pediste"). Keep the slot open, but commit to the operation
+            # so the next turn re-asks under the same intent.
+            missing.append(entity_key)
+    else:
+        # Name / description: any short, direct reply counts. Sentence-
+        # shaped replies ("el producto se llama X", "es un Y de tipo Z",
+        # "le digo W") need NER — defer to the LLM in that case.
+        if (
+            user_reply
+            and len(user_reply) <= 60
+            and "\n" not in user_reply
+            and len(user_reply.split()) <= 4
+            and not re.search(
+                r"\b(se llama|llamo|llama|le digo|es un|es una|tipo|hace referencia)\b",
+                user_reply,
+                flags=re.IGNORECASE,
+            )
+        ):
+            entities[entity_key] = user_reply
+        else:
+            return None  # Defer to LLM.
+
+    return {
+        "intent": "WRITE_OPERATION",
+        "operation_type": op or "UNKNOWN",
+        "confidence": 0.99,
+        "missing_fields": missing,
+        "normalized_entities": entities,
+        "messages": [{
+            "role": "assistant",
+            "content": (
+                f"[Router] Pending marker short-circuit: op={op} "
+                f"field={field_label!r} value={entities.get(entity_key)!r} "
+                f"missing={missing}"
+            ),
+        }],
+    }
 
 
 class IntentClassification(BaseModel):
@@ -39,7 +189,76 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 
 Your ONLY job is to classify user intent. You DO NOT execute queries or operations.
 
-IMPORTANT CONVERSATION CONTEXT:
+================================================================
+RULE 0 — PENDING SLOT MARKER (READ THIS FIRST, SUPERSEDES ALL ELSE)
+================================================================
+
+BEFORE applying any other rule below, scan the user input for this marker:
+
+    [Contexto: turno anterior pidio <field> para los productos: <names>
+     (operacion <OP>). El usuario ahora puede estar respondiendo con esos datos.]
+
+If this marker is present, the bot already asked the user for `<field>` of
+`<names>` as part of operation `<OP>`. The "Mensaje actual" line that follows
+is the user's answer to that question.
+
+YOU MUST output exactly this shape when the marker is present:
+  - intent = "WRITE_OPERATION"  (NEVER "AMBIGUOUS", NEVER anything else)
+  - operation_type = the literal `<OP>` value from the marker
+  - clarifier = null
+  - normalized_entities filled from the marker's `<names>` PLUS the value
+    parsed from "Mensaje actual"
+
+How to map `<field>` to entity keys:
+  - "el precio"  → put the parsed number in `unit_price`
+  - "el costo"   → put the parsed number in `unit_cost`
+  - "el nombre"  → put the parsed string  in `name`
+  - "la cantidad"→ put the parsed number in `quantity`
+  - "el monto"   → put the parsed number in `amount`
+
+How to parse "Mensaje actual":
+  - Numbers may be bare ("22"), with currency ("22 usd", "22 dolares", "$22"),
+    or with an article ("a 22"). Strip non-numeric noise and emit a NUMBER.
+  - Names may be wrapped in a sentence; extract just the noun phrase.
+  - Sentences like "el precio de venta q me pediste" or "lo que ya te dije"
+    are pointers back to the prior turn — they confirm intent but do NOT
+    contain a new value. In that case keep `unit_price` (or whatever the
+    marker pointed at) as missing, BUT still emit
+    intent=WRITE_OPERATION and operation_type=<OP> so the bot can re-ask.
+
+WHILE THE MARKER IS PRESENT, ALL OF THE FOLLOWING ARE FORBIDDEN:
+  - emitting intent="AMBIGUOUS"
+  - asking the user "¿es un precio, un gasto, un costo, o un monto?" when
+    the marker has already declared which field was asked
+  - re-classifying based on the bare number alone
+  - inventing product names that are not in the marker (e.g. do NOT
+    emit `product_ref="manzanas"` when the marker says `medias planas`)
+  - treating the older AMBIGUOUS clarifiers in the conversation history
+    as live questions — the marker is the FRESHEST signal and outranks
+    all earlier turns
+
+The marker is non-negotiable ground truth.
+
+Worked examples:
+
+Example A — bare price reply for REGISTER_PRODUCT:
+Input ends with:
+    [Contexto: turno anterior pidio el precio para los productos: medias planas (operacion REGISTER_PRODUCT). ...]
+    Mensaje actual: 22 usd
+Output: {{"intent":"WRITE_OPERATION","operation_type":"REGISTER_PRODUCT","missing_fields":[],"normalized_entities":{{"name":"medias planas","unit_price":22}},"clarifier":null,"confidence":0.95,"reasoning":"Pending marker: REGISTER_PRODUCT for medias planas needed price. User said 22 usd. Bind 22 to unit_price."}}
+
+Example B — interim AMBIGUOUS already happened, marker forwarded:
+Input ends with:
+    Asistente: ¿Es un precio de venta, un costo, o un gasto?
+    [Contexto: turno anterior pidio el precio para los productos: medias planas (operacion REGISTER_PRODUCT). ...]
+    Mensaje actual: el precio de venta q me pediste
+Output: {{"intent":"WRITE_OPERATION","operation_type":"REGISTER_PRODUCT","missing_fields":["unit_price"],"normalized_entities":{{"name":"medias planas"}},"clarifier":null,"confidence":0.9,"reasoning":"Pending marker: REGISTER_PRODUCT for medias planas needed price. User confirms intent ('el precio de venta q me pediste') but does not give a new number, so unit_price stays missing. Operation_type stays REGISTER_PRODUCT — DO NOT invent other products or fall back to AMBIGUOUS."}}
+
+If — and ONLY if — the marker is absent, continue with the rules below.
+
+================================================================
+IMPORTANT CONVERSATION CONTEXT (when no pending marker is present):
+================================================================
 - The user input may include "Contexto de conversación reciente:" followed by previous messages
 - You MUST extract entities from BOTH the conversation context AND the current message
 - If the context mentions a product name and the current message mentions a price, combine both
@@ -456,6 +675,16 @@ def create_router_agent(llm):
             Updated state with intent classification
         """
         user_input = state["user_input"]
+
+        # Short-circuit: when the input carries a pending-slot marker built
+        # by chat_service, resolve it deterministically. The LLM tends to
+        # ignore the marker under noisy conversation history (multiple
+        # AMBIGUOUS clarifiers earlier) and falls back to an UPDATE_PRODUCT_
+        # PRICE / EXPENSE disambiguation that wipes the in-flight slot.
+        # Reproduced from the Voss captura at cp:20260508T064740Z follow-up.
+        short = _short_circuit_pending_marker(user_input)
+        if short is not None:
+            return short
 
         try:
             result = chain.invoke({"input": user_input})
