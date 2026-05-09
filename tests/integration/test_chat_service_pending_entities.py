@@ -151,3 +151,74 @@ def test_turn1_resolves_clean_no_pending_marker(monkeypatch):
         ChatService.chat_with_tenant(phone, "cuanto stock?")
 
     assert "[Contexto:" not in captured_inputs[1]
+
+
+@pytest.mark.integration
+def test_pending_marker_survives_interim_ambiguous_turn(monkeypatch):
+    """Voss captura defense-in-depth: turn 1 leaves a pending price slot,
+    turn 2 mis-classifies as AMBIGUOUS (no missing_fields persisted), and
+    turn 3 must STILL receive the marker thanks to the look-back window.
+
+    Reproduces the cascade documented at cp:20260508T064740Z follow-up where
+    a single mis-classified turn previously dropped pending state and the
+    next user message ('el precio de venta q me pediste') hit a cold
+    router that hallucinated unrelated products."""
+    phone = "+5491100000123"
+    _mock_tenant_manager(monkeypatch, phone)
+
+    captured_inputs: list[str] = []
+
+    def make_invoke(payload: dict):
+        def fake_invoke(state):
+            captured_inputs.append(state["user_input"])
+            return payload
+        return fake_invoke
+
+    fake_graph = MagicMock()
+
+    # Turn 1: bot asks for the price of "medias planas".
+    fake_graph.invoke.side_effect = make_invoke({
+        "messages": [],
+        "final_answer": "Me falta un dato: el precio de venta. Me lo podes decir?",
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "missing_fields": ["unit_price"],
+        "normalized_entities": {"name": "medias planas"},
+    })
+    with patch.object(ChatService, "_get_graph", return_value=fake_graph):
+        ChatService.chat_with_tenant(phone, "crear medias planas")
+
+    # Turn 2: router mis-classifies "22 usd" as AMBIGUOUS (no missing_fields
+    # to persist on this turn → previous PR-A logic dropped pending here).
+    fake_graph.invoke.side_effect = make_invoke({
+        "messages": [],
+        "final_answer": "Es un precio, un costo, o un gasto?",
+        "intent": "AMBIGUOUS",
+        "operation_type": "UNKNOWN",
+        "missing_fields": [],
+        "normalized_entities": {},
+    })
+    with patch.object(ChatService, "_get_graph", return_value=fake_graph):
+        ChatService.chat_with_tenant(phone, "22 usd")
+
+    # Turn 3: user points back ("el precio de venta q me pediste"). The
+    # marker MUST be rebuilt from the older turn-1 metadata.
+    fake_graph.invoke.side_effect = make_invoke({
+        "messages": [],
+        "final_answer": "Me falta un dato: el precio de venta.",
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "missing_fields": ["unit_price"],
+        "normalized_entities": {"name": "medias planas"},
+    })
+    with patch.object(ChatService, "_get_graph", return_value=fake_graph):
+        ChatService.chat_with_tenant(phone, "el precio de venta q me pediste")
+
+    assert len(captured_inputs) == 3
+    turn3_input = captured_inputs[2]
+    assert "[Contexto: turno anterior pidio el precio" in turn3_input, (
+        "look-back window must rebuild the pending marker for turn 3 even "
+        "though turn 2 produced no missing_fields of its own"
+    )
+    assert "medias planas" in turn3_input
+    assert "(operacion REGISTER_PRODUCT)" in turn3_input

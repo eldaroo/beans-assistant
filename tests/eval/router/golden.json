@@ -314,6 +314,54 @@
         "operation_type": "REGISTER_PRODUCT",
         "entities": {"name": "pulseras turquesas", "unit_price": 15}
       }
+    },
+    {
+      "id": "pending_price_marker_register_product_voss",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "hard",
+      "_note": "Reproduces the Voss captura (cp:20260508T064740Z follow-up) end-to-end. Mid-REGISTER_PRODUCT slot fill, bot asked for unit_price, user replied with bare price '22 usd'. Includes the full noisy history (multiple AMBIGUOUS clarifiers) the production system actually feeds the router — earlier versions of this case used a stripped-down history and passed accidentally even when the live system failed. The pending marker MUST outrank the conversation noise.",
+      "input": "Contexto de conversación reciente:\nUsuario: vendo cosas\nAsistente: ¿Qué vendiste y en qué cantidad?\nUsuario: crear\nAsistente: ¿Qué querés crear: un producto nuevo, una venta o un gasto?\nUsuario: un producto nuevo\nAsistente: Me falta un dato: *el nombre del producto*\n\n¿Me lo podés decir?\nUsuario: el product se llama medias planas y hace referencia a las medias q no tienen dibujo\nAsistente: Me falta un dato: *el precio de venta*\n\n¿Me lo podés decir?\n\n[Contexto: turno anterior pidio el precio para los productos: medias planas (operacion REGISTER_PRODUCT). El usuario ahora puede estar respondiendo con esos datos.]\nMensaje actual: 22 usd",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "medias planas", "unit_price": 22}
+      }
+    },
+    {
+      "id": "pending_price_marker_register_product_short_history",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "medium",
+      "_note": "Same shape as voss case but with short, unambiguous history. Bare price reply must bind to the pending REGISTER_PRODUCT slot named by the marker.",
+      "input": "Contexto de conversación reciente:\nUsuario: crear producto pulseras de cuero\nAsistente: Me falta un dato: *el precio de venta*\n\n[Contexto: turno anterior pidio el precio para los productos: pulseras de cuero (operacion REGISTER_PRODUCT). El usuario ahora puede estar respondiendo con esos datos.]\nMensaje actual: 35",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "pulseras de cuero", "unit_price": 35}
+      }
+    },
+    {
+      "id": "pending_name_marker_register_product",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "medium",
+      "_note": "Marker says the bot asked for the product name. User replies with a descriptive sentence containing the name. Router must extract the name and route to REGISTER_PRODUCT (still missing unit_price), not re-classify cold.",
+      "input": "Contexto de conversación reciente:\nUsuario: quiero crear un producto nuevo\nAsistente: Me falta un dato: *el nombre del producto*\n\n[Contexto: turno anterior pidio el nombre para los productos: los productos previos (operacion REGISTER_PRODUCT). El usuario ahora puede estar respondiendo con esos datos.]\nMensaje actual: el producto se llama medias planas",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "medias planas"}
+      }
+    },
+    {
+      "id": "pending_price_marker_survives_interim_ambiguous",
+      "category": "REGISTER_PRODUCT",
+      "difficulty": "hard",
+      "_note": "Defense-in-depth: even after one interim AMBIGUOUS turn (router mis-classified '22 usd' as gasto-vs-precio), the look-back window in chat_service forwards the older pending marker. User on the next turn says 'el precio de venta q me pediste'. Router must still treat the pending REGISTER_PRODUCT slot as live and ask for the price (or carry forward — minimum bar is NOT to invent unrelated products like 'manzanas').",
+      "input": "Contexto de conversación reciente:\nUsuario: un producto nuevo\nAsistente: Me falta un dato: *el nombre del producto*\nUsuario: se llama medias planas\nAsistente: Me falta un dato: *el precio de venta*\nUsuario: 22 usd\nAsistente: ¿Querés registrar un gasto de 22 USD o establecer el precio de un producto en 22 USD?\n\n[Contexto: turno anterior pidio el precio para los productos: medias planas (operacion REGISTER_PRODUCT). El usuario ahora puede estar respondiendo con esos datos.]\nMensaje actual: el precio de venta q me pediste",
+      "expected": {
+        "intent": "WRITE_OPERATION",
+        "operation_type": "REGISTER_PRODUCT",
+        "entities": {"name": "medias planas"}
+      }
     }
   ]
 }

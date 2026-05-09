@@ -47,6 +47,32 @@ ACTION_VERBS = re.compile(
 )
 
 
+def _split_context_wrapper(user_input: str) -> tuple[str, str]:
+    """Split a message into (prefix, tail) around 'Mensaje actual:'.
+
+    chat_service wraps every non-first turn with a Spanish-language
+    "Contexto de conversación reciente:" block plus optional pending-slot
+    markers. The wrapper itself contains many ACTION_VERBS and list-shaped
+    text from prior turns that must NEVER trigger the multi-intent gate or
+    the LLM split — the only message eligible for decomposition is the
+    user's CURRENT one.
+
+    Returns ``(prefix, tail)`` where prefix includes the "Mensaje actual:"
+    label (so callers can stitch sub-inputs back into the wrapper) and
+    tail is the user's actual current message. If no wrapper is present,
+    returns ``("", user_input)``.
+    """
+    if not user_input:
+        return "", ""
+    marker = "Mensaje actual:"
+    idx = user_input.rfind(marker)
+    if idx == -1:
+        return "", user_input
+    prefix = user_input[: idx + len(marker)]
+    tail = user_input[idx + len(marker):].strip()
+    return prefix, tail
+
+
 def should_decompose(user_input: str) -> bool:
     """Pre-LLM gate. Returns True if user_input is a multi-intent candidate.
 
@@ -55,16 +81,25 @@ def should_decompose(user_input: str) -> bool:
          or newline), OR
       2. ACTION_VERBS finds 2+ distinct verb lemmas in the text.
 
+    When the input carries a 'Mensaje actual:' wrapper from chat_service,
+    the gate evaluates ONLY the user's current message — not the prior
+    conversation. Otherwise multi-turn flows would trigger the LLM split
+    on the wrapper's own verbs and lose the pending-slot marker.
+
     Pure function. Zero side effects. Used by the decomposer node to skip
     the LLM call on single-intent inputs.
     """
     if not user_input:
         return False
 
-    if LIST_SEPARATOR.search(user_input):
+    _, target = _split_context_wrapper(user_input)
+    if not target:
+        return False
+
+    if LIST_SEPARATOR.search(target):
         return True
 
-    verb_matches = ACTION_VERBS.findall(user_input)
+    verb_matches = ACTION_VERBS.findall(target)
     if len(set(m.lower() for m in verb_matches)) >= 2:
         return True
 
@@ -158,9 +193,15 @@ def create_decomposer_agent(llm) -> Callable[[AgentState], Dict[str, Any]]:
                 }],
             }
 
-        # Gate dispatched: invoke LLM to split.
+        # Split off any context wrapper so the LLM only decomposes the
+        # user's current message. Each emitted sub-input is re-stitched
+        # with the original wrapper so the router still sees the
+        # conversation context (including any pending-slot marker).
+        wrapper_prefix, current_message = _split_context_wrapper(user_input)
+
+        # Gate dispatched: invoke LLM to split (current message only).
         try:
-            result = chain.invoke({"input": user_input})
+            result = chain.invoke({"input": current_message or user_input})
 
             # JsonOutputParser returns a dict, not a model instance.
             if isinstance(result, dict):
@@ -173,7 +214,12 @@ def create_decomposer_agent(llm) -> Callable[[AgentState], Dict[str, Any]]:
 
             if not sub_inputs:
                 # LLM returned nothing usable. Degrade to single-intent.
-                sub_inputs = [user_input]
+                sub_inputs = [current_message or user_input]
+
+            # Re-stitch the wrapper so each sub-input carries the same
+            # conversation context the router needs for cross-turn slots.
+            if wrapper_prefix:
+                sub_inputs = [f"{wrapper_prefix} {s}" for s in sub_inputs]
 
             # Hard cap. Truncate to MAX_SUB_INPUTS and surface the truncation
             # via a flagged-skip entry in sub_input_results so the final
