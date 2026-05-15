@@ -53,10 +53,12 @@ print(f"    ✓ Database exists")
 # Step 3: Try chat_with_tenant directly
 print(f"\n[3] Testing ChatService.chat_with_tenant directly")
 try:
-    response, metadata = ChatService.chat_with_tenant(
+    envelope = ChatService.chat_with_tenant(
         phone=TEST_PHONE,
         message="Hola, ¿cuántos productos tengo?"
     )
+    response = envelope["response"]
+    metadata = envelope.get("metadata") or {}
     print(f"    Response: {response}")
     print(f"    Metadata: {metadata}")
     print(f"    ✓ ChatService succeeded")

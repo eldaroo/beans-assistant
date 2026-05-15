@@ -30,7 +30,32 @@ from agents import (
     flush_sub_input_result,
     _advance_sub_input,
 )
+from agents.safe_node import safe_node
 from llm import get_llm, get_llm_cheap
+
+
+def _build_safe_wrappers(
+    *,
+    decomposer: Any,
+    router: Any,
+    resolver: Any,
+    read_agent: Any,
+    write_agent: Any,
+) -> Dict[str, Any]:
+    """Wrap every business node in safe_node so a single-node exception
+    becomes a typed state delta instead of a dispatcher crash.
+
+    Returned dict keys are the node names registered with the LangGraph
+    workflow, so `graph.add_node(name, wrappers[name])` is the only
+    binding that needs to stay aligned.
+    """
+    return {
+        "decomposer": safe_node("decomposer")(decomposer),
+        "router": safe_node("router")(router),
+        "resolver": safe_node("resolver")(resolver),
+        "read_agent": safe_node("read_agent")(read_agent),
+        "write_agent": safe_node("write_agent")(write_agent),
+    }
 
 
 def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
@@ -54,15 +79,25 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     write_agent = create_write_agent()
     resolver = create_resolver_agent(llm_cheap)  # Use cheap LLM for product disambiguation
 
+    # Wrap every business node in safe_node so a single-node exception
+    # writes a typed state.error delta and never escapes the dispatcher.
+    safe = _build_safe_wrappers(
+        decomposer=decomposer,
+        router=router,
+        resolver=resolver,
+        read_agent=read_agent,
+        write_agent=write_agent,
+    )
+
     # Define the graph
     workflow = StateGraph(AgentState)
 
-    # Add nodes
-    workflow.add_node("decomposer", decomposer)
-    workflow.add_node("router", router)
-    workflow.add_node("read_agent", read_agent)
-    workflow.add_node("write_agent", write_agent)
-    workflow.add_node("resolver", resolver)
+    # Add nodes (every business node goes through safe_node)
+    workflow.add_node("decomposer", safe["decomposer"])
+    workflow.add_node("router", safe["router"])
+    workflow.add_node("read_agent", safe["read_agent"])
+    workflow.add_node("write_agent", safe["write_agent"])
+    workflow.add_node("resolver", safe["resolver"])
     workflow.add_node("final_answer", create_final_answer_node())
     workflow.add_node("sub_input_advancer", create_sub_input_advancer_node())
 
@@ -303,9 +338,24 @@ def _compute_per_sub_input_answer(state: AgentState) -> Dict[str, Any]:
     if state.get("final_answer"):
         return {"final_answer": state["final_answer"]}
 
-    # If we have an error, return it
-    if state.get("error"):
-        return {"final_answer": f"Error: {state['error']}"}
+    # If we have an error, render it.
+    # The error field has two shapes today:
+    #   - dict (from safe_node): {class, node, msg, incident_id} — render
+    #     via the named Spanish copy module so the user sees a typed,
+    #     incident-tagged recovery line instead of "Error: {...}".
+    #   - str (legacy: write_agent missing-field bail, etc.) — return
+    #     verbatim so we don't break existing flows.
+    err = state.get("error")
+    if err:
+        if isinstance(err, dict):
+            from agents.error_copy import compose_error_response
+            return {
+                "final_answer": compose_error_response(
+                    err.get("class") or "llm_unavailable",
+                    err.get("incident_id") or "",
+                )
+            }
+        return {"final_answer": f"Error: {err}"}
 
     # If greeting, respond friendly
     if state.get("intent") == "GREETING":

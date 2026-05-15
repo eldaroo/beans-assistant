@@ -44,12 +44,12 @@ class ChatResponse(BaseModel):
 async def simulate_chat(chat: ChatMessage):
     """Simulate one chat message and return bot response."""
     try:
-        bot_response, metadata = ChatService.simulate_chat(phone=chat.phone, message=chat.message)
+        envelope = ChatService.simulate_chat(phone=chat.phone, message=chat.message)
         return ChatResponse(
             phone=chat.phone,
             user_message=chat.message,
-            bot_response=bot_response,
-            metadata=metadata,
+            bot_response=envelope["response"],
+            metadata=envelope.get("metadata") or {},
         )
     except Exception:
         logger.exception("Error processing simulate_chat")

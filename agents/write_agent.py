@@ -7,6 +7,34 @@ Responsibilities:
 - Validate all required data is present
 - Summarize business impact after execution
 - NEVER use sql_db_query
+
+Navigation contract (T-007):
+    On a successful tool call (and only then) this agent writes a
+    structured `navigation` cue into `state["metadata"]["navigation"]`,
+    shaped:
+
+        {"tab": "<Sales|Gastos|Productos|Stock>"}
+
+    The chat widget reads this field directly instead of keyword-scanning
+    the assistant's text. The cue is set ONLY after the underlying
+    operation actually committed (register_sale returned a row, etc).
+    Disambiguation, missing-field bails, and validation errors never
+    set it.
+
+    Tab mapping:
+        REGISTER_SALE                 -> "Ventas"
+        REGISTER_EXPENSE              -> "Gastos"
+        REGISTER_PRODUCT              -> "Productos"
+        REGISTER_PRODUCT_WITH_STOCK   -> "Productos"
+        UPDATE_PRODUCT_PRICE          -> "Productos"
+        ADD_STOCK                     -> "Stock"
+        CANCEL_SALE                   -> "Ventas"
+        CANCEL_EXPENSE                -> "Gastos"
+        CANCEL_STOCK                  -> "Stock"
+        CANCEL_LAST_OPERATION         -> driven by the resolved op_type
+        DEACTIVATE_PRODUCT            -> "Productos"
+
+    Read-only intents do not navigate.
 """
 import re
 from typing import Dict, Any
@@ -30,6 +58,39 @@ from database_config import (
 )
 
 from .state import AgentState
+
+
+# Per-operation navigation cue. Used only on the success path; missing
+# entries leave navigation unset. CANCEL_LAST_OPERATION resolves at
+# runtime based on which op was actually cancelled (see emit logic).
+_OPERATION_NAVIGATION: Dict[str, str] = {
+    "REGISTER_SALE": "Ventas",
+    "REGISTER_EXPENSE": "Gastos",
+    "REGISTER_PRODUCT": "Productos",
+    "REGISTER_PRODUCT_WITH_STOCK": "Productos",
+    "UPDATE_PRODUCT_PRICE": "Productos",
+    "ADD_STOCK": "Stock",
+    "CANCEL_SALE": "Ventas",
+    "CANCEL_EXPENSE": "Gastos",
+    "CANCEL_STOCK": "Stock",
+    "DEACTIVATE_PRODUCT": "Productos",
+}
+
+
+def _navigation_for(operation_type: str | None, last_op_type: str | None = None) -> Dict[str, str] | None:
+    """Map an operation_type to a navigation cue, or None if no tab change.
+
+    For CANCEL_LAST_OPERATION we use the type of the operation we just
+    cancelled (SALE | EXPENSE | STOCK) since the user did not name a
+    specific surface.
+    """
+    if operation_type == "CANCEL_LAST_OPERATION":
+        mapping = {"SALE": "Ventas", "EXPENSE": "Gastos", "STOCK": "Stock"}
+        tab = mapping.get(last_op_type or "")
+        return {"tab": tab} if tab else None
+
+    tab = _OPERATION_NAVIGATION.get(operation_type or "")
+    return {"tab": tab} if tab else None
 
 
 def create_write_agent():
@@ -139,6 +200,10 @@ def create_write_agent():
         try:
             result = None
             operation_summary = ""
+            # Tracks SALE|EXPENSE|STOCK for CANCEL_LAST_OPERATION so we
+            # can emit the right navigation cue. Stays None for every
+            # other operation type.
+            cancelled_op_type: str | None = None
 
             if operation_type == "REGISTER_SALE":
                 # Prepare sale data
@@ -508,6 +573,9 @@ def create_write_agent():
 
                 op_type = last_op["type"]
                 op_data = last_op["data"]
+                # Remember which surface the cancellation hit so the
+                # navigation cue points at the right tab.
+                cancelled_op_type = op_type
 
                 if op_type == "SALE":
                     result = cancel_sale(op_data["id"])
@@ -560,14 +628,29 @@ def create_write_agent():
             else:
                 raise ValueError(f"Tipo de operación desconocido: {operation_type}")
 
-            return {
+            # Emit navigation only on actual tool-call success.
+            # `result` is set by every operation branch; if we got here
+            # without an exception it means the underlying database call
+            # committed (register_sale, add_stock, etc.).
+            navigation = _navigation_for(operation_type, last_op_type=cancelled_op_type)
+            existing_metadata = dict(state.get("metadata") or {})
+            if navigation is not None:
+                existing_metadata["navigation"] = navigation
+
+            response_delta: Dict[str, Any] = {
                 "operation_result": result,
                 "messages": [{
                     "role": "assistant",
                     "content": f"[Write Agent] {operation_summary}"
                 }],
-                "final_answer": operation_summary if state.get("intent") == "WRITE_OPERATION" else None
+                "final_answer": operation_summary if state.get("intent") == "WRITE_OPERATION" else None,
             }
+            # Only return metadata if we actually wrote something into
+            # it; LangGraph deep-merges dicts and we don't want to clobber
+            # the carrier metadata on the no-navigation paths.
+            if navigation is not None:
+                response_delta["metadata"] = existing_metadata
+            return response_delta
 
         except Exception as e:
             error_msg = f"Operación fallida: {str(e)}"

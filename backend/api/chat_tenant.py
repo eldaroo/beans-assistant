@@ -45,11 +45,13 @@ async def chat_with_tenant(phone: str, chat: TenantChatMessage):
     logger.info(f"chat_with_tenant endpoint: phone={phone}, message={chat.message[:50]}...")
     try:
         logger.info(f"chat_with_tenant endpoint: calling ChatService.chat_with_tenant")
-        response, metadata = ChatService.chat_with_tenant(
+        envelope = ChatService.chat_with_tenant(
             phone=phone,
             message=chat.message,
             sender_name=chat.sender_name,
         )
+        response = envelope["response"]
+        metadata = envelope.get("metadata") or {}
         logger.info(f"chat_with_tenant endpoint: got response={response[:50]}...")
         return TenantChatResponse(response=response, metadata=metadata)
     except ChatTenantNotFoundError as exc:
