@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#63
+
 ---
 name: timonel-conversational-memory
 status: scoped
