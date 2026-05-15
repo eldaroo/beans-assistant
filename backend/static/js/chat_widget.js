@@ -52,12 +52,25 @@
     var REDIRECT_GRACE_MS = 1500;
 
     // Recovery copy table (beans-agent-identity-and-trust rule 3).
-    // Infrastructure failures (llm/db/network/rate) speak in passive system
-    // voice — no agent name. session_expired is also system-voice. The
-    // server's `response` field is the source of truth when present; this
-    // table is the fallback when the dispatcher could not produce text.
+    // Infrastructure failures speak in passive system voice. The server's
+    // `response` field is the source of truth when present; this table is
+    // the safety net when the dispatcher could not produce text.
+    //
+    // Spec 001 (Timonel M1) extends the table with five Timonel error
+    // classes that the safe_node wrapper emits on the backend:
+    //   unknown_product, missing_field, ambiguous_input, network,
+    //   llm_unavailable.
+    // The legacy infra/auth codes (session_expired, rate_limited, db_error)
+    // are preserved because the redirect logic and existing chat endpoints
+    // still use them.
     var ERROR_FALLBACK_COPY = {
-        llm_unavailable: 'Se cortó la conexión. Probá de nuevo en un momento.',
+        // Timonel M1 error envelope codes (spec 001).
+        unknown_product: 'No reconocí el producto que mencionaste. Repetímelo si querés, o decime el nombre exacto.',
+        missing_field:   'Me falta un dato para procesar esto.',
+        ambiguous_input: 'Eso no me salió. Volvamos a lo de los productos.',
+        network:         'Tuve un problema técnico. Probá de nuevo en un momento.',
+        llm_unavailable: 'El asistente no pudo responder ahora. Probá de nuevo en un momento.',
+        // Legacy infra/auth codes preserved from PR #36.
         session_expired: 'La sesión venció. Te llevo al login.',
         rate_limited:    'Esperá un momento y probá de nuevo.',
         db_error:        'Algo se rompió de mi lado. Probá en un minuto.'
@@ -82,39 +95,31 @@
     var ONBOARDING_POST_REPLY_SUGGESTIONS = [];
 
     /**
-     * Naive keyword router for v1. Returns a `beans:navigate` detail or null.
-     * Replace with structured tool-call output once the agent emits typed
-     * function calls (beans-tool-call-cards: future `metadata.tool_calls`).
-     * Tenant mode only — onboarding does not navigate the dashboard.
+     * Navigation source of truth.
+     *
+     * Until spec 001 (Timonel M1) the widget keyword-scanned the assistant
+     * reply for words like "gasto" and "stock" via inferNavigation(), and
+     * dispatched beans:navigate based on the scan. That path was the actual
+     * cause of the Gastos UI flip on turn 2 of Dario's screenshot
+     * (2026-05-15): the agent asked "¿qué querés agregar: una venta, un
+     * gasto, ..." and the widget read "gasto" and opened the Gastos tab
+     * before the agent had even picked an intent.
+     *
+     * The keyword scanner has been removed. Navigation now flows only from
+     * the agent's structured `metadata.navigation` field, set when (and
+     * only when) a tool actually executed. Mary's review names this as the
+     * fix that holds; see specs/001-timonel-conversational-memory.
+     *
+     * Returns the validated navigation detail when the backend supplied
+     * one, or null otherwise. Validation is shape-only (a tab string) —
+     * it does not interpret reply text.
      */
-    function inferNavigation(replyText) {
-        if (!replyText) return null;
-        var t = replyText.toLowerCase();
-
-        var hasStock = t.indexOf('stock') !== -1;
-        var hasAgotar = t.indexOf('agotar') !== -1 || t.indexOf('agotá') !== -1;
-        var hasMenos = t.indexOf('menos') !== -1 || t.indexOf('bajo') !== -1;
-        if (hasStock && (hasAgotar || hasMenos)) {
-            return { tab: 'stock', filter: { lowStock: true }, sort: 'stock:asc' };
-        }
-
-        var hasVentas = t.indexOf('venta') !== -1;
-        var hasHoy = t.indexOf('hoy') !== -1 || t.indexOf('esta semana') !== -1;
-        if (hasVentas && hasHoy) {
-            return { tab: 'sales', filter: { range: 'today' } };
-        }
-
-        if (t.indexOf('gasto') !== -1) {
-            return { tab: 'expenses' };
-        }
-
-        var hasProducto = t.indexOf('producto') !== -1;
-        var hasNuevo = t.indexOf('nuevo') !== -1 || t.indexOf('agregar') !== -1 || t.indexOf('cargar') !== -1;
-        if (hasProducto && hasNuevo) {
-            return { tab: 'products' };
-        }
-
-        return null;
+    function readNavigation(metadata) {
+        if (!metadata || typeof metadata !== 'object') return null;
+        var nav = metadata.navigation;
+        if (!nav || typeof nav !== 'object') return null;
+        if (typeof nav.tab !== 'string' || nav.tab.length === 0) return null;
+        return nav;
     }
 
     /**
@@ -528,9 +533,19 @@
                     //   captured: { ... }
                     //   complete: bool
                     //   redirect_to: str | null
-                    //   error: str | null
+                    //   error: str | null               (legacy; pre-spec 001)
+                    //   error_code: str | null          (spec 001 envelope)
+                    //   navigation: { tab, filter?, sort? } | null  (spec 001)
+                    //   incident_id: str | null         (spec 001)
+                    //
+                    // Spec 001 (Timonel M1) renames `error` to `error_code`
+                    // and ships the safe_node wrapper that emits typed
+                    // classes (unknown_product, missing_field, ambiguous_input,
+                    // network, llm_unavailable). The widget prefers the new
+                    // field and falls back to the legacy one so partial rollouts
+                    // do not regress.
                     var toolCalls = metadata.tool_calls || [];
-                    var errorCode = metadata.error || null;
+                    var errorCode = metadata.error_code || metadata.error || null;
 
                     // Inline-card scaffold (beans-structured-output rule 3) —
                     // separate from tool-call cards; backend may emit either.
@@ -558,12 +573,25 @@
                         }
                     }
 
-                    // On infra/auth errors, prefer the server's `response`
-                    // text when present (it's already user-facing per ADR-002),
-                    // else fall back to the table.
+                    // Reply selection (spec 001 envelope rules):
+                    //   1. Prefer the server's `response` field when present.
+                    //      It is already user-facing and carries the
+                    //      incident_id when relevant (per ADR-002 + spec 001).
+                    //   2. If `response` is empty and `error_code` is set,
+                    //      fall back to the matching ERROR_FALLBACK_COPY
+                    //      entry. This is the safety net for cases where
+                    //      the dispatcher classified the failure but did
+                    //      not produce text.
+                    //   3. If both `response` AND `error_code` are missing
+                    //      after a 200, treat it as the last-resort
+                    //      llm_unavailable fallback. Without this the user
+                    //      would see a blank assistant bubble.
                     var displayReply = reply;
-                    if (errorCode && !displayReply) {
+                    if (!displayReply && errorCode) {
                         displayReply = ERROR_FALLBACK_COPY[errorCode] || '';
+                    }
+                    if (!displayReply && !errorCode) {
+                        displayReply = ERROR_FALLBACK_COPY.llm_unavailable;
                     }
 
                     // Push tool cards first so they appear above the text bubble.
@@ -644,8 +672,14 @@
                     // Onboarding mode never navigates or refreshes — there is
                     // no dashboard to drive yet. Skip on errors so we do not
                     // refresh a panel after a failed turn.
+                    //
+                    // Spec 001: navigation flows ONLY from the agent's
+                    // structured `metadata.navigation` field. The legacy
+                    // inferNavigation() keyword scan was removed; it caused
+                    // the Gastos UI flip on disambiguation replies that
+                    // mentioned "gasto" inside the option list.
                     if (!self.isOnboarding && !errorCode) {
-                        var nav = inferNavigation(reply);
+                        var nav = readNavigation(metadata);
                         if (nav) {
                             window.dispatchEvent(new CustomEvent('beans:navigate', { detail: nav }));
                             var copy = navigationCopy(nav);
