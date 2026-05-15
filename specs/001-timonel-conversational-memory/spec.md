@@ -65,9 +65,9 @@ A separate Nomad fix (`Light-Brands/infrastructure#40`) is in flight to flip the
 
 ## Open questions
 
-- **Q1.** Storage backend default. Amelia, Bob, and QI Master argue per-tenant SQLite (matches the existing tenant DB pattern). Winston, Kaze, Edut argue a central Postgres `chat_history` table (matches `USE_POSTGRES=true` in production). Resolution proposed in plan: Protocol with both implementations, SQLite default, Postgres opt-in via `MEMORY_BACKEND=postgres`. Needs Dario's call on the default for production rollout.
-- **Q2.** Episode and lesson layer scope. QI Master argues episodes belong in v1, lessons are a weekly batch, conscience scoring does not belong here at all. Other panelists implicitly agreed by leaving it out. Resolution proposed: defer episode store to a follow-up spec. Confirm Dario is OK deferring.
-- **Q3.** WhatsApp parity. Bob, Amelia, Edut, and QI Master all flagged that the Baileys connector path may not flow through `ChatService.chat_with_tenant`. Memory feature in v1 still covers WhatsApp because both surfaces should converge on the same `MemoryStore`, but task T-020 first verifies this. If verification surfaces a divergent path, the spec needs amendment.
+- **Q1. RESOLVED 2026-05-15.** Storage backend default is per-tenant SQLite (`MEMORY_BACKEND=sqlite`). Postgres remains opt-in via `MEMORY_BACKEND=postgres`. Aligns with the existing tenant DB pattern at `data/clients/<phone>/business.db`.
+- **Q2. RESOLVED 2026-05-15.** Episode store, lesson loop, and conscience scoring are deferred to a follow-up spec. v1 ships only the turn buffer + memory consult.
+- **Q3. OPEN.** WhatsApp parity. Task T-019 verifies that the Baileys connector path goes through `ChatService.chat_with_tenant`. If verification surfaces a divergent path, an addendum task is required before M3 closes.
 
 ## Panelists who contributed
 
