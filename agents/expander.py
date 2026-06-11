@@ -27,6 +27,13 @@ from agents.attributes import (
 # Operation types the expander serves. Everything else passes through.
 EXPANDABLE_OPS = {"REGISTER_PRODUCT", "REGISTER_PRODUCT_WITH_STOCK"}
 
+# Per-turn product cap (spec D / T-014 / AC7). One phrase that expands past this
+# many products is truncated to the cap and the dropped variants are named back
+# to the owner, never silently dropped. A dozen is the largest set an owner
+# plausibly means in one onboarding sentence; anything larger reads as a paste
+# the owner should split.
+MAX_EXPANSION = 12
+
 # Leading verbs / fillers an owner puts before the product phrase.
 _LEADING = re.compile(
     r"^\s*(?:y|e|que|,)?\s*"
@@ -141,6 +148,18 @@ def expand_items(phrase: str) -> Optional[List[Dict[str, Any]]]:
     return _expand_colors(text, price_cents)
 
 
+def apply_overflow_cap(items: List[Dict[str, Any]], cap: int = MAX_EXPANSION):
+    """Split an expanded set into (kept, dropped) at the per-turn cap.
+
+    Pure and deterministic so the overflow guard is unit-testable without the
+    graph. Order is preserved: the first ``cap`` items are kept, the rest are
+    returned as dropped so the caller can name them back (spec T-014 / AC7).
+    """
+    if len(items) <= cap:
+        return items, []
+    return items[:cap], items[cap:]
+
+
 def create_expander_node() -> Callable[[Any], Dict[str, Any]]:
     """Graph node factory. Runs between router and resolver.
 
@@ -165,18 +184,30 @@ def create_expander_node() -> Callable[[Any], Dict[str, Any]]:
         if not items or len(items) < 2:
             return {}
 
+        # Overflow guard (spec T-014 / AC7): truncate to the per-turn cap and
+        # name the dropped variants back rather than silently losing them.
+        kept, dropped = apply_overflow_cap(items)
+
         entities = dict(state.get("normalized_entities") or {})
-        entities["items"] = items
+        entities["items"] = kept
         # The expanded set is the source of truth; drop a single-product name
         # the router may have extracted so the batch path is taken.
         entities.pop("name", None)
+        dropped_names = [d["name"] for d in dropped]
+        if dropped_names:
+            # Surfaced to the owner by write_agent's summary; nothing silent.
+            entities["_expansion_dropped"] = dropped_names
+
+        breadcrumb = f"[Expander] expanded {len(kept)} items"
+        if dropped_names:
+            breadcrumb += f"; dropped {len(dropped_names)} over cap"
 
         return {
             "normalized_entities": entities,
             "missing_fields": [],
             "messages": [{
                 "role": "assistant",
-                "content": f"[Expander] expanded {len(items)} items",
+                "content": breadcrumb,
             }],
         }
 

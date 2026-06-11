@@ -358,43 +358,59 @@ def register_product(data: dict):
 
 
 def register_products_batch(products: list[dict]) -> list[dict]:
-    """Register N products in a single transaction.
+    """Register N products, degrading to partial success (spec D-005 / T-011).
 
-    Per Atlas review of PR-4: all-or-nothing. If any insert fails
-    (duplicate SKU, validation), the whole batch rolls back and the
-    caller surfaces an error naming the offending row. Mirror of the
-    sqlite version in database.py for the Postgres backend.
+    Postgres mirror of the sqlite version in database.py. Lands every valid row
+    and returns a per-item result list; a duplicate name is skipped (spec AC8 /
+    T-016), a SKU collision with a different product is suffixed and lands (spec
+    D-004 / T-013), and an unexpected per-row error is captured without rolling
+    back the rows that already landed.
+
+    A failed statement aborts the surrounding Postgres transaction, so each row
+    runs inside its own SAVEPOINT and a failure rolls back only that row.
+
+    Returns a per-item result list in input order (see the sqlite docstring for
+    the entry shapes).
     """
     if not products:
         raise ValueError("La lista de productos está vacía")
 
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                # Make SKUs unique within this batch AND against committed
-                # rows before any insert (spec D-004 / T-006). Mirror of the
-                # sqlite backend: dedup against in-flight siblings first, then
-                # bump past any SKU already in the catalog.
-                seen = set()
-                for product in products:
-                    base = product["sku"]
-                    candidate = base
-                    counter = 2
-                    while candidate in seen:
-                        candidate = f"{base}-{counter}"
-                        counter += 1
-                    cur.execute(
-                        "SELECT 1 FROM products WHERE sku = %s", (candidate,)
-                    )
-                    while cur.fetchone():
-                        candidate = f"{base}-{counter}"
-                        counter += 1
-                        cur.execute(
-                            "SELECT 1 FROM products WHERE sku = %s", (candidate,)
-                        )
-                    product["sku"] = candidate
-                    seen.add(candidate)
-                for product in products:
+    results: list[dict] = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            seen_skus: set = set()
+            seen_names: set = set()
+            for product in products:
+                name = product["name"]
+                norm_name = " ".join(str(name).strip().lower().split())
+
+                cur.execute(
+                    "SELECT sku FROM products "
+                    "WHERE lower(trim(name)) = %s AND is_active = TRUE",
+                    (norm_name,),
+                )
+                existing = cur.fetchone()
+                if norm_name in seen_names or existing:
+                    existing_sku = existing[0] if existing else product.get("sku")
+                    results.append({
+                        "status": "duplicate",
+                        "name": name,
+                        "sku": existing_sku,
+                        "reason": "ya existe en tu catálogo",
+                    })
+                    continue
+
+                base = product["sku"]
+                candidate = base
+                counter = 2
+                cur.execute("SELECT 1 FROM products WHERE sku = %s", (candidate,))
+                while candidate in seen_skus or cur.fetchone():
+                    candidate = f"{base}-{counter}"
+                    counter += 1
+                    cur.execute("SELECT 1 FROM products WHERE sku = %s", (candidate,))
+
+                cur.execute("SAVEPOINT row_sp")
+                try:
                     cur.execute(
                         """
                         INSERT INTO products (
@@ -407,30 +423,30 @@ def register_products_batch(products: list[dict]) -> list[dict]:
                         VALUES (%s, %s, %s, %s, %s)
                         """,
                         (
-                            product["sku"],
-                            product["name"],
+                            candidate,
+                            name,
                             product.get("description"),
                             product.get("unit_price_cents"),
-                            product["unit_cost_cents"],
+                            product.get("unit_cost_cents", 0),
                         ),
                     )
-        return [
-            {"status": "ok", "sku": p["sku"], "name": p["name"]}
-            for p in products
-        ]
-    except psycopg2.IntegrityError as e:
-        # get_conn's context manager rolled back on the way out; nothing
-        # landed.
-        error_msg = str(e)
-        offending = next(
-            (p for p in products if p["sku"] in error_msg),
-            products[0],
-        )
-        raise ValueError(
-            f"No pude crear los productos: el código '{offending['sku']}' "
-            f"({offending['name']}) ya existe. Ningún producto fue creado. "
-            f"Revisá la lista y volvé a intentar."
-        )
+                except psycopg2.IntegrityError:
+                    cur.execute("ROLLBACK TO SAVEPOINT row_sp")
+                    results.append({
+                        "status": "error",
+                        "name": name,
+                        "sku": candidate,
+                        "reason": "ya existe en tu catálogo",
+                    })
+                    continue
+
+                cur.execute("RELEASE SAVEPOINT row_sp")
+                product["sku"] = candidate
+                seen_skus.add(candidate)
+                seen_names.add(norm_name)
+                results.append({"status": "created", "sku": candidate, "name": name})
+
+    return results
 
 
 def add_stock(data: dict):

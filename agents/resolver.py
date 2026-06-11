@@ -260,9 +260,14 @@ def create_resolver_agent(llm=None):
             # Validate required fields based on operation type
             missing_fields = validate_required_fields(operation_type, resolved)
 
-            # Try to extract missing fields from conversation context
+            # Try to extract missing fields from conversation context. Only flat
+            # scalar field names are fillable this way; structured per-item
+            # misses ({product, field} dicts, spec D-006) carry no single
+            # catalog-wide value and are left for the caller to surface.
             if missing_fields and user_input:
                 for field in missing_fields[:]:  # Use slice to iterate over copy
+                    if not isinstance(field, str):
+                        continue
                     value = extract_from_context(user_input, field)
                     if value:
                         resolved[field] = value
@@ -958,12 +963,14 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         if "items" not in entities or not entities["items"]:
             missing.append("items")
         else:
-            # Check each item has required fields
+            # Check each item has required fields. Structured per-item misses
+            # (spec D-006 / AC4) name the product instead of leaking items[i].x.
             for i, item in enumerate(entities["items"]):
+                label = item.get("resolved_name") or item.get("name") or f"Producto {i + 1}"
                 if "product_id" not in item and "resolution_error" in item:
-                    missing.append(f"items[{i}].product_id (not found)")
+                    missing.append({"product": label, "field": "product_id"})
                 if "quantity" not in item:
-                    missing.append(f"items[{i}].quantity")
+                    missing.append({"product": label, "field": "quantity"})
 
     elif operation_type == "REGISTER_EXPENSE":
         if "amount_cents" not in entities:
@@ -983,7 +990,13 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         if items:
             for index, item in enumerate(items):
                 if "name" not in item or not item["name"]:
-                    missing.append(f"items[{index}].name")
+                    # Structured per-item miss (spec D-006 / AC4 / T-015): carry
+                    # the product label and the field so the renderer can say
+                    # "<Producto>: falta <campo>" instead of leaking an indexed
+                    # key like items[0].name that the flat table translated to
+                    # "ese dato". The product has no name here, so name it by
+                    # position; any other per-item field uses the item's name.
+                    missing.append({"product": f"Producto {index + 1}", "field": "name"})
                 if "sku" not in item:
                     item["sku"] = generate_sku_from_name(item["name"]) if item.get("name") else None
                 if "unit_cost_cents" not in item:

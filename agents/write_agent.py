@@ -32,6 +32,103 @@ from database_config import (
 from .state import AgentState
 
 
+# Above this many products created in one turn, the summary echoes the
+# distributed price prominently and asks the owner to confirm (spec OQ4 / T-019).
+# A true pre-commit assent gate would need cross-turn memory of the expanded
+# set, which is out of scope for this arc, so the in-scope realization is a
+# prominent post-create echo over the threshold.
+PRICE_ECHO_THRESHOLD = 5
+
+
+def _money(cents) -> str:
+    return f"${cents / 100:.2f}"
+
+
+def _join_y(names) -> str:
+    """Join names with commas and a final ' y ' (Argentine list style)."""
+    names = list(names)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " y " + names[-1]
+
+
+def compose_batch_summary(products_data: list, result: list, dropped_names: list = None) -> str:
+    """Build the REGISTER_PRODUCT batch reply from the returned per-item rows.
+
+    Truth from rows (spec, Mar'ah): the spoken outcome is built from what the
+    database returned, never from input intent, so the count and the catalog
+    cannot diverge. Voseo, no emoji, no exclamation (spec AC11). Names every
+    created product with its price, every duplicate or error with its reason,
+    and never says "Ningún producto fue creado" when something landed (D-005).
+    """
+    price_by_name = {p["name"]: p.get("unit_price_cents") for p in products_data}
+
+    created = [r for r in result if r.get("status") == "created"]
+    duplicates = [r for r in result if r.get("status") == "duplicate"]
+    errors = [r for r in result if r.get("status") == "error"]
+
+    parts: list = []
+
+    if created:
+        prices = {price_by_name.get(r["name"]) for r in created}
+        shared = next(iter(prices)) if len(prices) == 1 else None
+        n = len(created)
+        noun = "producto" if n == 1 else "productos"
+        if shared is not None:
+            names = _join_y([r["name"] for r in created])
+            parts.append(f"Listo, cargué {n} {noun} a {_money(shared)}: {names}.")
+        else:
+            lines = []
+            for r in created:
+                pc = price_by_name.get(r["name"])
+                price_str = _money(pc) if pc is not None else "precio pendiente"
+                lines.append(f"{r['name']} ({price_str})")
+            parts.append(f"Listo, cargué {n} {noun}: {_join_y(lines)}.")
+        # Echo the distributed price prominently above the threshold (T-019).
+        if n > PRICE_ECHO_THRESHOLD and shared is not None:
+            parts.append(
+                f"Son {n} productos a {_money(shared)} cada uno. ¿Está bien así?"
+            )
+
+    if duplicates:
+        names = _join_y([r["name"] for r in duplicates])
+        if not created:
+            # A resend of an already-loaded set (spec AC8): nothing new lands.
+            if len(duplicates) == 1:
+                parts.append(f"{names} ya estaba cargado, así que no lo dupliqué.")
+            else:
+                parts.append(
+                    f"Esos ya estaban cargados, así que no los dupliqué: {names}."
+                )
+        else:
+            if len(duplicates) == 1:
+                parts.append(f"{names} no entró porque ya tenés uno igual cargado.")
+            else:
+                parts.append(f"No entraron {names} porque ya los tenés cargados.")
+            parts.append("¿Querés que los saltee o los actualizo?")
+
+    if errors:
+        names = _join_y([r["name"] for r in errors])
+        verb = "entró" if len(errors) == 1 else "entraron"
+        parts.append(f"No {verb} {names}.")
+
+    if dropped_names:
+        # Expansion overflow (spec T-014 / AC7): the dropped variants are named,
+        # never silently lost.
+        names = _join_y(dropped_names)
+        parts.append(
+            f"Eran muchos para un solo mensaje, así que no cargué {names}. "
+            f"Pasámelos en otro mensaje y los agrego."
+        )
+
+    if not parts:
+        parts.append("No había nada para cargar.")
+
+    return " ".join(parts)
+
+
 def create_write_agent():
     """
     Create the write operations agent.
@@ -100,31 +197,12 @@ def create_write_agent():
                     }]
                 }
 
-            # Translate technical field names to user-friendly Spanish
-            field_translations = {
-                "unit_price": "el precio de venta",
-                "unit_price_cents": "el precio de venta",
-                "unit_cost": "el costo de producción",
-                "unit_cost_cents": "el costo de producción",
-                "name": "el nombre del producto",
-                "amount": "el monto",
-                "amount_cents": "el monto",
-                "description": "la descripción",
-                "product_ref": "el producto",
-                "product_id": "el producto",
-                "quantity": "la cantidad",
-                "items": "los productos",
-            }
-
-            # Generic fallback so a column name we forgot to translate never
-            # leaks to the user. Better to say "ese dato" than "product_id".
-            friendly_missing = [field_translations.get(field, "ese dato") for field in missing_fields]
-
-            if len(friendly_missing) == 1:
-                error_msg = f"Me falta un dato: *{friendly_missing[0]}*\n\n¿Me lo podés decir?"
-            else:
-                fields_list = "\n• ".join(friendly_missing)
-                error_msg = f"Me faltan algunos datos:\n• {fields_list}\n\n¿Me los podés decir?"
+            # Compose through the single shared renderer (agents/field_labels.py,
+            # spec D-006). Structured per-item misses ({product, field}) render
+            # as "<Producto>: falta <campo>"; flat scalar fields keep their
+            # friendly label. A per-item miss never degrades to "ese dato".
+            from agents.field_labels import compose_missing_message
+            error_msg = compose_missing_message(missing_fields)
 
             return {
                 "operation_result": None,
@@ -248,8 +326,9 @@ def create_write_agent():
                 # Two shapes accepted:
                 #   - Single: top-level name/sku/unit_price_cents (legacy).
                 #   - Batch: items: [{name, sku, unit_price_cents?, unit_cost_cents?}].
-                # Per Atlas review of PR-4, the batch path is atomic: all
-                # rows land or none do.
+                # The batch path degrades to partial success (spec D-005): every
+                # valid row lands and the summary is built from the returned
+                # rows, naming what landed and what did not.
                 items = entities.get("items")
                 if items:
                     products_data = []
@@ -273,18 +352,12 @@ def create_write_agent():
 
                     result = register_products_batch(products_data)
 
-                    operation_summary = f"*✨ {len(products_data)} productos creados!*\n\n"
-                    for product, row in zip(products_data, result):
-                        price_cents = product.get("unit_price_cents")
-                        if price_cents is not None:
-                            price_str = f"${price_cents/100:.2f}"
-                        else:
-                            price_str = "_precio pendiente_"
-                        operation_summary += (
-                            f"• *{product['name']}* — {price_str} "
-                            f"(_código {row['sku']}_)\n"
-                        )
-                    operation_summary = operation_summary.rstrip()
+                    # Truth from rows: compose the reply from what the database
+                    # returned, never from input intent (spec, Mar'ah). Carry any
+                    # overflow-dropped variant names so they are surfaced too.
+                    operation_summary = compose_batch_summary(
+                        products_data, result, entities.get("_expansion_dropped")
+                    )
                 else:
                     # Legacy single-product path. Validation already done by Resolver.
                     # PR-A fix #2: unit_price_cents may be None when the user
@@ -308,15 +381,19 @@ def create_write_agent():
 
                     result = register_product(product_data)
 
+                    # Voseo, no emoji, no exclamation; lead with what landed
+                    # (spec AC11). The owner reads the name, the price and the
+                    # code in one line.
                     if unit_price_cents is not None:
-                        price_line = f"• Precio: *${unit_price_cents/100:.2f}*"
+                        operation_summary = (
+                            f"Listo, cargué {name} a {_money(unit_price_cents)} "
+                            f"(código {sku})."
+                        )
                     else:
-                        price_line = "• Precio: _precio pendiente_"
-
-                    operation_summary = f"*✨ Producto creado!*\n\n"
-                    operation_summary += f"• {name}\n"
-                    operation_summary += f"• Código: _{sku}_\n"
-                    operation_summary += price_line
+                        operation_summary = (
+                            f"Listo, cargué {name}, precio pendiente "
+                            f"(código {sku}). ¿A cuánto la vendés?"
+                        )
 
             elif operation_type == "UPDATE_PRODUCT_PRICE":
                 # Set or change the sale price of an existing product.

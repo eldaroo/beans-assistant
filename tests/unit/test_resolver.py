@@ -541,3 +541,21 @@ class TestUtilityFunctions:
         sku = generate_sku_from_name("Unknown Product Name")
         assert sku.startswith("BC-")
         assert "PROD" in sku or "STD" in sku
+
+
+@pytest.mark.unit
+def test_sku_keeps_size_token():
+    """Spec AC2 / T-007: the SKU retains the single-letter size token so the
+    three talle variants of one base do not collapse to the same SKU."""
+    from agents.sku import compose_base_sku
+
+    s = compose_base_sku("Medias Multicolor Talle S")
+    m = compose_base_sku("Medias Multicolor Talle M")
+    l = compose_base_sku("Medias Multicolor Talle L")
+
+    # Each retains its size token.
+    assert s.endswith("-S")
+    assert m.endswith("-M")
+    assert l.endswith("-L")
+    # And the three are distinct.
+    assert len({s, m, l}) == 3

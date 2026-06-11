@@ -384,33 +384,13 @@ def _compute_per_sub_input_answer(state: AgentState) -> Dict[str, Any]:
                     "Pasame la lista o decime que sea uno solo."
                 )
             }
-        # Translate technical field names to user-friendly Spanish
-        field_translations = {
-            "unit_price": "el precio de venta",
-            "unit_price_cents": "el precio de venta",
-            "unit_cost": "el costo de producción",
-            "unit_cost_cents": "el costo de producción",
-            "name": "el nombre del producto",
-            "amount": "el monto",
-            "amount_cents": "el monto",
-            "description": "la descripción",
-            "product_ref": "el producto",
-            "product_id": "el producto",
-            "quantity": "la cantidad",
-            "items": "los productos",
-            "sku": "el código del producto",
-        }
-
-        # Generic fallback so a column name we forgot to translate never
-        # leaks to the user. Better to say "ese dato" than "product_id".
-        friendly_missing = [field_translations.get(field, "ese dato") for field in missing]
-
-        # Create a friendly message
-        if len(friendly_missing) == 1:
-            message = f"Me falta un dato: *{friendly_missing[0]}*\n\n¿Me lo podés decir?"
-        else:
-            fields_list = "\n• ".join(friendly_missing)
-            message = f"Me faltan algunos datos:\n• {fields_list}\n\n¿Me los podés decir?"
+        # Compose the missing-fields message through the single shared renderer
+        # (agents/field_labels.py, spec D-006). It understands both flat scalar
+        # field names and structured per-item misses ({product, field}), so a
+        # per-item gap reads as "<Producto>: falta <campo>" and never degrades
+        # to "ese dato".
+        from agents.field_labels import compose_missing_message
+        message = compose_missing_message(missing)
 
         return {
             "final_answer": message
