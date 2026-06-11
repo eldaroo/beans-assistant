@@ -114,12 +114,27 @@
      * one, or null otherwise. Validation is shape-only (a tab string) —
      * it does not interpret reply text.
      */
+    // The backend navigation cue names tabs in Spanish (Productos, Ventas,
+    // Gastos, Stock — see write_agent._OPERATION_NAVIGATION), but the dashboard
+    // tabs and navigationCopy() are keyed in lowercase English. Map between the
+    // two here, at the single chokepoint, so the auto tab-switch and the
+    // "Productos abierto" copy fire after a chat-created product. English keys
+    // pass through unchanged, so this is idempotent.
+    var TAB_ALIASES = {
+        'productos': 'products',
+        'ventas': 'sales',
+        'gastos': 'expenses',
+        'stock': 'stock',
+    };
+
     function readNavigation(metadata) {
         if (!metadata || typeof metadata !== 'object') return null;
         var nav = metadata.navigation;
         if (!nav || typeof nav !== 'object') return null;
         if (typeof nav.tab !== 'string' || nav.tab.length === 0) return null;
-        return nav;
+        var key = nav.tab.toLowerCase();
+        var tab = TAB_ALIASES[key] || key;
+        return Object.assign({}, nav, { tab: tab });
     }
 
     /**

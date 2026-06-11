@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 
 from agents.error_copy import compose_error_response, supported_classes
+from backend import cache
 from database_config import tenant_context
 from graph import create_business_agent_graph
 from tenant_manager import TenantManager
@@ -358,6 +359,23 @@ class ChatService:
             logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
             result = cls._invoke_graph(phone=resolved_phone, message=message, owner_name=owner_name)
             logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")
+
+            # Invalidate the tenant caches when a write actually committed.
+            # The chat write path goes straight through database_config, not
+            # the *_service layer, so it never bumps the versioned cache the
+            # dashboard reads. Without this a product created by chat stays
+            # invisible in the Productos list until the cache TTL expires,
+            # while the stats count (which reads the DB directly) shows it,
+            # producing the "count says 2 but the list shows 1" split.
+            # operation_result is set only on a committed write; reads and
+            # missing-field bails leave it unset.
+            if result.get("operation_result") and not result.get("error"):
+                try:
+                    cache.invalidate_all(resolved_phone)
+                except Exception:
+                    logger.exception(
+                        "chat_with_tenant: cache invalidation failed (non-fatal)"
+                    )
 
             bot_response = ""
             if result.get("final_answer"):
