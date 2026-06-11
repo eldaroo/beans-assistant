@@ -35,6 +35,25 @@
                 Continuar con Google
             </a>
 
+            <!-- Install as a phone app (PWA). Hidden by default; pwa.js reveals it
+                 only where install is actually possible (Android prompt / iOS hint). -->
+            <button id="install-app" type="button"
+                class="hover-lift focus-bloom hidden w-full mt-3 inline-flex justify-center items-center gap-2.5 px-4 py-3 border border-[color:var(--color-border-strong)] rounded-md text-sm font-semibold text-[color:var(--color-text-muted)] bg-[color:var(--color-bg-subtle)] hover:bg-[color:var(--color-surface)]">
+                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="6" y="2" width="12" height="20" rx="2.5"/>
+                    <path d="M12 7v7m0 0l-2.5-2.5M12 14l2.5-2.5"/>
+                    <line x1="11" y1="18.5" x2="13" y2="18.5"/>
+                </svg>
+                Instalar en el celular
+            </button>
+
+            <div id="ios-install-hint"
+                 class="hidden mt-3 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-bg-subtle)] px-4 py-3 text-xs leading-relaxed text-[color:var(--color-text-muted)]">
+                En iPhone: tocá <span class="font-semibold text-[color:var(--color-text)]">Compartir</span>
+                (el ícono <span aria-hidden="true">⬆️</span> abajo) y luego
+                <span class="font-semibold text-[color:var(--color-text)]">Agregar a inicio</span>.
+            </div>
+
             <p class="mt-8 text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)] text-center">
                 Acceso por invitación. Si tu cuenta no aparece autorizada, escribinos.
             </p>
