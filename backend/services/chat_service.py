@@ -3,8 +3,9 @@
 import os
 import time
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any, Optional
 
+from agents.error_copy import compose_error_response, supported_classes
 from database_config import tenant_context
 from graph import create_business_agent_graph
 from tenant_manager import TenantManager
@@ -256,15 +257,68 @@ class ChatService:
             raise
 
     @classmethod
-    def simulate_chat(cls, phone: str, message: str) -> tuple[str, dict]:
+    def _build_envelope(cls, result: dict, fallback_response: str) -> dict:
+        """Wrap a graph result in the public chat envelope (T-004).
+
+        Shape:
+            {
+                "response": str,
+                "metadata": {
+                    "error_code": Optional[str],   # one of supported_classes() or None
+                    "incident_id": Optional[str],  # short uuid prefix or None
+                    "navigation": Optional[dict],  # {"tab": "..."} when emitted by an agent
+                    # plus any other metadata the graph already carried
+                    # (intent, operation_type, confidence, owner_name, etc).
+                },
+            }
+
+        When `state["error"]` is set by safe_node, `error_code` and
+        `incident_id` are populated and `response` is replaced with the
+        named Spanish copy from `compose_error_response`. Otherwise they
+        are None.
+        """
+        err = result.get("error")
+        graph_metadata = dict(result.get("metadata") or {})
+
+        # navigation is set by agents (write_agent on successful tool calls)
+        # and surfaces unchanged. We do NOT keyword-scan the response text.
+        navigation = graph_metadata.pop("navigation", None)
+
+        if isinstance(err, dict) and err.get("class") in set(supported_classes()):
+            error_code = err.get("class")
+            incident_id = err.get("incident_id") or ""
+            response = compose_error_response(error_code, incident_id)
+            metadata = {
+                **graph_metadata,
+                "error_code": error_code,
+                "incident_id": incident_id,
+                "navigation": navigation,
+            }
+            return {"response": response, "metadata": metadata}
+
+        metadata = {
+            **graph_metadata,
+            "error_code": None,
+            "incident_id": None,
+            "navigation": navigation,
+        }
+        return {"response": fallback_response, "metadata": metadata}
+
+    @classmethod
+    def simulate_chat(cls, phone: str, message: str) -> dict:
         result = cls._invoke_graph(phone=phone, message=message)
 
         bot_response = ""
         if "messages" in result and len(result["messages"]) > 0:
             bot_response = cls._extract_message_content(result["messages"][-1])
 
-        cls._append_history(phone=phone, user_message=message, bot_response=bot_response)
-        return bot_response, result.get("metadata", {})
+        envelope = cls._build_envelope(result, bot_response)
+        cls._append_history(
+            phone=phone,
+            user_message=message,
+            bot_response=envelope["response"],
+        )
+        return envelope
 
     @classmethod
     def chat_with_tenant(
@@ -272,7 +326,7 @@ class ChatService:
         phone: str,
         message: str,
         sender_name: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> dict:
         import logging
         logger = logging.getLogger(__name__)
         
@@ -327,11 +381,28 @@ class ChatService:
             else:
                 logger.warning(f"chat_with_tenant: no final_answer or messages found in result")
 
-            metadata = {
+            # Carry the agent-emitted navigation (if any) onto the
+            # envelope. Set by write_agent on successful tool calls
+            # only, never on disambiguation. See T-007.
+            graph_metadata = result.get("metadata") or {}
+            envelope_metadata: dict[str, Any] = {
                 "intent": result.get("intent"),
                 "operation_type": result.get("operation_type"),
                 "confidence": result.get("confidence"),
+                "navigation": graph_metadata.get("navigation"),
             }
+
+            # Build the public envelope. When the graph wrote an error
+            # delta (safe_node), `_build_envelope` swaps the response
+            # for the named Spanish copy and populates error_code +
+            # incident_id. When clean, response is the assistant
+            # final_answer and error fields are None.
+            envelope_input = {
+                "error": result.get("error"),
+                "metadata": envelope_metadata,
+            }
+            envelope = cls._build_envelope(envelope_input, bot_response)
+
             # PR-A fix #3: capture pending_entities when the current turn
             # finished with missing_fields, so the next turn can resolve
             # the user's reply against the named products.
@@ -344,12 +415,14 @@ class ChatService:
             cls._append_history(
                 phone=resolved_phone,
                 user_message=message,
-                bot_response=bot_response,
+                bot_response=envelope["response"],
                 bot_metadata={
                     "last_intent": result.get("intent"),
                     "operation_type": result.get("operation_type"),
                     "pending_entities": pending_entities,
                 },
             )
-            logger.info(f"chat_with_tenant: returning response={bot_response[:50]}...")
-            return bot_response, metadata
+            logger.info(
+                f"chat_with_tenant: returning response={envelope['response'][:50]}..."
+            )
+            return envelope

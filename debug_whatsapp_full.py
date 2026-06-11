@@ -63,10 +63,12 @@ try:
     print(f"\n[3] CHAT SERVICE INVOCATION")
     try:
         print(f"    Calling ChatService.chat_with_tenant...")
-        response, metadata = ChatService.chat_with_tenant(
+        envelope = ChatService.chat_with_tenant(
             phone=TEST_PHONE,
             message=TEST_MESSAGE
         )
+        response = envelope["response"]
+        metadata = envelope.get("metadata") or {}
         print(f"    ✓ Response received")
         print(f"    Response: {response[:100]}..." if len(response) > 100 else f"    Response: {response}")
         print(f"    Metadata: {json.dumps(metadata, indent=2)}")

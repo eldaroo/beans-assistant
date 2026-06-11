@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>chat_widget.js — error_code rendering + navigation regression</title>
+<!--
+  Standalone browser test for chat_widget.js (spec 001, Timonel M1 frontend).
+
+  The repo's existing tests/browser/ suite is Playwright + a live FastAPI
+  server. This file is a dependency-free unit harness for the widget's
+  pure JS behavior — it does not need Postgres, Alpine, or the backend.
+
+  WHAT IT COVERS
+  --------------
+  T-005 (#42) — render `metadata.error_code` distinctly:
+    1. unknown_product, missing_field, ambiguous_input, network,
+       llm_unavailable each render the matching ERROR_FALLBACK_COPY entry
+       when the server omits `response`.
+    2. When the server includes `response`, the widget prefers it over the
+       table (the backend's full Spanish line with incident_id wins).
+    3. Last-resort fallback: when both `response` AND `error_code` are
+       missing on a 200, the widget renders the llm_unavailable copy
+       instead of leaving the bubble blank.
+    4. Legacy `metadata.error` (pre-spec-001) still routes to the table.
+
+  T-007 (#44, widget side) — drop inferNavigation() keyword scan:
+    5. Mary's regression: turn 2 of Dario's screenshot transcript
+       (assistant text "¿Qué querés agregar: una venta, un gasto,
+       un producto nuevo o stock?", `metadata.navigation = null`)
+       fires NO `beans:navigate` event. Before this PR the widget
+       keyword-scanned for "gasto" and opened the Gastos tab.
+    6. Structured navigation: when `metadata.navigation = { tab: 'stock' }`
+       and `error_code` is null, `beans:navigate` fires with that detail.
+    7. Error gate: when `metadata.error_code` is set, navigation is
+       suppressed even if `metadata.navigation` is present.
+
+  HOW TO RUN
+  ----------
+  Manual smoke (recommended; no toolchain required):
+    1. From repo root, serve the project with any static file server.
+       The simplest:
+           python -m http.server 8765
+    2. Open http://127.0.0.1:8765/tests/browser/test_chat_widget_error_render.html
+       in a browser.
+    3. The page runs the suite on load and prints a green "PASS n/n"
+       banner at the top (or a red "FAIL" banner with the failing
+       assertion name). Open DevTools console for the per-assert log.
+
+  CI: not currently wired. The repo's pytest-playwright suite covers
+  end-to-end flow; this file covers widget-internal logic that is
+  cheaper to verify in a headless browser without the FastAPI stack.
+-->
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 24px; background: #0b0f17; color: #e6edf3; }
+  #banner { padding: 16px 20px; border-radius: 8px; font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+  .pass { background: #14532d; color: #d1fae5; }
+  .fail { background: #7f1d1d; color: #fecaca; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { padding: 6px 10px; border-bottom: 1px solid #1f2937; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  li.ok::before  { content: "PASS "; color: #34d399; font-weight: 700; margin-right: 8px; }
+  li.bad::before { content: "FAIL "; color: #f87171; font-weight: 700; margin-right: 8px; }
+  pre { background: #111827; padding: 8px; border-radius: 6px; color: #fca5a5; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="banner">Running.</div>
+<ul id="results"></ul>
+
+<script src="../../backend/static/js/chat_widget.js"></script>
+<script>
+"use strict";
+
+/* -------------------------------------------------------------------------
+ * Tiny assertion helper. No Mocha, no Jasmine — keep deps at zero so this
+ * file runs anywhere a static server can reach it.
+ * ------------------------------------------------------------------------- */
+var results = [];
+function assert(name, cond, detail) {
+  results.push({ name: name, ok: !!cond, detail: detail });
+  console.log((cond ? "PASS " : "FAIL ") + name + (cond ? "" : " — " + (detail || "")));
+}
+function assertEqual(name, actual, expected) {
+  var ok = actual === expected;
+  assert(name, ok, ok ? "" : "expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual));
+}
+
+/* -------------------------------------------------------------------------
+ * Factory bootstrap. The widget assumes Alpine has wrapped it: it reads
+ * `this.$nextTick`, `this.$refs`, `this.$root`. We synthesize the bare
+ * minimum so `send()` can run end-to-end without a real Alpine runtime.
+ * ------------------------------------------------------------------------- */
+function makeState(opts) {
+  var state = window.beansChat(opts || { phone: "+5491100000001" });
+  state.$nextTick = function (fn) { fn(); };
+  state.$refs = { thread: { scrollTop: 0, scrollHeight: 0 }, input: { focus: function () {} }, shell: null };
+  state.$root = {};
+  return state;
+}
+
+/* -------------------------------------------------------------------------
+ * Fetch stub. The widget POSTs to its endpoint and reads `data.response`
+ * + `data.metadata`. We intercept and resolve with a canned envelope.
+ * ------------------------------------------------------------------------- */
+var originalFetch = window.fetch;
+function stubFetch(envelope) {
+  window.fetch = function () {
+    return Promise.resolve({
+      ok: true,
+      json: function () { return Promise.resolve(envelope); }
+    });
+  };
+}
+function restoreFetch() { window.fetch = originalFetch; }
+
+/* -------------------------------------------------------------------------
+ * Event capture. The widget dispatches CustomEvents on `window`. We
+ * subscribe before each test and tear down after.
+ * ------------------------------------------------------------------------- */
+function captureEvents(name) {
+  var seen = [];
+  var handler = function (e) { seen.push(e.detail); };
+  window.addEventListener(name, handler);
+  return {
+    events: seen,
+    teardown: function () { window.removeEventListener(name, handler); }
+  };
+}
+
+/* -------------------------------------------------------------------------
+ * Helper: drive one full send/receive cycle and resolve when the assistant
+ * bubble has been pushed. The widget does its work in a Promise chain
+ * plus a 600ms setTimeout for the streaming-cursor clear; we wait one
+ * macrotask past that so chip-rail assertions are also stable.
+ * ------------------------------------------------------------------------- */
+function runTurn(state, text) {
+  state.send(text);
+  return new Promise(function (resolve) {
+    setTimeout(resolve, 750);
+  });
+}
+
+/* -------------------------------------------------------------------------
+ * Find the last assistant text bubble and return its rendered HTML.
+ * ------------------------------------------------------------------------- */
+function lastAssistantHtml(state) {
+  for (var i = state.messages.length - 1; i >= 0; i--) {
+    var m = state.messages[i];
+    if (m && m.role === "assistant" && m.kind === "text") return m.html || "";
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------
+ * The five error-class envelopes. Each test uses an empty `response` so
+ * the widget falls back to ERROR_FALLBACK_COPY[error_code]. These are the
+ * exact strings the spec mandates the table must contain.
+ * ------------------------------------------------------------------------- */
+var EXPECTED_COPY = {
+  unknown_product: "No reconocí el producto que mencionaste. Repetímelo si querés, o decime el nombre exacto.",
+  missing_field:   "Me falta un dato para procesar esto.",
+  ambiguous_input: "Eso no me salió. Volvamos a lo de los productos.",
+  network:         "Tuve un problema técnico. Probá de nuevo en un momento.",
+  llm_unavailable: "El asistente no pudo responder ahora. Probá de nuevo en un momento."
+};
+
+/* =========================================================================
+ * SUITE
+ * ========================================================================= */
+async function suite() {
+  /* T-005 cases 1-5: each error_code falls back to its table entry when
+   * `response` is empty. */
+  for (var code in EXPECTED_COPY) {
+    if (!Object.prototype.hasOwnProperty.call(EXPECTED_COPY, code)) continue;
+    var nav = captureEvents("beans:navigate");
+    stubFetch({
+      response: "",
+      metadata: { error_code: code, incident_id: "inc_test_" + code }
+    });
+    var state = makeState();
+    await runTurn(state, "ping " + code);
+    var html = lastAssistantHtml(state);
+    var expected = EXPECTED_COPY[code];
+    var got = (html || "").replace(/<[^>]+>/g, "");
+    assert(
+      "T-005[" + code + "] table copy renders when response is empty",
+      got.indexOf(expected) !== -1,
+      "expected copy '" + expected + "' inside '" + got + "'"
+    );
+    assertEqual(
+      "T-005[" + code + "] no beans:navigate fires on error",
+      nav.events.length,
+      0
+    );
+    nav.teardown();
+    restoreFetch();
+  }
+
+  /* T-005 case 6: backend `response` wins over table fallback. The full
+   * Spanish line (with incident_id) is the truth; the table is only a
+   * safety net. */
+  var navWins = captureEvents("beans:navigate");
+  stubFetch({
+    response: "No reconocí ese producto. Repetímelo o pasame el nombre exacto. (id inc_abc123)",
+    metadata: { error_code: "unknown_product", incident_id: "inc_abc123" }
+  });
+  var sWins = makeState();
+  await runTurn(sWins, "prodcuo");
+  var htmlWins = (lastAssistantHtml(sWins) || "").replace(/<[^>]+>/g, "");
+  assert(
+    "T-005 server response is preferred over table fallback",
+    htmlWins.indexOf("inc_abc123") !== -1,
+    "expected incident id in rendered bubble, got '" + htmlWins + "'"
+  );
+  assert(
+    "T-005 table copy is NOT used when response is present",
+    htmlWins.indexOf(EXPECTED_COPY.unknown_product) === -1,
+    "table copy leaked into the bubble even though response was set"
+  );
+  navWins.teardown();
+  restoreFetch();
+
+  /* T-005 case 7: both response AND error_code missing → llm_unavailable
+   * last-resort fallback. Without this the bubble would be blank. */
+  stubFetch({ response: "", metadata: {} });
+  var sLast = makeState();
+  await runTurn(sLast, "anything");
+  var htmlLast = (lastAssistantHtml(sLast) || "").replace(/<[^>]+>/g, "");
+  assert(
+    "T-005 llm_unavailable fires only when response AND error_code missing",
+    htmlLast.indexOf(EXPECTED_COPY.llm_unavailable) !== -1,
+    "expected llm_unavailable copy, got '" + htmlLast + "'"
+  );
+  restoreFetch();
+
+  /* T-005 case 8: legacy `metadata.error` (pre-spec-001 envelope) still
+   * routes to the table. Backwards compatibility while the backend slice
+   * rolls out. */
+  stubFetch({ response: "", metadata: { error: "missing_field" } });
+  var sLegacy = makeState();
+  await runTurn(sLegacy, "legacy");
+  var htmlLegacy = (lastAssistantHtml(sLegacy) || "").replace(/<[^>]+>/g, "");
+  assert(
+    "T-005 legacy metadata.error still routes to table",
+    htmlLegacy.indexOf(EXPECTED_COPY.missing_field) !== -1,
+    "legacy envelope did not render table copy: '" + htmlLegacy + "'"
+  );
+  restoreFetch();
+
+  /* T-007 case 1 (Mary's regression): the screenshot transcript turn 2.
+   * Assistant asks the disambiguation question that mentions "gasto"
+   * inside the option list, and the backend sets metadata.navigation =
+   * null. Before this PR, inferNavigation() keyword-scanned the reply
+   * text and dispatched beans:navigate for the Gastos tab. After this
+   * PR, no event must fire. */
+  var navTurn2 = captureEvents("beans:navigate");
+  stubFetch({
+    response: "¿Qué querés agregar: una venta, un gasto, un producto nuevo o stock?",
+    metadata: { navigation: null }
+  });
+  var sTurn2 = makeState();
+  await runTurn(sTurn2, "agreguemos");
+  assertEqual(
+    "T-007 disambiguation reply mentioning 'gasto' does NOT fire beans:navigate",
+    navTurn2.events.length,
+    0
+  );
+  navTurn2.teardown();
+  restoreFetch();
+
+  /* T-007 case 2: structured navigation. When the agent confirms a tool
+   * actually executed and emits metadata.navigation, beans:navigate
+   * fires with that exact detail. */
+  var navStock = captureEvents("beans:navigate");
+  stubFetch({
+    response: "Listo, abrí stock con los productos por debajo del umbral.",
+    metadata: {
+      navigation: { tab: "stock", filter: { lowStock: true }, sort: "stock:asc" }
+    }
+  });
+  var sStock = makeState();
+  await runTurn(sStock, "mostrá stock bajo");
+  assertEqual(
+    "T-007 metadata.navigation triggers exactly one beans:navigate",
+    navStock.events.length,
+    1
+  );
+  if (navStock.events.length === 1) {
+    var detail = navStock.events[0];
+    assertEqual("T-007 navigation detail.tab is forwarded", detail.tab, "stock");
+    assertEqual("T-007 navigation detail.sort is forwarded", detail.sort, "stock:asc");
+    assert(
+      "T-007 navigation detail.filter.lowStock is forwarded",
+      detail.filter && detail.filter.lowStock === true,
+      "filter not forwarded"
+    );
+  }
+  navStock.teardown();
+  restoreFetch();
+
+  /* T-007 case 3: error gate. If error_code is set, navigation is
+   * suppressed even when metadata.navigation is supplied. We do not
+   * navigate during error states. */
+  var navErrGate = captureEvents("beans:navigate");
+  stubFetch({
+    response: "",
+    metadata: {
+      error_code: "ambiguous_input",
+      navigation: { tab: "stock" }
+    }
+  });
+  var sErrGate = makeState();
+  await runTurn(sErrGate, "uhh");
+  assertEqual(
+    "T-007 error_code suppresses navigation even when metadata.navigation is set",
+    navErrGate.events.length,
+    0
+  );
+  navErrGate.teardown();
+  restoreFetch();
+
+  /* T-007 case 4: malformed navigation (missing tab) is treated as
+   * absent. readNavigation() validates shape. */
+  var navMalformed = captureEvents("beans:navigate");
+  stubFetch({
+    response: "ok",
+    metadata: { navigation: { filter: { range: "today" } } }
+  });
+  var sMalformed = makeState();
+  await runTurn(sMalformed, "x");
+  assertEqual(
+    "T-007 malformed navigation (no tab) does not fire beans:navigate",
+    navMalformed.events.length,
+    0
+  );
+  navMalformed.teardown();
+  restoreFetch();
+
+  render();
+}
+
+function render() {
+  var ul = document.getElementById("results");
+  var passed = 0;
+  results.forEach(function (r) {
+    var li = document.createElement("li");
+    li.className = r.ok ? "ok" : "bad";
+    li.textContent = r.name + (r.ok ? "" : " — " + (r.detail || ""));
+    ul.appendChild(li);
+    if (r.ok) passed++;
+  });
+  var banner = document.getElementById("banner");
+  var total = results.length;
+  if (passed === total) {
+    banner.className = "pass";
+    banner.textContent = "PASS " + passed + "/" + total;
+  } else {
+    banner.className = "fail";
+    banner.textContent = "FAIL " + (total - passed) + " of " + total + " assertions";
+  }
+}
+
+suite().catch(function (err) {
+  var banner = document.getElementById("banner");
+  banner.className = "fail";
+  banner.textContent = "FAIL — uncaught: " + err.message;
+  console.error(err);
+});
+</script>
+</body>
+</html>

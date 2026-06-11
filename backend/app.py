@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 import sys
 import os
@@ -114,6 +114,24 @@ async def home(request: Request):
         return RedirectResponse(url="/admin", status_code=302)
     phone = user.get("phone_number")
     return RedirectResponse(url=f"/tenants/{phone}", status_code=302)
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def web_manifest():
+    """PWA manifest, served from root with the spec content-type so the app is installable."""
+    return FileResponse(
+        str(STATIC_DIR / "manifest.webmanifest"),
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def service_worker():
+    """Service worker served from root so its control scope is '/', not '/static/'."""
+    response = FileResponse(str(STATIC_DIR / "sw.js"), media_type="application/javascript")
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/login", response_class=HTMLResponse)
