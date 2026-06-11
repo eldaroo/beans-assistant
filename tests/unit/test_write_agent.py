@@ -237,7 +237,12 @@ class TestRegisterProductHandler:
 
         assert result["operation_result"] is not None
         assert result["operation_result"]["status"] == "ok"
-        assert "Producto creado" in result["final_answer"]
+        # Spec AC11: voseo, lead with what landed, name the product, no emoji,
+        # no exclamation.
+        assert "New Product" in result["final_answer"]
+        assert "cargué" in result["final_answer"]
+        assert "!" not in result["final_answer"]
+        assert "✨" not in result["final_answer"]
 
     def test_execute_register_product_missing_fields_returns_error(self, test_db):
         """Test that product without required fields returns friendly error."""
@@ -275,10 +280,13 @@ class TestRegisterProductHandler:
         result = write_agent(state)
 
         final_answer = result["final_answer"]
-        assert "✨" in final_answer or "Producto creado" in final_answer
+        # Spec AC11: names the product, the code and the price; voseo; no emoji,
+        # no exclamation.
         assert "Beautiful Product" in final_answer
         assert "PRETTY-PRODUCT" in final_answer
         assert "$45" in final_answer or "$45.00" in final_answer
+        assert "✨" not in final_answer
+        assert "!" not in final_answer
 
     def test_execute_register_product_null_price(self, test_db):
         """PR-A fix #2: empty-catalog captura where the user replies with
@@ -428,8 +436,11 @@ class TestRegisterProductBatchHandler:
         assert "Manzanas rojas" in result["final_answer"]
         assert "Bananas" in result["final_answer"]
 
-    def test_atomic_rollback_on_duplicate_in_batch(self, test_db):
-        from database import register_product
+    def test_collision_with_different_product_gets_graceful_suffix(self, test_db):
+        """Spec D-004 / T-013: a new product whose generated SKU collides with a
+        DIFFERENT existing product is suffixed and lands; a SKU clash never
+        rolls the batch back and never says 'Ningún producto fue creado'."""
+        from database import register_product, fetch_one
         register_product({
             "sku": "EXISTS",
             "name": "Pre",
@@ -453,8 +464,129 @@ class TestRegisterProductBatchHandler:
 
         result = write_agent(state)
 
-        assert "EXISTS" in result["final_answer"] or "Conflicto" in result["final_answer"]
-        assert "Ningún producto fue creado" in result["final_answer"]
+        # All three land (the collider was suffixed), nothing rolled back.
+        assert "Ningún producto fue creado" not in result["final_answer"]
+        assert "Conflicto" in result["final_answer"]
+        # The conflicting product kept a distinct, suffixed SKU.
+        row = fetch_one("SELECT sku FROM products WHERE name = ?", ("Conflicto",))
+        assert row is not None
+        assert row["sku"] != "EXISTS"
+        # The pre-existing row is untouched.
+        assert fetch_one("SELECT sku FROM products WHERE name = ?", ("Pre",))["sku"] == "EXISTS"
+
+    def test_partial_batch_reports_offender(self, test_db):
+        """Spec AC5 / T-012: when one of three is a duplicate by name, the other
+        two land and the message names the created two and the rejected one with
+        its reason, and never says 'Ningún producto fue creado'."""
+        from database import register_product, fetch_all
+        # An owner already has "Medias Multicolor Talle L" in the catalog.
+        register_product({
+            "sku": "BC-MED-L",
+            "name": "Medias Multicolor Talle L",
+            "unit_price_cents": 1000,
+            "unit_cost_cents": 0,
+        })
+
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "intent": "WRITE_OPERATION",
+            "missing_fields": [],
+            "normalized_entities": {
+                "items": [
+                    {"name": "Medias Multicolor Talle S", "sku": "BC-MED-S", "unit_price_cents": 1000, "unit_cost_cents": 0},
+                    {"name": "Medias Multicolor Talle M", "sku": "BC-MED-M", "unit_price_cents": 1000, "unit_cost_cents": 0},
+                    {"name": "Medias Multicolor Talle L", "sku": "BC-MED-L2", "unit_price_cents": 1000, "unit_cost_cents": 0},
+                ],
+            },
+        }
+
+        result = write_agent(state)
+        answer = result["final_answer"]
+
+        assert "Ningún producto fue creado" not in answer
+        # The two new variants landed and are named.
+        assert "Medias Multicolor Talle S" in answer
+        assert "Medias Multicolor Talle M" in answer
+        # The duplicate is named with its reason, not silently dropped.
+        assert "Talle L" in answer
+        # Exactly three rows total in the catalog (two new + the pre-existing).
+        rows = fetch_all("SELECT name FROM products WHERE name LIKE 'Medias Multicolor%'")
+        assert len(rows) == 3
+
+    def test_resend_no_duplicate(self, test_db):
+        """Spec AC8 / T-016: re-sending the same expanded set does not duplicate
+        the catalog; the second reply states the variants were already loaded."""
+        from database import fetch_all
+        write_agent = create_write_agent()
+
+        def _state():
+            return {
+                "operation_type": "REGISTER_PRODUCT",
+                "intent": "WRITE_OPERATION",
+                "missing_fields": [],
+                "normalized_entities": {
+                    "items": [
+                        {"name": "Medias Azules", "sku": "BC-MED-AZUL", "unit_price_cents": 500, "unit_cost_cents": 0},
+                        {"name": "Medias Grises", "sku": "BC-MED-GRIS", "unit_price_cents": 500, "unit_cost_cents": 0},
+                    ],
+                },
+            }
+
+        first = write_agent(_state())
+        assert "cargué" in first["final_answer"]
+
+        second = write_agent(_state())
+        # No second copy landed.
+        rows = fetch_all("SELECT name FROM products WHERE name LIKE 'Medias%'")
+        assert len(rows) == 2
+        # The reply states they were already loaded; nothing dramatic.
+        assert "ya estaban" in second["final_answer"] or "ya estaba" in second["final_answer"]
+        assert "Ningún producto fue creado" not in second["final_answer"]
+
+    def test_success_copy_names_products(self, test_db):
+        """Spec AC11: success confirmation leads with what landed, names each
+        product and the shared price, uses voseo, no emoji, no exclamation."""
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "intent": "WRITE_OPERATION",
+            "missing_fields": [],
+            "normalized_entities": {
+                "items": [
+                    {"name": "Medias Azules", "sku": "BC-MED-AZUL", "unit_price_cents": 500, "unit_cost_cents": 0},
+                    {"name": "Medias Grises", "sku": "BC-MED-GRIS", "unit_price_cents": 500, "unit_cost_cents": 0},
+                ],
+            },
+        }
+
+        answer = write_agent(state)["final_answer"]
+
+        assert "Medias Azules" in answer
+        assert "Medias Grises" in answer
+        assert "$5.00" in answer
+        assert "cargué" in answer
+        assert "!" not in answer
+        assert "✨" not in answer
+        assert "❌" not in answer
+
+    def test_indexed_missing_translates(self, test_db):
+        """Spec AC4 / T-015: a per-item miss never renders as 'ese dato'; it
+        names the product and the field."""
+        write_agent = create_write_agent()
+        state = {
+            "operation_type": "REGISTER_PRODUCT",
+            "intent": "WRITE_OPERATION",
+            "missing_fields": [{"product": "Medias Azules", "field": "unit_price_cents"}],
+            "normalized_entities": {"items": [{"name": "Medias Azules"}]},
+            "user_input": "vendo medias azules",
+        }
+
+        answer = write_agent(state)["final_answer"]
+
+        assert "ese dato" not in answer
+        assert "Medias Azules" in answer
+        assert "precio" in answer.lower()
 
 
 @pytest.mark.unit

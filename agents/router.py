@@ -217,8 +217,20 @@ For WRITE_OPERATION, identify if required fields are missing:
       - "agregar nuevas pulseras: arcoiris, fucsias, pasteles"
       - "registrar 3 productos: Coffee Bean Classic a $5, Coffee Bean Black
         a $7, Coffee Bean Gold a $10"  (prices per item)
+  * VARIANT phrasing is REGISTER_PRODUCT, not AMBIGUOUS. A base noun followed
+    by a color list or a "talle" size list with a shared trailing price is a
+    deterministic set of products; a downstream expander turns it into the
+    concrete items, so the router only needs to classify it as REGISTER_PRODUCT
+    and pass the raw phrase through. Examples:
+      - "vendo medias azules y grises a 5 dolares" → REGISTER_PRODUCT
+      - "medias multicolor talle s, m y l a 10 dolares" → REGISTER_PRODUCT
+      - "pulseras rojas, verdes y azules a 3" → REGISTER_PRODUCT
+    A color word or the keyword "talle"/"talles" before the price is the
+    variant signal. Do NOT emit AMBIGUOUS for these: there are no bare numbers
+    standing in for a product, only one shared price.
   * If the list mixes product names with bare numbers ("Peras 22, Manzanas
-    15"), the user's intent is genuinely ambiguous between price-per-item
+    15", "medias 22, soquetes 15"), the user's intent is genuinely ambiguous
+    between price-per-item
     and stock-per-item. Emit AMBIGUOUS with clarifier "Esos numeros son
     *precios* o *cantidades de stock*?" so the user disambiguates before
     we write anything. Do NOT guess.

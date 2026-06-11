@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from database_config import fetch_one, fetch_all
 
 from .state import AgentState
+from .sku import compose_base_sku
+from .attributes import VARIANT_HINT_TOKENS
 
 
 def extract_from_context(user_input: str, field_name: str) -> Any:
@@ -258,9 +260,14 @@ def create_resolver_agent(llm=None):
             # Validate required fields based on operation type
             missing_fields = validate_required_fields(operation_type, resolved)
 
-            # Try to extract missing fields from conversation context
+            # Try to extract missing fields from conversation context. Only flat
+            # scalar field names are fillable this way; structured per-item
+            # misses ({product, field} dicts, spec D-006) carry no single
+            # catalog-wide value and are left for the caller to surface.
             if missing_fields and user_input:
                 for field in missing_fields[:]:  # Use slice to iterate over copy
+                    if not isinstance(field, str):
+                        continue
                     value = extract_from_context(user_input, field)
                     if value:
                         resolved[field] = value
@@ -377,11 +384,8 @@ def translate_product_terms(text: str) -> list[str]:
     return variations
 
 
-VARIANT_HINT_TOKENS = {
-    "dorada": ["dorad", "gold"],
-    "negra": ["negr", "black"],
-    "clasica": ["clasic"],
-}
+# VARIANT_HINT_TOKENS is imported from agents.attributes (single source of
+# truth for variant vocabulary, spec T-001 / AC9).
 
 
 def detect_variant_hints(text: str) -> set[str]:
@@ -917,52 +921,10 @@ def generate_sku_from_name(name: str) -> str:
     Returns:
         Generated SKU (unique, descriptive, max 30 chars)
     """
-    # Normalize and extract key words
-    normalized = normalize_text(name)
-    words = normalized.split()
-
-    # Mapping of product types (ONLY types, not colors!)
-    type_mapping = {
-        "pulsera": "PULS",
-        "pulseras": "PULS",
-        "bracelet": "PULS",
-        "bracelets": "PULS",
-        "llavero": "LLAV",
-        "llaveros": "LLAV",
-        "keychain": "LLAV",
-        "keychains": "LLAV",
-    }
-
-    # Common filler words to skip (don't add value to SKU)
-    skip_words = {
-        "de", "del", "la", "las", "el", "los",  # Articles
-        "granos", "cafe", "coffee", "bean", "beans",  # Generic coffee words
-        "con", "y", "e", "and",  # Connectors
-    }
-
-    # Extract type and descriptive words
-    product_type = None
-    descriptors = []
-
-    for word in words:
-        if word in type_mapping and not product_type:
-            product_type = type_mapping[word]
-        elif word not in skip_words and len(word) > 1:  # Skip single letters
-            # Keep as descriptor (color, size, name, etc.)
-            descriptors.append(word.upper())
-
-    # Build SKU
-    if not product_type:
-        product_type = "PROD"  # Generic product
-
-    if descriptors:
-        # Use first 2 descriptors to keep SKU readable
-        # Limit each descriptor to 10 chars to avoid huge SKUs
-        desc_parts = [d[:10] for d in descriptors[:2]]
-        desc_part = "-".join(desc_parts)
-        base_sku = f"BC-{product_type}-{desc_part}"
-    else:
-        base_sku = f"BC-{product_type}-STD"
+    # Compose the base SKU, retaining discriminating tokens (colors and sizes,
+    # including single-letter sizes) so variants of one base do not collapse to
+    # the same SKU. Single source of truth: agents/sku.py (spec D-004 / T-007).
+    base_sku = compose_base_sku(name)
 
     # Check if SKU already exists and make it unique if needed
     existing = fetch_one("SELECT sku FROM products WHERE sku = %s", (base_sku,))
@@ -1001,12 +963,14 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         if "items" not in entities or not entities["items"]:
             missing.append("items")
         else:
-            # Check each item has required fields
+            # Check each item has required fields. Structured per-item misses
+            # (spec D-006 / AC4) name the product instead of leaking items[i].x.
             for i, item in enumerate(entities["items"]):
+                label = item.get("resolved_name") or item.get("name") or f"Producto {i + 1}"
                 if "product_id" not in item and "resolution_error" in item:
-                    missing.append(f"items[{i}].product_id (not found)")
+                    missing.append({"product": label, "field": "product_id"})
                 if "quantity" not in item:
-                    missing.append(f"items[{i}].quantity")
+                    missing.append({"product": label, "field": "quantity"})
 
     elif operation_type == "REGISTER_EXPENSE":
         if "amount_cents" not in entities:
@@ -1026,7 +990,13 @@ def validate_required_fields(operation_type: str, entities: Dict[str, Any]) -> l
         if items:
             for index, item in enumerate(items):
                 if "name" not in item or not item["name"]:
-                    missing.append(f"items[{index}].name")
+                    # Structured per-item miss (spec D-006 / AC4 / T-015): carry
+                    # the product label and the field so the renderer can say
+                    # "<Producto>: falta <campo>" instead of leaking an indexed
+                    # key like items[0].name that the flat table translated to
+                    # "ese dato". The product has no name here, so name it by
+                    # position; any other per-item field uses the item's name.
+                    missing.append({"product": f"Producto {index + 1}", "field": "name"})
                 if "sku" not in item:
                     item["sku"] = generate_sku_from_name(item["name"]) if item.get("name") else None
                 if "unit_cost_cents" not in item:

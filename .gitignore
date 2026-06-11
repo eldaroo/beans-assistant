@@ -33,3 +33,6 @@ nul
 
 # Eval artifacts (reproducible from goldens; useful for local diff but not versioned)
 tests/eval/*/results/
+
+# QIE Intelligence Framework (symlink — not part of this project)
+_qie

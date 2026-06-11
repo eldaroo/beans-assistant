@@ -24,6 +24,7 @@ from agents import (
     create_write_agent,
     create_resolver_agent,
     create_decomposer_agent,
+    create_expander_node,
     route_to_next_node,
     route_after_write,
     route_after_resolver,
@@ -92,11 +93,14 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     # Define the graph
     workflow = StateGraph(AgentState)
 
-    # Add nodes (every business node goes through safe_node)
+    # Add nodes (every business node goes through safe_node). The expander is
+    # fail-open by contract but wrapped too so a future raise becomes a typed
+    # delta like every other node (spec ARCHITECTURE.md D-001).
     workflow.add_node("decomposer", safe["decomposer"])
     workflow.add_node("router", safe["router"])
     workflow.add_node("read_agent", safe["read_agent"])
     workflow.add_node("write_agent", safe["write_agent"])
+    workflow.add_node("expander", safe_node("expander")(create_expander_node()))
     workflow.add_node("resolver", safe["resolver"])
     workflow.add_node("final_answer", create_final_answer_node())
     workflow.add_node("sub_input_advancer", create_sub_input_advancer_node())
@@ -106,16 +110,22 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     workflow.set_entry_point("decomposer")
     workflow.add_edge("decomposer", "router")
 
-    # Conditional edges from router
+    # Conditional edges from router. Write operations route through the
+    # expander first (it fans out a base-noun-plus-attribute-list product
+    # phrase into concrete items, then passes through for everything else),
+    # then to the resolver. Spec ARCHITECTURE.md D-001.
     workflow.add_conditional_edges(
         "router",
         route_to_next_node,
         {
             "read_agent": "read_agent",
-            "resolver": "resolver",
+            "resolver": "expander",
             "final_answer": "final_answer",
         }
     )
+
+    # Expander always continues to the resolver (it is a fail-open transform).
+    workflow.add_edge("expander", "resolver")
 
     # Conditional edges from resolver
     workflow.add_conditional_edges(
@@ -426,33 +436,13 @@ def _compute_per_sub_input_answer(state: AgentState) -> Dict[str, Any]:
                     "Pasame la lista o decime que sea uno solo."
                 )
             }
-        # Translate technical field names to user-friendly Spanish
-        field_translations = {
-            "unit_price": "el precio de venta",
-            "unit_price_cents": "el precio de venta",
-            "unit_cost": "el costo de producción",
-            "unit_cost_cents": "el costo de producción",
-            "name": "el nombre del producto",
-            "amount": "el monto",
-            "amount_cents": "el monto",
-            "description": "la descripción",
-            "product_ref": "el producto",
-            "product_id": "el producto",
-            "quantity": "la cantidad",
-            "items": "los productos",
-            "sku": "el código del producto",
-        }
-
-        # Generic fallback so a column name we forgot to translate never
-        # leaks to the user. Better to say "ese dato" than "product_id".
-        friendly_missing = [field_translations.get(field, "ese dato") for field in missing]
-
-        # Create a friendly message
-        if len(friendly_missing) == 1:
-            message = f"Me falta un dato: *{friendly_missing[0]}*\n\n¿Me lo podés decir?"
-        else:
-            fields_list = "\n• ".join(friendly_missing)
-            message = f"Me faltan algunos datos:\n• {fields_list}\n\n¿Me los podés decir?"
+        # Compose the missing-fields message through the single shared renderer
+        # (agents/field_labels.py, spec D-006). It understands both flat scalar
+        # field names and structured per-item misses ({product, field}), so a
+        # per-item gap reads as "<Producto>: falta <campo>" and never degrades
+        # to "ese dato".
+        from agents.field_labels import compose_missing_message
+        message = compose_missing_message(missing)
 
         return {
             "final_answer": message

@@ -121,29 +121,77 @@ def register_product(data: dict):
 
 
 def register_products_batch(products: list[dict]) -> list[dict]:
-    """Register N products in a single transaction.
+    """Register N products, degrading to partial success (spec D-005 / T-011).
 
-    Per Atlas review of PR-4: a non-technical user does not parse
-    "Created 2 of 3" well. They see the first checkmark and assume the
-    rest landed. So this op is all-or-nothing: if any product fails
-    (duplicate SKU, validation), the whole batch rolls back and the
-    caller surfaces an error naming the offending row.
+    The old behavior was all-or-nothing: one bad row rolled back the whole
+    batch and the owner was told "Ningún producto fue creado" even when two of
+    three were valid. That is the screenshot's second failure. This version
+    lands every valid row and returns a per-item result so the caller can
+    report honestly.
 
-    Each product dict requires `name`, `sku`, `unit_cost_cents`. The
-    fields `unit_price_cents` (NULLable post-PR-1) and `description`
-    are optional.
+    Per-item handling:
+    - An active product with the same name already in the catalog (or a repeat
+      of the same name inside this batch) is NOT re-created. It comes back as
+      ``status: "duplicate"`` so a resend of an expanded set does not double the
+      catalog (spec AC8 / T-016, OQ2 default: dedupe by name within the owner's
+      catalog).
+    - A new name whose generated SKU collides with a *different* product is
+      suffixed gracefully and lands; a SKU collision never blocks a row
+      (spec D-004 / T-013).
+    - An unexpected per-row error is captured as ``status: "error"`` and the
+      rest of the batch still lands; nothing rolls back.
 
-    Returns the list of created rows in input order on success, or
-    raises ValueError naming the offending product on conflict.
+    Each product dict requires `name`, `sku`, `unit_cost_cents`; the fields
+    `unit_price_cents` (NULLable post-PR-1) and `description` are optional.
+
+    Returns a per-item result list in input order. Each entry is one of:
+      {"status": "created",   "sku": <final-sku>, "name": <name>}
+      {"status": "duplicate", "sku": <existing-or-proposed-sku>, "name": <name>, "reason": <str>}
+      {"status": "error",     "sku": <attempted-sku>, "name": <name>, "reason": <str>}
     """
     import sqlite3
 
     if not products:
         raise ValueError("La lista de productos está vacía")
 
-    try:
-        with get_conn() as conn:
-            for product in products:
+    results: list[dict] = []
+    with get_conn() as conn:
+        seen_skus: set[str] = set()
+        seen_names: set[str] = set()
+        for product in products:
+            name = product["name"]
+            norm_name = " ".join(str(name).strip().lower().split())
+
+            existing = conn.execute(
+                "SELECT sku FROM products "
+                "WHERE lower(trim(name)) = ? AND is_active = 1",
+                (norm_name,),
+            ).fetchone()
+            if norm_name in seen_names or existing:
+                results.append({
+                    "status": "duplicate",
+                    "name": name,
+                    "sku": existing["sku"] if existing else product.get("sku"),
+                    "reason": "ya existe en tu catálogo",
+                })
+                continue
+
+            # Unique SKU: dedup against in-flight siblings AND committed rows,
+            # suffixing gracefully so a collision with a different product never
+            # blocks the row (spec D-004 / T-013).
+            base = product["sku"]
+            candidate = base
+            counter = 2
+            while (
+                candidate in seen_skus
+                or conn.execute(
+                    "SELECT 1 FROM products WHERE sku = ?", (candidate,)
+                ).fetchone()
+            ):
+                candidate = f"{base}-{counter}"
+                counter += 1
+
+            try:
                 conn.execute(
                     """
                     INSERT INTO products (
@@ -156,41 +204,30 @@ def register_products_batch(products: list[dict]) -> list[dict]:
                     VALUES (?, ?, ?, ?, ?)
                     """,
                     (
-                        product["sku"],
-                        product["name"],
+                        candidate,
+                        name,
                         product.get("description"),
                         product.get("unit_price_cents"),
-                        product["unit_cost_cents"],
+                        product.get("unit_cost_cents", 0),
                     ),
                 )
-        return [
-            {"status": "ok", "sku": p["sku"], "name": p["name"]}
-            for p in products
-        ]
-    except sqlite3.IntegrityError as e:
-        # The connection context manager already rolled back; the entire
-        # batch is gone. SQLite's UNIQUE error text does not include the
-        # conflicting value, so we re-query to identify the row the user
-        # needs to fix.
-        offending = None
-        try:
-            with get_conn() as probe_conn:
-                for p in products:
-                    row = probe_conn.execute(
-                        "SELECT sku FROM products WHERE sku = ?", (p["sku"],)
-                    ).fetchone()
-                    if row:
-                        offending = p
-                        break
-        except sqlite3.Error:
-            pass
-        if offending is None:
-            offending = products[0]
-        raise ValueError(
-            f"No pude crear los productos: el código '{offending['sku']}' "
-            f"({offending['name']}) ya existe. Ningún producto fue creado. "
-            f"Revisá la lista y volvé a intentar."
-        )
+            except sqlite3.IntegrityError as e:
+                # A failed statement does not abort the sqlite transaction; the
+                # rows already inserted in this batch stay and commit on exit.
+                results.append({
+                    "status": "error",
+                    "name": name,
+                    "sku": candidate,
+                    "reason": str(e),
+                })
+                continue
+
+            product["sku"] = candidate
+            seen_skus.add(candidate)
+            seen_names.add(norm_name)
+            results.append({"status": "created", "sku": candidate, "name": name})
+
+    return results
 
 def add_stock(data: dict):
     """
