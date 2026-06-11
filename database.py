@@ -143,6 +143,26 @@ def register_products_batch(products: list[dict]) -> list[dict]:
 
     try:
         with get_conn() as conn:
+            # Make SKUs unique within this batch AND against committed rows
+            # before any insert (spec D-004 / T-006). The screenshot collision
+            # was three siblings sharing a base SKU because none existed in the
+            # DB yet, so a DB-only check never saw them. Dedup against in-flight
+            # siblings first, then bump past any SKU already in the catalog.
+            seen = set()
+            for product in products:
+                base = product["sku"]
+                candidate = base
+                counter = 2
+                while (
+                    candidate in seen
+                    or conn.execute(
+                        "SELECT 1 FROM products WHERE sku = ?", (candidate,)
+                    ).fetchone()
+                ):
+                    candidate = f"{base}-{counter}"
+                    counter += 1
+                product["sku"] = candidate
+                seen.add(candidate)
             for product in products:
                 conn.execute(
                     """

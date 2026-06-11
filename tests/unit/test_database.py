@@ -707,8 +707,12 @@ class TestRegisterProductsBatch:
         rows = fetch_all("SELECT sku FROM products WHERE sku LIKE 'BATCH-%' ORDER BY sku")
         assert [r["sku"] for r in rows] == ["BATCH-1", "BATCH-2", "BATCH-3"]
 
-    def test_duplicate_sku_rolls_back_entire_batch(self, test_db):
-        # Pre-existing product whose SKU collides with item 2 of the batch.
+    def test_duplicate_sku_dedups_instead_of_rolling_back(self, test_db):
+        # Spec D-004 / T-006 supersedes the prior all-or-nothing contract: a
+        # SKU that collides with a committed row is bumped to a free suffix and
+        # every valid row lands, rather than rolling the whole batch back. The
+        # screenshot failure ("Ningun producto fue creado") came from that old
+        # rollback, so this test now pins the new behavior.
         register_product({
             "sku": "EXISTS-1",
             "name": "Pre-existing",
@@ -716,19 +720,17 @@ class TestRegisterProductsBatch:
             "unit_cost_cents": 0,
         })
 
-        with pytest.raises(ValueError) as exc:
-            register_products_batch([
-                {"sku": "BATCH-A", "name": "First", "unit_price_cents": 500, "unit_cost_cents": 0},
-                {"sku": "EXISTS-1", "name": "Second (collides)", "unit_price_cents": 500, "unit_cost_cents": 0},
-                {"sku": "BATCH-C", "name": "Third", "unit_price_cents": 500, "unit_cost_cents": 0},
-            ])
+        result = register_products_batch([
+            {"sku": "BATCH-A", "name": "First", "unit_price_cents": 500, "unit_cost_cents": 0},
+            {"sku": "EXISTS-1", "name": "Second (collides)", "unit_price_cents": 500, "unit_cost_cents": 0},
+            {"sku": "BATCH-C", "name": "Third", "unit_price_cents": 500, "unit_cost_cents": 0},
+        ])
 
-        # Error must name the offending row so the user can fix it.
-        assert "EXISTS-1" in str(exc.value) or "Second" in str(exc.value)
-
-        # Atomicity: neither BATCH-A nor BATCH-C must have landed.
+        # All three land; the colliding one is suffixed, not rejected.
+        assert len(result) == 3
+        assert result[1]["sku"] != "EXISTS-1"
         rows = fetch_all("SELECT sku FROM products WHERE sku IN ('BATCH-A', 'BATCH-C')")
-        assert len(rows) == 0
+        assert len(rows) == 2
 
     def test_accepts_null_unit_price_cents(self, test_db):
         """Multi-product create should support price-pending items so the

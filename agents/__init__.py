@@ -14,6 +14,7 @@ from .router import create_router_agent, route_to_next_node
 from .read_agent import create_read_agent
 from .write_agent import create_write_agent, route_after_write
 from .resolver import create_resolver_agent, route_after_resolver
+from .expander import create_expander_node, expand_items
 from .decomposer import (
     create_decomposer_agent,
     should_decompose,
@@ -29,6 +30,8 @@ __all__ = [
     "create_read_agent",
     "create_write_agent",
     "create_resolver_agent",
+    "create_expander_node",
+    "expand_items",
     "create_decomposer_agent",
     "should_decompose",
     "flush_sub_input_result",

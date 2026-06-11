@@ -371,6 +371,29 @@ def register_products_batch(products: list[dict]) -> list[dict]:
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # Make SKUs unique within this batch AND against committed
+                # rows before any insert (spec D-004 / T-006). Mirror of the
+                # sqlite backend: dedup against in-flight siblings first, then
+                # bump past any SKU already in the catalog.
+                seen = set()
+                for product in products:
+                    base = product["sku"]
+                    candidate = base
+                    counter = 2
+                    while candidate in seen:
+                        candidate = f"{base}-{counter}"
+                        counter += 1
+                    cur.execute(
+                        "SELECT 1 FROM products WHERE sku = %s", (candidate,)
+                    )
+                    while cur.fetchone():
+                        candidate = f"{base}-{counter}"
+                        counter += 1
+                        cur.execute(
+                            "SELECT 1 FROM products WHERE sku = %s", (candidate,)
+                        )
+                    product["sku"] = candidate
+                    seen.add(candidate)
                 for product in products:
                     cur.execute(
                         """

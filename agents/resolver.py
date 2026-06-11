@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from database_config import fetch_one, fetch_all
 
 from .state import AgentState
+from .sku import compose_base_sku
+from .attributes import VARIANT_HINT_TOKENS
 
 
 def extract_from_context(user_input: str, field_name: str) -> Any:
@@ -377,11 +379,8 @@ def translate_product_terms(text: str) -> list[str]:
     return variations
 
 
-VARIANT_HINT_TOKENS = {
-    "dorada": ["dorad", "gold"],
-    "negra": ["negr", "black"],
-    "clasica": ["clasic"],
-}
+# VARIANT_HINT_TOKENS is imported from agents.attributes (single source of
+# truth for variant vocabulary, spec T-001 / AC9).
 
 
 def detect_variant_hints(text: str) -> set[str]:
@@ -917,52 +916,10 @@ def generate_sku_from_name(name: str) -> str:
     Returns:
         Generated SKU (unique, descriptive, max 30 chars)
     """
-    # Normalize and extract key words
-    normalized = normalize_text(name)
-    words = normalized.split()
-
-    # Mapping of product types (ONLY types, not colors!)
-    type_mapping = {
-        "pulsera": "PULS",
-        "pulseras": "PULS",
-        "bracelet": "PULS",
-        "bracelets": "PULS",
-        "llavero": "LLAV",
-        "llaveros": "LLAV",
-        "keychain": "LLAV",
-        "keychains": "LLAV",
-    }
-
-    # Common filler words to skip (don't add value to SKU)
-    skip_words = {
-        "de", "del", "la", "las", "el", "los",  # Articles
-        "granos", "cafe", "coffee", "bean", "beans",  # Generic coffee words
-        "con", "y", "e", "and",  # Connectors
-    }
-
-    # Extract type and descriptive words
-    product_type = None
-    descriptors = []
-
-    for word in words:
-        if word in type_mapping and not product_type:
-            product_type = type_mapping[word]
-        elif word not in skip_words and len(word) > 1:  # Skip single letters
-            # Keep as descriptor (color, size, name, etc.)
-            descriptors.append(word.upper())
-
-    # Build SKU
-    if not product_type:
-        product_type = "PROD"  # Generic product
-
-    if descriptors:
-        # Use first 2 descriptors to keep SKU readable
-        # Limit each descriptor to 10 chars to avoid huge SKUs
-        desc_parts = [d[:10] for d in descriptors[:2]]
-        desc_part = "-".join(desc_parts)
-        base_sku = f"BC-{product_type}-{desc_part}"
-    else:
-        base_sku = f"BC-{product_type}-STD"
+    # Compose the base SKU, retaining discriminating tokens (colors and sizes,
+    # including single-letter sizes) so variants of one base do not collapse to
+    # the same SKU. Single source of truth: agents/sku.py (spec D-004 / T-007).
+    base_sku = compose_base_sku(name)
 
     # Check if SKU already exists and make it unique if needed
     existing = fetch_one("SELECT sku FROM products WHERE sku = %s", (base_sku,))

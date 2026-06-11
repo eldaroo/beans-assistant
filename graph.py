@@ -24,6 +24,7 @@ from agents import (
     create_write_agent,
     create_resolver_agent,
     create_decomposer_agent,
+    create_expander_node,
     route_to_next_node,
     route_after_write,
     route_after_resolver,
@@ -62,6 +63,7 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     workflow.add_node("router", router)
     workflow.add_node("read_agent", read_agent)
     workflow.add_node("write_agent", write_agent)
+    workflow.add_node("expander", create_expander_node())
     workflow.add_node("resolver", resolver)
     workflow.add_node("final_answer", create_final_answer_node())
     workflow.add_node("sub_input_advancer", create_sub_input_advancer_node())
@@ -71,16 +73,22 @@ def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
     workflow.set_entry_point("decomposer")
     workflow.add_edge("decomposer", "router")
 
-    # Conditional edges from router
+    # Conditional edges from router. Write operations route through the
+    # expander first (it fans out a base-noun-plus-attribute-list product
+    # phrase into concrete items, then passes through for everything else),
+    # then to the resolver. Spec ARCHITECTURE.md D-001.
     workflow.add_conditional_edges(
         "router",
         route_to_next_node,
         {
             "read_agent": "read_agent",
-            "resolver": "resolver",
+            "resolver": "expander",
             "final_answer": "final_answer",
         }
     )
+
+    # Expander always continues to the resolver (it is a fail-open transform).
+    workflow.add_edge("expander", "resolver")
 
     # Conditional edges from resolver
     workflow.add_conditional_edges(
