@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#87
+
 # Spec: Timonel flexible interpretation and orchestration
 
 ## Problem
