@@ -84,3 +84,69 @@ class TestMultiVerbTrigger:
         # Same verb twice should not fire MULTI_VERB on its own. But this
         # particular phrasing also lacks a 3+ list, so the gate stays False.
         assert should_decompose("vendi medias vendi pantaletas") is False
+
+
+@pytest.mark.unit
+class TestCreateProductsGuard:
+    """A single product-creation action over a list is NOT multi-intent.
+
+    Per ARCHITECTURE D-001 a multi-product REGISTER_PRODUCT is owned by the
+    router + expander. The decomposer must keep such a turn whole instead of
+    fragmenting it into per-item sub-inputs (which the splitter LLM then
+    re-infers as per-item SALES, the production failure these cases pin).
+    """
+
+    def test_agregar_productos_with_named_list_passes_through(self):
+        # The exact production failure: "agregar 3 productos ... estoy
+        # vendiendo cascos de moto, zapatillas nike y pulseras de cafe" was
+        # fragmented into three failed SALE sub-inputs. It must stay whole.
+        assert should_decompose(
+            "podes agregar unos 3 productos a esta tabla. Estoy vendiendo "
+            "cascos de moto, zapatillas nike y pulseras de cafe"
+        ) is False
+
+    def test_agregar_n_productos_colon_list(self):
+        assert should_decompose(
+            "agregar 3 productos: cascos de moto, zapatillas nike y pulseras"
+        ) is False
+
+    def test_crear_productos_list(self):
+        assert should_decompose(
+            "crear productos: peras verdes, manzanas rojas, bananas"
+        ) is False
+
+    def test_cargar_articulos_al_catalogo(self):
+        assert should_decompose(
+            "cargar articulos al catalogo: medias, peras, bananas"
+        ) is False
+
+    def test_agregar_nuevas_variant_list(self):
+        # "nuevas" forces REGISTER_PRODUCT downstream; the expander fans out
+        # the color list. Keep it whole so the expander can run.
+        assert should_decompose(
+            "agregar nuevas pulseras: arcoiris, fucsias, pasteles"
+        ) is False
+
+    def test_register_products_english(self):
+        assert should_decompose(
+            "add products: moto helmets, nike sneakers, coffee bracelets"
+        ) is False
+
+    def test_sale_list_still_decomposes(self):
+        # Guard must NOT swallow a genuine multi-item sale list (no create
+        # verb / object). Existing behavior preserved.
+        assert should_decompose("vendo medias, pantaletas y soquetes") is True
+
+    def test_creo_bare_names_still_decomposes(self):
+        # No catalog object or "nuevo" signal, just "creo" + bare names: the
+        # guard does not fire, so the list trigger still splits it (each
+        # "creo X" is a self-contained creation the router handles per item).
+        # ADR-pinned in TestListSeparatorTrigger; re-asserted here.
+        assert should_decompose("creo medias, peras, bananas") is True
+
+    def test_multi_action_with_create_still_decomposes(self):
+        # A genuine multi-action turn (distinct verbs) wins over the guard:
+        # "vendo" + "compre" are two actions regardless of any create phrasing.
+        assert should_decompose(
+            "vendo medias y compre 3 productos nuevos"
+        ) is True
