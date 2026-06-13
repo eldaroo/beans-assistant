@@ -46,14 +46,46 @@ ACTION_VERBS = re.compile(
     flags=re.IGNORECASE,
 )
 
+# CREATE_PRODUCTS_INTENT recognizes a single "create / add products to the
+# catalog" action that happens to carry a list of names. Per ARCHITECTURE.md
+# D-001 a multi-product REGISTER_PRODUCT is owned by the router + expander, not
+# the decomposer: the decomposer runs before classification, so when it
+# fragments such a turn into per-item sub-inputs the items lose the shared
+# create verb and the splitter LLM re-infers a per-item verb from surrounding
+# context ("...estoy vendiendo cascos, zapatillas y pulseras" -> three SALE
+# sub-inputs, each missing a quantity). That is the exact production failure
+# this guard prevents. We match a create/add verb followed within a few words
+# by a catalog object (productos, articulos, items, catalogo, tabla) or a
+# "nuevo/a/s" signal, in Spanish or English, so the whole turn stays intact and
+# reaches the router as one multi-product creation.
+_CREATE_VERB = (
+    r"(?:crear|cre[ao]|crea|agreg\w*|carg\w*|sum[ao]r?|incorpor\w*|"
+    r"a[ñn]ad\w*|registr\w*|add|create|load|register)"
+)
+_CREATE_OBJECT = (
+    r"(?:productos?|products?|art[ií]culos?|items?|[ií]tems?|"
+    r"cat[aá]logo|catalog|tabla|table|nuev[oa]s?)"
+)
+CREATE_PRODUCTS_INTENT = re.compile(
+    rf"\b{_CREATE_VERB}\b(?:\W+\w+){{0,4}}?\W+{_CREATE_OBJECT}\b",
+    flags=re.IGNORECASE,
+)
+
 
 def should_decompose(user_input: str) -> bool:
     """Pre-LLM gate. Returns True if user_input is a multi-intent candidate.
 
     The gate fires if EITHER:
-      1. LIST_SEPARATOR matches (a list of 3+ items separated by `,`, ` y `,
-         or newline), OR
-      2. ACTION_VERBS finds 2+ distinct verb lemmas in the text.
+      1. ACTION_VERBS finds 2+ distinct verb lemmas in the text (a genuine
+         multi-action turn, e.g. a sale AND an expense), OR
+      2. LIST_SEPARATOR matches (a list of 3+ items separated by `,`, ` y `,
+         or newline) AND the turn is not a single product-creation action.
+
+    A single "agregar/crear productos: A, B, C" turn is NOT multi-intent: it is
+    one multi-product REGISTER_PRODUCT owned by the router + expander
+    (ARCHITECTURE D-001). It must reach the router intact, so the creation guard
+    short-circuits to False before the list trigger can fragment it. A genuine
+    multi-action turn still wins because the distinct-verb check runs first.
 
     Pure function. Zero side effects. Used by the decomposer node to skip
     the LLM call on single-intent inputs.
@@ -61,11 +93,16 @@ def should_decompose(user_input: str) -> bool:
     if not user_input:
         return False
 
-    if LIST_SEPARATOR.search(user_input):
-        return True
-
     verb_matches = ACTION_VERBS.findall(user_input)
     if len(set(m.lower() for m in verb_matches)) >= 2:
+        return True
+
+    # A single product-creation action over a list is one multi-product turn,
+    # not a multi-intent one. Keep it whole for the router + expander (D-001).
+    if CREATE_PRODUCTS_INTENT.search(user_input):
+        return False
+
+    if LIST_SEPARATOR.search(user_input):
         return True
 
     return False
@@ -94,8 +131,22 @@ REGLAS:
 - Si el input ya es single-intent, devolve `{{"sub_inputs": ["<input original>"]}}` sin cambiarlo.
 - Si el input combina varias acciones, devolve un sub_input por accion, en orden de aparicion.
 - Cada sub_input debe leerse como un mensaje independiente que el router pueda clasificar por si solo.
+- NUNCA inventes un verbo que no esta en el input. Si una lista de productos no
+  trae su propio verbo de accion, NO la conviertas en "vender X" ni nada por el
+  estilo.
+- AGREGAR/CREAR PRODUCTOS es UNA SOLA accion aunque traiga una lista de nombres.
+  Un mensaje tipo "agregar/crear/cargar N productos: A, B, C" (o "estoy vendiendo
+  A, B y C" como descripcion de lo que se quiere dar de alta) es UN solo
+  sub_input: devolvelo entero, sin partir. La lista de productos la maneja el
+  router, no vos.
 
 EJEMPLOS:
+
+Input: "agregar unos 3 productos: cascos de moto, zapatillas nike y pulseras de cafe"
+Output: {{"sub_inputs": ["agregar unos 3 productos: cascos de moto, zapatillas nike y pulseras de cafe"]}}
+
+Input: "podes agregar productos a esta tabla. Estoy vendiendo medias, peras y bananas"
+Output: {{"sub_inputs": ["podes agregar productos a esta tabla. Estoy vendiendo medias, peras y bananas"]}}
 
 Input: "vendo medias, pantaletas y soquetes"
 Output: {{"sub_inputs": ["vendo medias", "vendo pantaletas", "vendo soquetes"]}}

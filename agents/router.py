@@ -156,6 +156,12 @@ INTENT CATEGORIES:
          same message ("agregar 10 pulseras negras" is NOT ambiguous, that
          is ADD_STOCK).
      (d) NO explicit "nuevo/nueva" keyword (which forces REGISTER_PRODUCT).
+     (e) NO list of specific concrete product names. When the user names the
+         products to add ("agregar 3 productos: cascos de moto, zapatillas
+         nike y pulseras de cafe"), the names disambiguate the intent: the
+         user wants to CREATE those products. Classify REGISTER_PRODUCT
+         (multi-product items[]), do NOT emit AMBIGUOUS. The generic-object
+         ambiguity only applies when no concrete names are given.
    - Examples that ARE ambiguous (emit AMBIGUOUS + clarifier):
      * "me agregarías unos productos a mi inventario?"
      * "quiero cargar productos"
@@ -166,6 +172,13 @@ INTENT CATEGORIES:
      * "agregar 10 pulseras negras" → ADD_STOCK
      * "agregar nuevas pulseras arcoiris" → REGISTER_PRODUCT
      * "cargar 50 unidades de Peras verdes" → ADD_STOCK
+     * "agregar 3 productos: cascos de moto, zapatillas nike y pulseras de
+       cafe" → REGISTER_PRODUCT (multi-product: items=[{{name: "Cascos de
+       moto"}}, {{name: "Zapatillas Nike"}}, {{name: "Pulseras de cafe"}}])
+     * "podes agregar unos productos a la tabla, estoy vendiendo medias,
+       peras y bananas" → REGISTER_PRODUCT (the named items are the products
+       to create; items=[{{name: "Medias"}}, {{name: "Peras"}}, {{name:
+       "Bananas"}}])
 
 6. DECLINE_PRODUCT_CREATION
    - User declines a previously proposed product creation
