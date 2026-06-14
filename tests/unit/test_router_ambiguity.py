@@ -90,3 +90,71 @@ class TestClassificationToState:
         assert state["intent"] == "WRITE_OPERATION"
         assert state["operation_type"] == "REGISTER_PRODUCT_WITH_STOCK"
         assert "final_answer" not in state
+
+
+@pytest.mark.unit
+class TestPendingPriceNotBlocking:
+    """REGISTER_PRODUCT must NOT block on a missing price.
+
+    Operator decision 2026-06-13: creating products is the fast path — a
+    product is created with the price pending and the owner fills it later.
+    classification_to_state strips price misses for REGISTER_PRODUCT so
+    route_to_next_node proceeds to creation instead of short-circuiting to a
+    "Me falta el precio de venta" clarification. The name miss still blocks.
+    """
+
+    def test_missing_only_price_proceeds_to_create(self):
+        state = classification_to_state({
+            "intent": "WRITE_OPERATION",
+            "operation_type": "REGISTER_PRODUCT",
+            "confidence": 0.95,
+            "missing_fields": ["unit_price"],
+            "normalized_entities": {"items": [
+                {"name": "Cascos de moto"},
+                {"name": "Zapatillas Nike"},
+                {"name": "Pulseras de cafe"},
+            ]},
+            "reasoning": "Three products to create, no prices given",
+        })
+        assert state["missing_fields"] == []
+        assert "final_answer" not in state  # graph routes onward to create
+
+    def test_missing_name_still_blocks(self):
+        state = classification_to_state({
+            "intent": "WRITE_OPERATION",
+            "operation_type": "REGISTER_PRODUCT",
+            "confidence": 0.9,
+            "missing_fields": ["name", "unit_price"],
+            "normalized_entities": {},
+            "reasoning": "No product name at all",
+        })
+        assert state["missing_fields"] == ["name"]
+
+    def test_per_item_price_miss_stripped_name_kept(self):
+        # D-006 structured per-item misses: drop the price one, keep the name.
+        state = classification_to_state({
+            "intent": "WRITE_OPERATION",
+            "operation_type": "REGISTER_PRODUCT",
+            "confidence": 0.9,
+            "missing_fields": [
+                {"product": "Cascos de moto", "field": "unit_price"},
+                {"product": "Zapatillas", "field": "name"},
+            ],
+            "normalized_entities": {"items": [{"name": "Cascos de moto"}]},
+            "reasoning": "mixed misses",
+        })
+        assert state["missing_fields"] == [
+            {"product": "Zapatillas", "field": "name"}
+        ]
+
+    def test_sale_price_miss_not_stripped(self):
+        # The strip is REGISTER_PRODUCT-only. A sale's own gates are unchanged.
+        state = classification_to_state({
+            "intent": "WRITE_OPERATION",
+            "operation_type": "REGISTER_SALE",
+            "confidence": 0.9,
+            "missing_fields": ["unit_price"],
+            "normalized_entities": {},
+            "reasoning": "sale",
+        })
+        assert state["missing_fields"] == ["unit_price"]

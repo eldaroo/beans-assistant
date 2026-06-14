@@ -119,6 +119,18 @@ def compose_batch_summary(products_data: list, result: list, dropped_names: list
             parts.append(
                 f"Son {n} productos a {_money(shared)} cada uno. ¿Está bien así?"
             )
+        # Invite filling prices later when any created product is price-pending
+        # (operator decision 2026-06-13: create now, price later). Single nudge,
+        # voseo, no emoji/exclamation, regardless of how many are pending.
+        pending = [r for r in created if price_by_name.get(r["name"]) is None]
+        if pending:
+            if len(pending) == len(created):
+                parts.append("Cargales el precio cuando quieras, desde la tabla o por acá.")
+            else:
+                pend_names = _join_y([r["name"] for r in pending])
+                parts.append(
+                    f"A {pend_names} les falta el precio. Cargáselo cuando quieras."
+                )
 
     if duplicates:
         names = _join_y([r["name"] for r in duplicates])
