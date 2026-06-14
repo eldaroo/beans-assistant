@@ -10,9 +10,13 @@ class SalesRepository:
         self.db = db_module
 
     def list_sales(self, limit: int, offset: int):
+        # id DESC is a deterministic tiebreaker: batch-created rows share an
+        # identical created_at, so created_at DESC alone is an unstable sort
+        # that churns across the dashboard's repeated fetches. See the note in
+        # products_repository.list_products.
         query = """
             SELECT * FROM sales
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT %s OFFSET %s
         """
         return self.db.fetch_all(query, (limit, offset))

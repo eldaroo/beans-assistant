@@ -17,11 +17,20 @@ class ProductsRepository:
         self.db = db_module
 
     def list_products(self, include_inactive: bool, limit: int, offset: int) -> list[dict]:
+        # id DESC is a deterministic tiebreaker on created_at. Batch-created
+        # products (a multi-product chat turn) all share the SAME insert
+        # timestamp to the microsecond, so `ORDER BY created_at DESC` alone is
+        # an unstable sort: Postgres returns the tied rows in arbitrary order,
+        # which differs between the dashboard's repeated fetches (30s interval +
+        # post-chat refresh). The churning order made Alpine's keyed x-for
+        # thrash the DOM, flickering and intermittently dropping one of the tied
+        # rows from view (a batch-created product "que no aparece"). A stable
+        # sort keeps every fetch identical.
         if include_inactive:
             query = f"""
                 SELECT {PRODUCT_COLUMNS}
                 FROM products
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT %s OFFSET %s
             """
             return self.db.fetch_all(query, (limit, offset))
@@ -30,7 +39,7 @@ class ProductsRepository:
             SELECT {PRODUCT_COLUMNS}
             FROM products
             WHERE is_active = TRUE
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT %s OFFSET %s
         """
         return self.db.fetch_all(query, (limit, offset))
