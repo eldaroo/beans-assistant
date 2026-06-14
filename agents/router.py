@@ -218,11 +218,17 @@ MISSING FIELDS:
 For WRITE_OPERATION, identify if required fields are missing:
 - REGISTER_SALE: needs items (product_ref + quantity)
 - REGISTER_EXPENSE: needs amount and description
-- REGISTER_PRODUCT: needs name and unit_price (sku and cost are auto-generated/optional).
+- REGISTER_PRODUCT: needs ONLY name. unit_price is OPTIONAL (sku and cost are
+    auto-generated/optional too). A product can be created with the price
+    pending and filled in later, so DO NOT list `unit_price` in missing_fields
+    for REGISTER_PRODUCT — only list `name` (or per-item `name`) when it is
+    genuinely absent. Still extract unit_price into normalized_entities when the
+    user does give a price; just never block creation on its absence.
   * MULTI-PRODUCT shape: when the user lists multiple products to create in
     one message, emit `items: [{{name, unit_price?, sku?}}]` instead of the
     single-product top-level shape. Each item REQUIRES `name`. `unit_price`
-    and `sku` are optional per item.
+    and `sku` are optional per item. Extract EVERY named product into items;
+    never collapse a list of names down to one product.
   * Trigger phrases for multi-product REGISTER_PRODUCT: a list of names
     separated by commas, "y", or newlines, with all items being product
     names (not stock quantities). Examples:
@@ -401,6 +407,35 @@ IMPORTANT:
 ])
 
 
+# Field names that denote a sale price, in every shape the router/field_labels
+# layer uses. A missing sale price must NOT block product CREATION: the product
+# is created with price pending and the owner fills it later (operator decision
+# 2026-06-13 — fastest catalog onboarding; the DB and write_agent already render
+# "precio pendiente"). It still blocks a SALE (that gate lives in write_agent).
+_OPTIONAL_PRICE_FIELDS = {"unit_price", "unit_price_cents", "price", "precio"}
+
+
+def _drop_optional_price_misses(missing_fields, operation_type):
+    """Strip price misses from missing_fields for product creation only.
+
+    Accepts the mixed shape the multi-product path uses: flat field-name
+    strings and structured per-item ``{"product", "field"}`` dicts (D-006).
+    Keeps every non-price miss (notably ``name``, which still blocks). Returns
+    the list unchanged for any operation other than REGISTER_PRODUCT.
+    """
+    if operation_type != "REGISTER_PRODUCT":
+        return missing_fields
+    kept = []
+    for entry in missing_fields or []:
+        if isinstance(entry, dict):
+            if str(entry.get("field", "")).lower() in _OPTIONAL_PRICE_FIELDS:
+                continue
+        elif str(entry).lower() in _OPTIONAL_PRICE_FIELDS:
+            continue
+        kept.append(entry)
+    return kept
+
+
 def classification_to_state(result: Dict[str, Any]) -> Dict[str, Any]:
     """Map a parsed router classification to the next AgentState delta.
 
@@ -444,11 +479,15 @@ def classification_to_state(result: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
 
+    operation_type = result.get("operation_type", "UNKNOWN")
+    missing_fields = _drop_optional_price_misses(
+        result.get("missing_fields", []), operation_type
+    )
     return {
         "intent": result["intent"],
-        "operation_type": result.get("operation_type", "UNKNOWN"),
+        "operation_type": operation_type,
         "confidence": result["confidence"],
-        "missing_fields": result.get("missing_fields", []),
+        "missing_fields": missing_fields,
         "normalized_entities": result.get("normalized_entities", {}),
         "messages": [{
             "role": "assistant",

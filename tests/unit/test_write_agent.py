@@ -913,3 +913,57 @@ class TestCancelExpenseHandler:
 
         assert "error" in result
         assert "Operación fallida" in result["final_answer"]
+
+
+@pytest.mark.unit
+class TestBatchSummaryPendingPrice:
+    """compose_batch_summary invites filling prices later for pending products.
+
+    Operator decision 2026-06-13: multi-product creation lands immediately with
+    price pending, then nudges the owner to set prices.
+    """
+
+    def test_all_pending_nudge(self):
+        from agents.write_agent import compose_batch_summary
+        products_data = [
+            {"name": "Cascos de moto", "unit_price_cents": None},
+            {"name": "Zapatillas Nike", "unit_price_cents": None},
+            {"name": "Pulseras de cafe", "unit_price_cents": None},
+        ]
+        result = [
+            {"name": "Cascos de moto", "status": "created"},
+            {"name": "Zapatillas Nike", "status": "created"},
+            {"name": "Pulseras de cafe", "status": "created"},
+        ]
+        msg = compose_batch_summary(products_data, result)
+        assert "precio pendiente" in msg
+        assert "Cargales el precio cuando quieras" in msg
+        assert "Cascos de moto" in msg and "Pulseras de cafe" in msg
+
+    def test_some_pending_names_the_pending_ones(self):
+        from agents.write_agent import compose_batch_summary
+        products_data = [
+            {"name": "Cascos de moto", "unit_price_cents": 5000},
+            {"name": "Zapatillas Nike", "unit_price_cents": None},
+        ]
+        result = [
+            {"name": "Cascos de moto", "status": "created"},
+            {"name": "Zapatillas Nike", "status": "created"},
+        ]
+        msg = compose_batch_summary(products_data, result)
+        assert "Zapatillas Nike les falta el precio" in msg or "Zapatillas Nike" in msg
+        assert "falta el precio" in msg
+
+    def test_all_priced_no_nudge(self):
+        from agents.write_agent import compose_batch_summary
+        products_data = [
+            {"name": "Cascos de moto", "unit_price_cents": 5000},
+            {"name": "Zapatillas Nike", "unit_price_cents": 3000},
+        ]
+        result = [
+            {"name": "Cascos de moto", "status": "created"},
+            {"name": "Zapatillas Nike", "status": "created"},
+        ]
+        msg = compose_batch_summary(products_data, result)
+        assert "pendiente" not in msg
+        assert "falta el precio" not in msg
