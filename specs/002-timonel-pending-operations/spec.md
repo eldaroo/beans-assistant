@@ -1,4 +1,4 @@
-> Tracked as eldaroo/beans-assistant#<parent> (filled on issue creation)
+> Tracked as eldaroo/beans-assistant#106
 
 ---
 name: timonel-pending-operations
