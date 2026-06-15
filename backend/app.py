@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import sys
 import os
 import time
@@ -102,6 +103,30 @@ app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboardin
 
 
 # HTML Routes
+@app.exception_handler(StarletteHTTPException)
+async def auth_aware_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Bounce unauthenticated PAGE navigations to /login instead of dumping JSON.
+
+    A browser that opens a gated page while logged out (e.g. /tenants/{phone}
+    after the session cookie expired) would otherwise see the raw
+    {"detail": "Authentication required"} body, since the page route depends on
+    require_tenant_match and FastAPI renders an HTTPException as JSON. For a real
+    page navigation (HTML accept, not an /api/ XHR) we redirect to the login home
+    so the owner just logs back in. API and XHR callers keep the JSON 401/403 so
+    the frontend's own fetch error handling is unchanged.
+    """
+    is_auth = exc.status_code in (401, 403)
+    is_api = request.url.path.startswith("/api/")
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if is_auth and wants_html and not is_api:
+        return RedirectResponse(url="/login", status_code=302)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """Root: route based on session kind/role."""
