@@ -35,6 +35,12 @@ def home_env(populated_db, monkeypatch):
     for mod in (stock_module, caja_module, ventas_module):
         monkeypatch.setattr(mod, "tenant_scope", _noop_scope)
 
+    # Pin Redis off (as prod does, REDIS_ENABLED=false). Otherwise the cache
+    # attempts a 2s-timeout connection to a non-existent Redis per cached call,
+    # which can push the stock snapshot past the 3s fail-open deadline on a CI
+    # box where the refusal is slow, degrading the tile. Prod never pays this.
+    monkeypatch.setattr("backend.cache.REDIS_ENABLED", False)
+
     with database.get_conn() as conn:
         # Keep exactly two active products so stock totals are deterministic.
         rows = conn.execute("SELECT id FROM products WHERE is_active = 1 ORDER BY id").fetchall()
