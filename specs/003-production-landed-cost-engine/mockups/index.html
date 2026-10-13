@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Beans&amp;Co · Control Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F6F7F9; --card:#FFFFFF; --line:#E4E7EC; --line-hover:#D0D5DD;
+  --text:#101828; --muted:#667085;
+  --accent:#4F46E5; --accent-hover:#4338CA; --accent-soft:#EEF0FE; --on-accent:#FFFFFF;
+  --good:#067647; --good-soft:#ECFDF3; --warn:#B54708; --warn-soft:#FFFAEB; --danger:#B42318; --danger-soft:#FEF3F2;
+  --shadow-card:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06);
+  --shadow-strip:0 2px 8px rgba(16,24,40,.08);
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --use-shadow:1;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none; --shadow-strip:none; --use-shadow:0;
+}}
+:root[data-theme="dark"]{
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none; --shadow-strip:none; --use-shadow:0;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* shell layout: left rail on desktop, top bar on mobile */
+.app{display:flex;min-height:100vh;max-width:1400px;margin:0 auto}
+.rail{display:none}
+.main{flex:1;min-width:0;padding:16px}
+@media(min-width:1000px){
+  .rail{display:flex;flex-direction:column;gap:2px;width:240px;flex:0 0 240px;padding:22px 14px;border-right:1px solid var(--line)}
+  .main{padding:32px 32px 48px}
+}
+.railbrand{display:flex;align-items:center;gap:9px;font-weight:700;padding:4px 10px 18px}
+.raildot{width:22px;height:22px;border-radius:7px;background:var(--accent);display:inline-block}
+.railbrand small{color:var(--muted);font-weight:500;font-size:12px}
+.railitem{display:flex;align-items:center;gap:10px;background:transparent;border:0;border-radius:8px;padding:9px 11px;color:var(--muted);font:inherit;font-weight:500;cursor:pointer;text-align:left;min-height:40px;position:relative}
+.railitem:hover{background:var(--accent-soft);color:var(--text)}
+.railitem[aria-current="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.railitem[aria-current="true"]::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--accent)}
+.railsep{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;padding:14px 11px 6px;font-weight:600}
+
+/* topbar (mobile brand + theme) */
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.tbbrand{display:flex;align-items:center;gap:8px;font-weight:700}
+@media(min-width:1000px){.tbbrand{display:none}}
+.sec{background:var(--card);border:1px solid var(--line);padding:7px 11px;border-radius:8px;color:var(--muted);cursor:pointer;min-height:38px;font:inherit;font-weight:500}
+.sec:hover{border-color:var(--line-hover)}
+
+/* mockup state switcher */
+.statebar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:22px}
+.statebar button{font:inherit;font-weight:500;background:var(--card);border:1px solid var(--line);padding:7px 11px;border-radius:8px;color:var(--muted);cursor:pointer;min-height:38px}
+.statebar button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.hide{display:none}
+
+h1.page{font-size:28px;font-weight:700;margin:2px 0 2px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 24px}
+.caplabel{font-size:12px;font-weight:500;color:var(--muted)}
+
+/* attention strip */
+.strip{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-strip);padding:8px;margin-bottom:32px}
+.strip h2{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:6px 10px 8px}
+.strip ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.att{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:transparent;border:0;border-radius:9px;padding:11px 10px;cursor:pointer;color:var(--text);font:inherit;min-height:48px;position:relative;border-left:3px solid transparent}
+.att:hover{background:var(--bg)} .att:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.att.hi{border-left-color:var(--danger)} .att.mid{border-left-color:var(--warn)} .att.lo{border-left-color:var(--muted)}
+.ic{flex:0 0 auto;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center}
+.ic .tri{width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid var(--danger)}
+.ic .cir{width:11px;height:11px;border-radius:50%;background:var(--warn)}
+.ic .ciro{width:10px;height:10px;border-radius:50%;border:2px solid var(--muted)}
+.att .txt{flex:1} .att .go{color:var(--accent);font-size:13px;font-weight:600}
+
+/* scorecard */
+.scorecard{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;max-width:1120px}
+@media(min-width:1000px){.scorecard{grid-template-columns:repeat(3,1fr)}}
+.tile{display:flex;flex-direction:column;gap:6px;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px;cursor:pointer;color:var(--text);font:inherit;min-height:120px}
+.tile:hover{border-color:var(--line-hover);box-shadow:var(--shadow-card)}
+.tile:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tile .lbl{font-size:13px;font-weight:500;color:var(--muted);letter-spacing:.02em}
+.tile .num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:32px;font-weight:600;line-height:1.05}
+.tile .trend{font-size:13px;font-weight:500;display:flex;align-items:center;gap:5px}
+.trend.good{color:var(--good)} .trend.warn{color:var(--warn)} .trend.flat{color:var(--muted)}
+.tile .soon{align-self:flex-start;font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-soft);padding:2px 8px;border-radius:999px}
+.note{font-size:13px;color:var(--muted);margin-top:18px;max-width:1120px}
+
+/* module / card */
+.back{background:transparent;border:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;padding:4px 0 10px;min-height:38px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-card);padding:24px;max-width:640px}
+.selectors{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;max-width:640px}
+.field{display:flex;flex-direction:column;gap:5px;flex:1;min-width:150px}
+.field label{font-size:12px;font-weight:500;color:var(--muted)}
+.field select{font:inherit;padding:11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);min-height:44px}
+.summary{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:2px}
+.summary .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.badge{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:8px}
+.badge.partial{background:var(--warn-soft);color:var(--warn)} .badge.complete{background:var(--good-soft);color:var(--good)}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.totalwrap{padding-bottom:10px;border-bottom:1.5px dotted var(--line);margin-bottom:4px}
+.total{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:34px;font-weight:600}
+.total.partial{color:var(--warn)} .total .plus{color:var(--muted);font-weight:500}
+.totalcap{font-size:12.5px;color:var(--muted);margin-top:2px}
+.components{list-style:none;margin:16px 0 0;padding:0}
+.row{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line);padding:14px 2px;cursor:pointer;color:var(--text);font:inherit;min-height:52px}
+.row:hover{background:var(--bg)} .row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:8px}
+.row .name{flex:1;font-weight:500} .row .sub2{display:block;font-size:12.5px;font-weight:400;color:var(--muted)}
+.val{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:15px;min-width:64px;text-align:right}
+.chip{font-size:12px;font-weight:500;padding:4px 10px;border-radius:8px;color:var(--muted);background:repeating-linear-gradient(135deg,var(--bg),var(--bg) 4px,var(--accent-soft) 4px,var(--accent-soft) 8px);border:1px solid var(--line)}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-top:18px;width:100%;background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:13px;font:inherit;font-weight:600;cursor:pointer;min-height:44px}
+.cta:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.cta.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.askbar{margin-top:18px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--bg)}
+.askbar .q{font-family:var(--mono);font-size:13px} .askbar .a{font-size:13px;color:var(--good);margin-top:6px;font-weight:500}
+
+.skel{height:14px;background:linear-gradient(90deg,var(--line),var(--accent-soft),var(--line));border-radius:8px;margin:14px 0}
+.skel.wide{height:30px;width:45%} .skgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;max-width:1120px}
+@media(min-width:1000px){.skgrid{grid-template-columns:repeat(3,1fr)}}
+.err{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-left:3px solid var(--danger);background:var(--danger-soft);padding:13px 15px;border-radius:10px;margin-bottom:12px;max-width:640px}
+.err.w{border-left-color:var(--warn);background:var(--warn-soft)} .err.n{border-left-color:var(--muted);background:var(--accent-soft)}
+.err h3{margin:0 0 3px;font-size:14px;font-weight:600} .err p{margin:0;font-size:13px;color:var(--text)}
+.roomtag{display:inline-block;font-size:12px;font-weight:600;color:var(--good);background:var(--good-soft);padding:4px 11px;border-radius:999px;margin-bottom:10px}
+footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
+
+@media(prefers-reduced-motion:no-preference){
+  .tile,.row,.cta,.att,.railitem{transition:background .14s ease,border-color .14s ease,color .14s ease,box-shadow .14s ease,transform .14s ease}
+  .reveal{animation:rise .32s cubic-bezier(.16,1,.3,1) both}
+  .scorecard .tile:nth-child(1){animation-delay:.00s}.scorecard .tile:nth-child(2){animation-delay:.04s}
+  .scorecard .tile:nth-child(3){animation-delay:.08s}.scorecard .tile:nth-child(4){animation-delay:.12s}
+  .scorecard .tile:nth-child(5){animation-delay:.16s}.scorecard .tile:nth-child(6){animation-delay:.20s}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+}
+@media(prefers-reduced-motion:reduce){.reveal{animation:fade .12s ease both}@keyframes fade{from{opacity:0}to{opacity:1}}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- LEFT RAIL (desktop) -->
+  <nav class="rail" aria-label="Módulos">
+    <div class="railbrand"><span class="raildot"></span><span>Beans&amp;Co<br><small>control center</small></span></div>
+    <button class="railitem" aria-current="true" data-go="home">Inicio</button>
+    <button class="railitem" data-go="prod">Producción</button>
+    <button class="railitem" data-go="prov">Proveedores</button>
+    <button class="railitem" data-go="costos">Costos y margen</button>
+    <div class="railsep">Operación</div>
+    <button class="railitem" data-go="stock">Inventario</button>
+    <button class="railitem" data-go="ventas">Ventas</button>
+    <button class="railitem" data-go="caja">Caja y gastos</button>
+    <button class="railitem" data-go="log">Logística</button>
+    <div class="railsep">Asistente</div>
+    <button class="railitem" data-go="costos">Chat</button>
+  </nav>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="tbbrand"><span class="raildot"></span>Beans&amp;Co</div>
+      <button class="sec" id="themebtn" aria-label="Cambiar tema">tema</button>
+    </div>
+
+    <div class="statebar" role="group" aria-label="Ver pantalla del mockup">
+      <button data-state="home" aria-pressed="true">Inicio</button>
+      <button data-state="costos" aria-pressed="false">Costos</button>
+      <button data-state="supplier" aria-pressed="false">Vista proveedor</button>
+      <button data-state="empty" aria-pressed="false">Inicio vacío</button>
+      <button data-state="loading" aria-pressed="false">Cargando</button>
+      <button data-state="error" aria-pressed="false">Error</button>
+    </div>
+
+    <!-- HOME -->
+    <section id="s-home">
+      <h1 class="page">Hoy en Beans&amp;Co</h1>
+      <p class="sub">El estado del negocio de un vistazo. Abrí un módulo desde su tile.</p>
+
+      <div class="strip" role="region" aria-label="Qué necesita tu atención">
+        <h2>Atención · 3 cosas</h2>
+        <ul>
+          <li><button class="att hi" data-go="stock"><span class="ic"><span class="tri"></span></span><span class="txt">Stock de café bajo: quedan 1.5 semanas</span><span class="go">Reponer</span></button></li>
+          <li><button class="att mid" data-go="costos"><span class="ic"><span class="cir"></span></span><span class="txt">Falta la aduana en el costo de Colombia</span><span class="go">Completar</span></button></li>
+          <li><button class="att lo" data-go="prov"><span class="ic"><span class="ciro"></span></span><span class="txt">Víctor no responde el check-in hace 4 días</span><span class="go">Ver</span></button></li>
+        </ul>
+      </div>
+
+      <div class="scorecard">
+        <button class="tile reveal" data-go="caja"><span class="lbl">Caja</span><span class="num">USD 3.1k</span><span class="trend good">&#9650; runway ~7 sem</span></button>
+        <button class="tile reveal" data-go="stock"><span class="lbl">Stock</span><span class="num">1.2k u</span><span class="trend warn">&#9679; café: 1.5 sem</span></button>
+        <button class="tile reveal" data-go="ventas"><span class="lbl">Ventas semana</span><span class="num">USD 1.9k</span><span class="trend good">&#9650; 48 pulseras</span></button>
+        <button class="tile reveal" data-go="costos"><span class="lbl">Margen</span><span class="num">38%</span><span class="trend warn">&#9679; parcial · falta aduana</span></button>
+        <button class="tile reveal" data-go="prod"><span class="lbl">Producción semana</span><span class="num">240</span><span class="trend flat">meta 260</span></button>
+        <button class="tile reveal" data-go="prov"><span class="lbl">Proveedores</span><span class="num">2</span><span class="trend warn">&#9679; 1 check-in atrasado</span></button>
+      </div>
+      <p class="note">Caja, Stock y Ventas ya salen de los datos que la plataforma tiene hoy. Margen, Producción y Proveedores llegan a medida que se cargan sus módulos.</p>
+    </section>
+
+    <!-- COSTOS -->
+    <section id="s-costos" class="hide">
+      <button class="back" data-go="home">&#8592; Inicio</button>
+      <h1 class="page">Costos y margen</h1>
+      <p class="sub">Los números viven acá. Explorar escenarios es una charla con el asistente.</p>
+      <div class="selectors">
+        <div class="field"><label for="tipo">Tipo de pulsera</label>
+          <select id="tipo"><option>Pulsera Clásica</option><option>Pulsera Multicolor</option><option>Pulsera Talle S</option></select></div>
+        <div class="field"><label for="pais">País</label>
+          <select id="pais"><option>Colombia</option><option>Armenia-Colombia</option><option>Costa Rica</option></select></div>
+      </div>
+      <div class="card">
+        <div class="summary"><span class="lbl">Costo final</span>
+          <span class="badge partial" id="badge"><span class="dot"></span><span id="badgetext">Parcial · 4 de 6</span></span></div>
+        <div class="totalwrap">
+          <div class="total partial" id="total">USD 3.35 <span class="plus">+</span></div>
+          <div class="totalcap" id="totalcap">Faltan 2 componentes: envío y aduana</div>
+        </div>
+        <ul class="components" id="components">
+          <li><button class="row" data-filled="1"><span class="name">Materiales <span class="sub2">café, tostado, maderita, hilo, piedras, argolla</span></span><span class="val">1.82</span></button></li>
+          <li><button class="row" data-filled="1"><span class="name">Mano de obra <span class="sub2">por unidad, lote de María</span></span><span class="val">0.90</span></button></li>
+          <li><button class="row" data-filled="1"><span class="name">Packaging <span class="sub2">por unidad, Pereira</span></span><span class="val">0.35</span></button></li>
+          <li><button class="row pending" data-filled="0" data-name="Envío"><span class="name">Envío <span class="sub2">DHL Armenia, por averiguar</span></span><span class="chip">Pendiente</span></button></li>
+          <li><button class="row pending" data-filled="0" data-name="Aduana"><span class="name">Aduana <span class="sub2">importación, por averiguar</span></span><span class="chip">Pendiente</span></button></li>
+          <li><button class="row" data-filled="1"><span class="name">Indirectos <span class="sub2">exhibidores + overhead, por unidad/mes</span></span><span class="val">0.28</span></button></li>
+        </ul>
+        <button class="cta" id="fillcta">Completar línea pendiente</button>
+        <div class="askbar">
+          <div class="q">Asistente: "¿y si muevo los exhibidores a Colombia?"</div>
+          <div class="a">Recalcula sobre estos números, sin tocar lo guardado.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SUPPLIER -->
+    <section id="s-supplier" class="hide">
+      <span class="roomtag">Tu aporte</span>
+      <h1 class="page">Hola María</h1>
+      <p class="sub">Cargá solo lo tuyo. No ves precios de venta, márgenes ni datos de otros proveedores.</p>
+      <div class="card">
+        <ul class="components">
+          <li><button class="row" data-filled="1"><span class="name">Café verde <span class="sub2">tu compra</span></span><span class="val">0.40</span></button></li>
+          <li><button class="row" data-filled="1"><span class="name">Tostado <span class="sub2">tu compra</span></span><span class="val">0.22</span></button></li>
+          <li><button class="row pending" data-filled="0"><span class="name">Mano de obra <span class="sub2">tu lote de esta semana</span></span><span class="chip">Pendiente</span></button></li>
+        </ul>
+        <button class="cta">Cargar mi producción de la semana</button>
+      </div>
+    </section>
+
+    <!-- EMPTY -->
+    <section id="s-empty" class="hide">
+      <h1 class="page">Hoy en Beans&amp;Co</h1>
+      <div class="card" style="text-align:center;padding:40px 24px;max-width:560px">
+        <h2 style="margin:0 0 8px;font-size:18px;font-weight:600">Todavía no hay datos para mostrar</h2>
+        <p style="color:var(--muted);margin:0 auto 20px;max-width:380px">A medida que cargues ventas, stock y costos, cada módulo aparece como un tile acá y las alertas se arman solas.</p>
+        <button class="cta" style="max-width:260px;margin:0 auto" data-go="home">Empezar por inventario</button>
+      </div>
+    </section>
+
+    <!-- LOADING -->
+    <section id="s-loading" class="hide">
+      <div class="skel wide"></div><div class="skel" style="width:30%"></div>
+      <div class="skgrid" style="margin-top:24px"><div class="skel" style="height:120px;margin:0"></div><div class="skel" style="height:120px;margin:0"></div><div class="skel" style="height:120px;margin:0"></div><div class="skel" style="height:120px;margin:0"></div><div class="skel" style="height:120px;margin:0"></div><div class="skel" style="height:120px;margin:0"></div></div>
+    </section>
+
+    <!-- ERROR -->
+    <section id="s-error" class="hide">
+      <h1 class="page">Hoy en Beans&amp;Co</h1>
+      <div class="err"><div class="ic"><span class="tri"></span></div><div><h3 style="color:var(--danger)">Un módulo no respondió</h3><p>El tile de Ventas no cargó. El resto del inicio sigue funcionando; reintentá solo ese.</p></div></div>
+      <div class="err w"><div class="ic"><span class="cir"></span></div><div><h3 style="color:var(--warn)">Revisá un dato</h3><p>La tasa de cambio no puede quedar vacía cuando la moneda no es USD.</p></div></div>
+      <div class="err n"><div class="ic"><span class="ciro"></span></div><div><h3 style="color:var(--muted)">Sin acceso</h3><p>El margen es solo para la dueña. Si sos proveedor, abrí tu propia vista.</p></div></div>
+    </section>
+
+    <footer>Mockup para aprobación · Beans&amp;Co control center · no es la app real</footer>
+  </main>
+</div>
+
+<script type="module">
+const sections=["home","costos","supplier","empty","loading","error"];
+const tileMap={caja:"home",stock:"home",ventas:"home",prod:"home",prov:"home",log:"home"};
+const goto=(name)=>{
+  const target=sections.includes(name)?name:(tileMap[name]||"home");
+  for(const s of sections){const el=document.getElementById("s-"+s);if(el)el.classList.toggle("hide",s!==target);}
+  document.querySelectorAll(".statebar [data-state]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.state===target)));
+  document.querySelectorAll(".rail .railitem").forEach(b=>b.setAttribute("aria-current",String(b.dataset.go===target)));
+  window.scrollTo({top:0});
+};
+document.querySelectorAll(".statebar [data-state]").forEach(b=>b.addEventListener("click",()=>goto(b.dataset.state)));
+document.querySelectorAll("[data-go]").forEach(b=>b.addEventListener("click",()=>goto(b.dataset.go)));
+
+function recount(){
+  const rows=[...document.querySelectorAll("#components .row")];
+  const filled=rows.filter(r=>r.dataset.filled==="1").length,total=rows.length;
+  const sum=rows.filter(r=>r.dataset.filled==="1").reduce((a,r)=>a+parseFloat(r.querySelector(".val")?.textContent||"0"),0);
+  const badge=document.getElementById("badge"),bt=document.getElementById("badgetext"),tt=document.getElementById("total"),cap=document.getElementById("totalcap");
+  if(!badge)return;const complete=filled===total;
+  badge.className="badge "+(complete?"complete":"partial");
+  bt.textContent=complete?"Completo · 6 de 6":("Parcial · "+filled+" de "+total);
+  tt.className="total"+(complete?"":" partial");
+  if(complete){tt.innerHTML="USD "+sum.toFixed(2);cap.textContent="Costo final completo. Podés fijar precio con confianza.";}
+  else{const miss=rows.filter(r=>r.dataset.filled==="0").map(r=>(r.dataset.name||"").toLowerCase());
+    tt.innerHTML="USD "+sum.toFixed(2)+' <span class="plus">+</span>';
+    cap.textContent="Faltan "+miss.length+" componente"+(miss.length>1?"s":"")+": "+miss.join(" y ");}
+}
+function settle(){
+  const row=document.querySelector("#components .row.pending[data-name='Envío']")||document.querySelector("#components .row.pending");
+  if(row){const c=row.querySelector(".chip");if(c){const v=document.createElement("span");v.className="val";v.textContent="0.60";c.replaceWith(v);}row.classList.remove("pending");row.dataset.filled="1";}
+  recount();
+}
+const fc=document.getElementById("fillcta");if(fc)fc.addEventListener("click",settle);
+document.querySelectorAll("#components .row.pending").forEach(r=>r.addEventListener("click",settle));
+
+const root=document.documentElement;
+document.getElementById("themebtn").addEventListener("click",()=>{
+  const cur=root.getAttribute("data-theme");
+  const next=cur==="dark"?"light":(cur==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));
+  root.setAttribute("data-theme",next);try{localStorage.setItem("beans_cc_theme",next);}catch(e){}
+});
+try{const t=localStorage.getItem("beans_cc_theme");if(t)root.setAttribute("data-theme",t);}catch(e){}
+goto("home");
+</script>
+</body>
+</html>

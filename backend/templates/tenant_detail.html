@@ -1022,7 +1022,16 @@ function tenantDashboard() {
         stockLowOnly: false,
 
         init() {
-            this.loadProducts();
+            // Control Center drill-down: a ?tab= query opens the dashboard on
+            // that tab (e.g. /tenants/{phone}?tab=stock). Falls back to products.
+            const loaders = { products: 'loadProducts', stock: 'loadStock', sales: 'loadSales', expenses: 'loadExpenses' };
+            let startTab = 'products';
+            try {
+                const t = new URLSearchParams(window.location.search).get('tab');
+                if (t && loaders[t]) startTab = t;
+            } catch (e) {}
+            this.currentTab = startTab;
+            this[loaders[startTab]]();
             // Auto-refresh every 30 seconds
             setInterval(() => {
                 if (this.currentTab === 'products') this.loadProducts();

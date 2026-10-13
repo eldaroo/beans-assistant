@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -84,6 +84,10 @@ app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat
 # Chat simulation: admin-only (debug tool, takes phone from body, not URL).
 app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], dependencies=[Depends(require_role("admin"))])
 
+# Control Center status home (the owner's default landing). The route is
+# tenant-scoped and owner-gated inside the router via require_tenant_match.
+app.include_router(home.router, tags=["Control Center"])
+
 # Onboarding routers, both mounted under /api/onboarding.
 # Order matters: the web router exposes the literal path /web, the WhatsApp
 # router exposes the path-parameter /{phone}. FastAPI matches in registration
@@ -128,7 +132,7 @@ async def auth_aware_http_exception_handler(request: Request, exc: StarletteHTTP
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
+async def root(request: Request):
     """Root: route based on session kind/role."""
     user = get_session_user(request)
     if not user:
@@ -138,7 +142,9 @@ async def home(request: Request):
     if user.get("role") == "admin":
         return RedirectResponse(url="/admin", status_code=302)
     phone = user.get("phone_number")
-    return RedirectResponse(url=f"/tenants/{phone}", status_code=302)
+    # Owner landing is the Control Center status home (M1). The prior dashboard
+    # at /tenants/{phone} stays reachable and unchanged (AC5, additive).
+    return RedirectResponse(url=f"/home/{phone}", status_code=302)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
