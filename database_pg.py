@@ -225,6 +225,150 @@ def create_tenant_schema(schema_name: str):
                 """
             )
 
+            # Costing tables (spec 003 M2). Keyed by product_id and/or country;
+            # money in integer *_cents columns; a nullable *_cents column means
+            # the component is pending (unknown), never a real zero.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers (
+                    id BIGSERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    country VARCHAR(64),
+                    contact VARCHAR(255),
+                    is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cost_inputs (
+                    id BIGSERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    category VARCHAR(64),
+                    unit VARCHAR(32),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS input_purchases (
+                    id BIGSERIAL PRIMARY KEY,
+                    cost_input_id BIGINT NOT NULL REFERENCES cost_inputs(id),
+                    supplier_id BIGINT REFERENCES suppliers(id),
+                    original_currency VARCHAR(3) DEFAULT 'USD' NOT NULL,
+                    original_amount_cents INTEGER NOT NULL CHECK (original_amount_cents >= 0),
+                    fx_rate NUMERIC(18,8) DEFAULT 1 NOT NULL CHECK (fx_rate > 0),
+                    usd_amount_cents INTEGER NOT NULL CHECK (usd_amount_cents >= 0),
+                    quantity NUMERIC(18,4) DEFAULT 1 NOT NULL CHECK (quantity > 0),
+                    purchased_at DATE DEFAULT CURRENT_DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bom_lines (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    cost_input_id BIGINT NOT NULL REFERENCES cost_inputs(id),
+                    country VARCHAR(64) NOT NULL,
+                    quantity NUMERIC(18,4) DEFAULT 1 NOT NULL CHECK (quantity > 0),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS labor_costs (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    batch_payment_cents INTEGER NOT NULL CHECK (batch_payment_cents >= 0),
+                    units_completed INTEGER NOT NULL CHECK (units_completed >= 0),
+                    recorded_at DATE DEFAULT CURRENT_DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS packaging_costs (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    usd_amount_cents INTEGER NOT NULL CHECK (usd_amount_cents >= 0),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS shipping_lanes (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    usd_amount_cents INTEGER CHECK (usd_amount_cents IS NULL OR usd_amount_cents >= 0),
+                    note TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS customs_duties (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    usd_amount_cents INTEGER CHECK (usd_amount_cents IS NULL OR usd_amount_cents >= 0),
+                    note TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS indirect_costs (
+                    id BIGSERIAL PRIMARY KEY,
+                    country VARCHAR(64) NOT NULL,
+                    period_month VARCHAR(7) NOT NULL,
+                    pool_cents INTEGER NOT NULL CHECK (pool_cents >= 0),
+                    units_produced INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS landed_cost_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT NOT NULL REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    materials_cents INTEGER,
+                    labor_cents INTEGER,
+                    packaging_cents INTEGER,
+                    shipping_cents INTEGER,
+                    customs_cents INTEGER,
+                    indirect_cents INTEGER,
+                    total_cents INTEGER NOT NULL DEFAULT 0 CHECK (total_cents >= 0),
+                    status VARCHAR(16) NOT NULL DEFAULT 'parcial' CHECK (status IN ('completo','parcial')),
+                    pending_components TEXT,
+                    computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
             # Core views
             cur.execute(
                 """
