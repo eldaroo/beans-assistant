@@ -13,7 +13,7 @@ descriptor lights up its tile and rail entry automatically.
 from __future__ import annotations
 
 from backend.modules.protocol import Module
-from backend.modules.providers import caja_module, stock_module, ventas_module
+from backend.modules.providers import caja_module, costos_module, stock_module, ventas_module
 
 # Rail groups match the mockup's left-rail sections.
 GROUP_OPERATION = "Operación"
@@ -42,6 +42,19 @@ _MODULES: "list[Module]" = [
         snapshot=ventas_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=30,
+    ),
+    # Costos (spec 003 M2): the first module with a dedicated page rather than a
+    # dashboard tab. Its route is absolute ("/costos/{phone}"); the status-home
+    # template resolves an absolute route as-is and substitutes {phone}. The tile
+    # shows the lead bracelet type's landed cost with its completeness state; the
+    # margin-per-country headline arrives with the multi-country compute in M4.
+    Module(
+        id="costos",
+        label="Costos",
+        route="/costos/{phone}",
+        snapshot=costos_module.snapshot,
+        rail_group=GROUP_OPERATION,
+        order=40,
     ),
 ]
 

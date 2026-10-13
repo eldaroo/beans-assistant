@@ -109,6 +109,9 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 </head>
 <body>
 {% set base = "/tenants/" ~ phone %}
+{%- macro href_for(route) -%}
+{% if route.startswith('/') %}{{ route.replace('{phone}', phone) }}{% else %}{{ base }}{{ route }}{% endif %}
+{%- endmacro -%}
 <div class="app">
   <nav class="rail" aria-label="Módulos">
     <div class="railbrand"><span class="raildot"></span><span>{{ business_name }}<br><small>control center</small></span></div>
@@ -116,7 +119,7 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
     {% for group in view.rail_groups %}
       {% if group.label %}<div class="railsep">{{ group.label }}</div>{% endif %}
       {% for tile in group.items %}
-        <a class="railitem" href="{{ base }}{{ tile.route }}">{{ tile.label }}</a>
+        <a class="railitem" href="{{ href_for(tile.route) }}">{{ tile.label }}</a>
       {% endfor %}
     {% endfor %}
   </nav>
@@ -136,7 +139,7 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
       <ul>
         {% for item in view.attention %}
         <li>
-          <a class="att {{ item.severity.strip_class }}" href="{{ base }}{{ item.route }}">
+          <a class="att {{ item.severity.strip_class }}" href="{{ href_for(item.route) }}">
             <span class="ic"><span class="{{ item.severity.shape }}"></span></span>
             <span class="txt">{{ item.text }}</span>
             <span class="go">{{ item.action_label }}</span>
@@ -156,7 +159,7 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
     {% else %}
     <div class="scorecard">
       {% for tile in view.tiles %}
-      <a class="tile reveal {{ tile.status }}" href="{{ base }}{{ tile.route }}">
+      <a class="tile reveal {{ tile.status }}" href="{{ href_for(tile.route) }}">
         <span class="lbl">{{ tile.label }}</span>
         <span class="num">{{ tile.value }}</span>
         {% if tile.trend %}

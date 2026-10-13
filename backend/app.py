@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -87,6 +87,8 @@ app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], depende
 # Control Center status home (the owner's default landing). The route is
 # tenant-scoped and owner-gated inside the router via require_tenant_match.
 app.include_router(home.router, tags=["Control Center"])
+# Costos module drill-down (spec 003 M2). Owner-gated inside the router.
+app.include_router(costos.router, tags=["Control Center"])
 
 # Onboarding routers, both mounted under /api/onboarding.
 # Order matters: the web router exposes the literal path /web, the WhatsApp

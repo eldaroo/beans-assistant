@@ -597,6 +597,118 @@ FROM products p
 LEFT JOIN stock_movements sm ON p.id = sm.product_id
 WHERE p.is_active = 1
 GROUP BY p.id, p.sku, p.name;
+
+-- Costing tables (spec 003 M2). Keyed by product_id and/or country; money in
+-- integer *_cents columns; a nullable *_cents means the component is pending.
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    country TEXT,
+    contact TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cost_inputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT,
+    unit TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS input_purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cost_input_id INTEGER NOT NULL,
+    supplier_id INTEGER,
+    original_currency TEXT NOT NULL DEFAULT 'USD',
+    original_amount_cents INTEGER NOT NULL CHECK (original_amount_cents >= 0),
+    fx_rate REAL NOT NULL DEFAULT 1.0 CHECK (fx_rate > 0),
+    usd_amount_cents INTEGER NOT NULL CHECK (usd_amount_cents >= 0),
+    quantity REAL NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    purchased_at TEXT DEFAULT (date('now')) NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (cost_input_id) REFERENCES cost_inputs(id),
+    FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+);
+
+CREATE TABLE IF NOT EXISTS bom_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    cost_input_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id),
+    FOREIGN KEY (cost_input_id) REFERENCES cost_inputs(id)
+);
+
+CREATE TABLE IF NOT EXISTS labor_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    batch_payment_cents INTEGER NOT NULL CHECK (batch_payment_cents >= 0),
+    units_completed INTEGER NOT NULL CHECK (units_completed >= 0),
+    recorded_at TEXT DEFAULT (date('now')) NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS packaging_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    usd_amount_cents INTEGER NOT NULL CHECK (usd_amount_cents >= 0),
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS shipping_lanes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    usd_amount_cents INTEGER CHECK (usd_amount_cents IS NULL OR usd_amount_cents >= 0),
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS customs_duties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    usd_amount_cents INTEGER CHECK (usd_amount_cents IS NULL OR usd_amount_cents >= 0),
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+CREATE TABLE IF NOT EXISTS indirect_costs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    country TEXT NOT NULL,
+    period_month TEXT NOT NULL,
+    pool_cents INTEGER NOT NULL CHECK (pool_cents >= 0),
+    units_produced INTEGER,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS landed_cost_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    country TEXT NOT NULL,
+    materials_cents INTEGER,
+    labor_cents INTEGER,
+    packaging_cents INTEGER,
+    shipping_cents INTEGER,
+    customs_cents INTEGER,
+    indirect_cents INTEGER,
+    total_cents INTEGER NOT NULL DEFAULT 0 CHECK (total_cents >= 0),
+    status TEXT NOT NULL DEFAULT 'parcial' CHECK (status IN ('completo','parcial')),
+    pending_components TEXT,
+    computed_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
 """
 
     def _get_default_config(self) -> Dict[str, Any]:
