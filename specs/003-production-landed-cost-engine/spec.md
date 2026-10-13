@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#133
+
 ---
 name: beans-control-center
 spec_ordinal: 003
