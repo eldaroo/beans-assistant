@@ -1,8 +1,9 @@
 ---
 name: timonel-architecture
-last_spec: timonel-flexible-interpretation
+last_spec: production-landed-cost-engine
 created: 2026-06-11
-mode: create
+last_updated: 2026-10-13
+mode: update
 author: Winston (BuildOS Architect, architecture-author role)
 ---
 
@@ -142,6 +143,133 @@ Modules in this system:
 - **Implications.** v1 covers sale-needs-price and (M2) one more single-missing-field pause; broader resume is a later spec.
 - **Panel source.** Winston.
 
+## Costing domain addendum (spec 003, production-landed-cost-engine)
+
+A new per-tenant costing domain hangs off the existing `products` table and computes one derived fact: landed cost per bracelet type, per country, in USD, with a completeness state. Raw facts are entered once each; landed cost is always computed, never hand-entered. Suppliers become scoped users of the same tenant via a new membership layer. Check-ins reuse Baileys and Timonel. The UI makes costing the home surface without deleting sales, stock, or expenses.
+
+| Module | Owns |
+|--------|------|
+| costing schema (new per-tenant tables) | raw cost facts |
+| suppliers repository and api | supplier rows |
+| costing_service | the derived snapshot and allocation |
+| tenant_members (public) | who may reach a tenant |
+| checkin scheduler | send cadence and log |
+| costing home | costing routes and templates |
+
+### D-013: `products` is the bracelet-type anchor; costing in new tables
+
+- **Chosen.** One bracelet type stays one `products` row. New costing tables, keyed by product_id or country: suppliers, cost_inputs, input_purchases, bom_lines, labor_costs, packaging_costs, shipping_lanes, customs_duties, indirect_costs, landed_cost_snapshots.
+- **Alternatives.** (a) a separate `bracelet_types` table; (b) costing columns onto `products`.
+- **Why won.** `products` already carries SKU and is referenced by sales, stock, and sale_items. It is the one existing identity for a bracelet type.
+- **Why lost.** (a) forks identity into two sources of truth. (b) costing is many rows per product per country, not flat columns on one row.
+- **Implications.** `create_tenant_schema` gains the tables plus a backfill. Landed cost is a derived snapshot, not a `unit_cost_cents` write.
+- **Panel source.** Winston.
+
+### D-014: Input purchases store original currency, FX rate, and USD; append-only
+
+- **Chosen.** `input_purchases` stores original_currency, original_amount_cents, fx_rate, usd_amount_cents, purchased_at. The rate is hand-entered in M1. A correction is a new row, never an in-place edit.
+- **Alternatives.** (a) USD only; (b) original plus a fetched live rate.
+- **Why won.** The triplet is a full audit trail: a disputed cost is re-checkable and a wrong rate is visible.
+- **Why lost.** (a) hides a wrong rate. (b) a live rate drifts from the rate actually paid; a fetched rate is a later default, not the stored truth.
+- **Implications.** A USD normalization helper sits beside the repository; a rate edit means a new row and snapshot.
+- **Panel source.** Winston, with Amelia on the blind existing `currency` column.
+
+### D-015: Indirect allocates per unit produced, per country, per month
+
+- **Chosen.** Indirect per bracelet equals total indirect cost for a country in a month, divided by units produced there that month. Display stands and overhead use this basis.
+- **Alternatives.** (a) per revenue; (b) per batch.
+- **Why won.** Per-unit-produced is the honest denominator and does not depend on the price being computed.
+- **Why lost.** (a) is circular: price is the output, so allocating by revenue defines the answer in terms of itself. (b) batches are uneven; display stands are not per-batch.
+- **Implications.** `costing_service` needs a per-country per-month production count; a zero-production month renders indirect PENDING.
+- **Panel source.** Winston. Marcus favored a rolling trailing window over a calendar month; the window choice is OQ1 (A-Q5), resolved at build.
+
+### D-016: The snapshot carries a completeness state, never a false total
+
+- **Chosen.** A snapshot holds each component (materials, labor, packaging, shipping, customs, indirect) with a filled or pending status and a completeness enum. The partial total renders beside the list of pending components.
+- **Alternatives.** (a) block computation until complete; (b) treat pending as zero.
+- **Why won.** The CEO said some numbers are not known yet. Gaps are the normal state, and a visible gap is the prompt to fill it.
+- **Why lost.** (a) no number ever renders. (b) silently understates cost and the CEO prices on a lie.
+- **Implications.** Every costing surface reads the completeness state; a complete total is a distinct, earned state.
+- **Panel source.** Winston, Mar'ah.
+
+### D-017: Supplier-as-user is a membership model, not a role flag
+
+- **Chosen.** Add `public.tenant_members` mapping an app_user to a tenant phone with a role (owner or supplier) and an optional supplier_id. `require_tenant_match` resolves a member to the tenant. Supplier queries filter by supplier_id; cost, price, and margin are owner-only.
+- **Alternatives.** (a) a tenant schema per supplier; (b) a role column on app_users alone.
+- **Why won.** One tenant with several scoped users is the requirement: the CEO sees the whole model, each supplier only their own rows.
+- **Why lost.** (a) fragments the data so the CEO cannot consolidate. (b) the phone-keyed guard cannot express many-users-one-tenant, so suppliers cannot log in or they over-read.
+- **Implications.** Touches the auth kernel, so not autodev. The within-tenant scope is a server-side read filter, never a template. Kaze reinforces: the supplier and CEO surfaces are two separate rooms, never one screen hiding margins behind conditionals.
+- **Panel source.** Winston, with Edut and Mar'ah on consent and harm, Kaze on surface separation.
+
+### D-018: Check-ins reuse Baileys outbound and Timonel
+
+- **Chosen.** A periodic scheduler calls the existing Baileys outbound to send a check-in. Replies route back through Timonel with a new PRODUCTION_UPDATE intent. A non-parsing reply is stored verbatim as a note to the CEO; it never force-writes and is never dropped.
+- **Alternatives.** (a) a second bot or channel; (b) a parser separate from Timonel.
+- **Why won.** The channel and the interpreter already exist; a check-in is one more intent, not one more system.
+- **Why lost.** (a) the directive forbids a second channel. (b) duplicates Timonel and splits the truth of how a message is read.
+- **Implications.** The scheduler owns cadence and a send log; the sender identifies the business truthfully. External send ships behind the sacred gate (named-human-signoff, Dario, Re'i co-attestation).
+- **Panel source.** Winston, with Mar'ah and Edut.
+
+### D-019: The UI reframe is additive; nothing is deleted
+
+- **Chosen.** A new costing home route and template become the default landing surface; nav reorders so sales, stock, and expenses sit as secondary sections. No existing route or template is removed.
+- **Alternatives.** rebuild the dashboard around costing.
+- **Why won.** "Reencuadrar, no borrar." Reordering preserves working code.
+- **Why lost.** A rebuild tears out proven layout code, which the directive forbids.
+- **Panel source.** Winston, grounding Dario.
+
+## Control Center shell addendum (spec 003 reframe, 2026-10-13)
+
+Dario reframed the spec mid-run: the target is the Beans Control Center, a command-center platform that nucleates the whole business, with costing as one module. The platform becomes a shell: a status home rendering one tile per registered module plus an attention strip. The shell owns no domain logic, only a module registry and two provider contracts. On FastAPI and Jinja a module is a server-side descriptor over the existing api, service, and repository triple, not a frontend component.
+
+| Module | Route | Headline number | Attention rule | Status |
+|--------|-------|-----------------|----------------|--------|
+| Home / Panel | `/` | aggregates all | aggregates all | new shell |
+| Producción | `/produccion` | units this week | arrival cadence overdue | new |
+| Proveedores | `/proveedores` | active suppliers | overdue check-in | new |
+| Costos y margen | `/costos` | margin per country | pending cost component | new, reuses D-013 to D-016 |
+| Inventario / Stock | `/stock` | low-stock count | low coffee stock | existing, plus providers |
+| Ventas | `/sales` | sales this week | none in M1 | existing, plus providers |
+| Caja / Gastos | `/expenses` | cash balance | negative cash signal | existing, plus providers |
+| Logística | `/logistica` | open lanes | pending customs line | new |
+| Asistente (Timonel) | `/chat` | not a tile | n/a | existing, plus scenario read-path |
+
+### D-020: The home is a module registry plus a provider protocol
+
+- **Chosen.** A static registry of module descriptors in `backend/modules/registry.py`. Each carries id, Spanish label, route prefix, and two callables: `headline(tenant, user)` and `attention(tenant, user)`. The status home iterates the registry, rendering one tile per descriptor plus the attention strip.
+- **Alternatives.** (a) a home template that hard-codes each tile; (b) a DB-driven registry.
+- **Why won.** One headline per module aggregates through a uniform contract, so adding a module is a descriptor plus two methods, never a home edit. It fits the repo: each module already owns an api, service, and repository.
+- **Why lost.** (a) couples the home to every module. (b) modules are code, not data; the indirection has no caller yet.
+- **Implications.** A `Headline` dataclass (value, unit, Spanish label, status, href) and an `AttentionItem` dataclass. Providers are bounded and fail to a degraded tile, never raising into the page, per the repo's fail-open convention.
+- **Panel source.** Winston.
+
+### D-021: Attention rules live in the module that owns the data, computed on read
+
+- **Chosen.** Each module's `attention()` provider produces its own items (low stock, pending cost component, overdue supplier check-in, negative cash). `backend/services/attention_service.py` aggregates across the registry, sorts by severity, and caps the strip.
+- **Alternatives.** (a) a central rules engine; (b) materialized attention rows.
+- **Why won.** The module owns the data and the threshold meaning, so the rule belongs with it. A central engine would reach into every module's internals, the coupling D-020 forbids.
+- **Why lost.** (a) centralizes knowledge the module owns. (b) adds a write path and staleness with no cost reason yet.
+- **Implications.** An `AttentionItem` carries severity, module id, Spanish message, href, and a dedupe key; the strip orders by severity so it is not a second to-do list.
+- **Panel source.** Winston, with Kaze on the strip not becoming noise, and Compass on signals codifying the CEO's existing rhythm.
+
+### D-022: Costing scenarios are a read-only recompute the assistant runs (refines D-013 to D-016)
+
+- **Chosen.** The stored `landed_cost_snapshots` are the source of truth and always shown. A pure `costing_service.recompute(snapshot, overrides)` computes a hypothetical in memory. Timonel gains one read-only COST_SCENARIO path that loads a snapshot, applies an override, and returns the recomputed number, never writing.
+- **Alternatives.** (a) a heavy scenario UI; (b) a scenario that writes a draft snapshot.
+- **Why won.** The fact lives in the platform; a what-if is a conversation Timonel already interprets. One formula serves both via `recompute`.
+- **Why lost.** (a) builds a second costing surface for a question the chat answers. (b) a written draft pollutes the audit trail D-014 protects.
+- **Implications.** `recompute` is the pure core the stored build also calls; the scenario path never persists. It adds a read-path over D-013 to D-016, not a change.
+- **Panel source.** Winston, grounding Dario's second decision.
+
+### D-023: The existing surfaces become first-class modules under the status home (refines D-019)
+
+- **Chosen.** The default landing becomes the status home, not the costing home. Sales, stock, and expenses register as modules through D-020's registry, each exposing a headline and an attention provider; Producción, Proveedores, Costos, and Logística register the same way. Nothing is deleted; existing routes stay and gain a descriptor.
+- **Alternatives.** keep D-019's costing-home-as-default.
+- **Why won.** The reframe makes costing one module among seven, so no single module can be the home; the status home is the nucleus and every surface plugs in the same way.
+- **Why lost.** A costing-home default re-centers the platform on one module.
+- **Implications.** D-019's additive, delete-nothing principle stands. Only its clause "the default landing route is the costing home" becomes "the default landing is the status home; costing is one module".
+- **Panel source.** Winston, grounding Dario.
+
 ## Conventions
 
 - **Naming.** New modules `agents/expander.py` (factory `create_expander_node`, pure helper `expand_items`) and `agents/attributes.py` (the single color and size vocabularies). SKUs stay `BC-{TYPE}-{DESCRIPTORS}` with discriminating tokens retained.
@@ -151,6 +279,19 @@ Modules in this system:
 - **One writer per fact.** The expander owns the desired product set; the resolver owns reconciliation against catalog state; the database owns committed rows. The summary is built from returned database rows, never from input intent.
 - **Observability.** The expander emits one assistant breadcrumb message per turn it acts on, in the decomposer's `[Expander] expanded N items` style.
 
+### Costing domain conventions (spec 003)
+
+- **Naming.** Costing tables snake_case plural; money in `*_cents` integers; currency a 3-letter code; FX as `fx_rate` numeric. New `backend/services/costing_service.py`; repositories and api under the existing `backend/repositories/` and `backend/api/` dirs.
+- **Structure and errors.** Repository does SQL, service computes, api transports; the landed-cost snapshot is built in the service, never in a template or a query. A missing component is a completeness state, not an exception; a divide-by-zero in indirect allocation returns PENDING.
+- **One writer per fact.** `input_purchases` owns input cost; `bom_lines` owns the recipe; `indirect_costs` owns overhead; the snapshot is derived; the FX rate belongs to its own purchase row. Suppliers never write margin, price, or another supplier's rows.
+- **Observability.** Each landed-cost computation logs its completeness state and the inputs it read; the check-in scheduler logs every send.
+
+### Control Center shell conventions (spec 003 reframe)
+
+- **Module-registry contract.** A descriptor is `Module(id, label, route, headline, attention)`. Both providers are read-only, tenant-scoped, and bounded to one query each; one that fails returns a degraded headline or an empty list, never an exception.
+- **Ownership.** A module owns its headline and its attention rules; the home and the attention service own only aggregation and ordering, never a threshold.
+- **Role scope.** Supplier-scoped users (D-017) see only the modules their role permits; the home filters the registry by role, so a supplier never sees a margin tile.
+
 ## Non-goals
 
 - No arbitrary natural-language attribute parsing. Only color lists and size lists in v1; everything else passes through.
@@ -158,12 +299,32 @@ Modules in this system:
 - No change to the chat widget, channels, auth, or multi-tenant infra.
 - No cross-turn memory of variant sets.
 
+### Costing domain non-goals (spec 003)
+
+- No live FX fetching in M1; the rate is hand-entered per purchase.
+- No deletion or rewrite of sales, stock, expenses, or the assistant; the reframe is additive.
+- No supplier visibility into margins, prices, or another supplier's costs, under any code path.
+- No new Timonel operation beyond the one PRODUCTION_UPDATE intent.
+- No general ledger or invoicing; this engine computes landed unit cost only.
+
+### Control Center shell non-goals (spec 003 reframe)
+
+- No central rules engine; attention rules stay in their modules.
+- No tenant-configurable module registry in M1.
+- No written scenario snapshots; scenarios are read-only.
+- No client component framework; modules are server-rendered descriptors.
+
 ## Open architectural questions
 
 - **A-Q1.** Should expansion also serve sales ("vendi 5 medias azules y grises")? Disagreement: clean single-purpose node now versus a general fan-out. Fallback: ship REGISTER_PRODUCT only, leave the node general enough to extend. Tracked as spec OQ3.
 - **A-Q2.** Does partial-success batch need an idempotency key so a retry of a half-landed batch does not double-create? Needs Dario's call; defensible fallback is to dedupe a retry by name within the owner's catalog. Tracked as spec OQ2.
 - **A-Q3.** Pending-operation idempotency: an `op_token` column on the `sales` row, or an in-process committed-token set keyed by phone? Fallback: in-process set for v1 (single worker), a column when spec #63 lands durability. Tracked as spec 002 Q1. (D-010)
 - **A-Q4.** Should resume serve ADD_STOCK paused on quantity in v1? Fallback: sale-needs-price only in M1, ADD_STOCK in M2. Tracked as spec 002 Q2. (D-012)
+- **A-Q5.** Indirect allocation on a rolling trailing window or the current calendar month? Winston chose calendar month; Marcus argued a rolling window. Fallback: calendar month, PENDING until it has recorded production. Tracked as spec 003 OQ1. (D-015)
+- **A-Q6.** Scheduler home: a Nomad periodic job or an in-process Baileys timer? Fallback: Nomad job, so cadence survives a connector restart. Tracked as spec 003 OQ2. (D-018)
+- **A-Q7.** Static Python module registry or DB-driven registration? Fallback: a static list in `backend/modules/registry.py`; DB registration only if modules become tenant-configurable. (D-020)
+- **A-Q8.** Attention computed on read or materialized? Fallback: on read in M1; materialize via the Nomad periodic seam when module count or query cost grows. (D-021)
+- **A-Q9.** Headline aggregation is one bounded query per module per home load? Fallback: accept that at this module count; a combined aggregate query is a later optimization. (D-020)
 
 ## Source
 
@@ -173,6 +334,9 @@ Modules in this system:
 - Panelists who contributed to architecture decisions: Winston, with Amelia, Lattice and Mar'ah on D-004 through D-006.
 - D-007 through D-012 (pending-operation completion): ./specs/002-timonel-pending-operations/spec.md and ./specs/002-timonel-pending-operations/plan.md. Panel: Winston (author), with Mary, Amelia, Bob, Edut, Mar'ah.
 
+- D-013 through D-019 (production and landed-cost engine): ./specs/003-production-landed-cost-engine/spec.md and ./specs/003-production-landed-cost-engine/plan.md. Panel: Winston (author), with Amelia, Marcus, Bob, Kaze, Edut, Mar'ah.
+- D-020 through D-023 (Beans Control Center shell, the spec 003 mid-run reframe): same spec dir. Reframe panel: Winston (author), with Compass, Bob, and Kaze plus Sally on the status-home mockup.
+
 ## Mode
 
-This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched.
+This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched. Updated 2026-10-13 by /create-spec (spec 003 production-landed-cost-engine) appending D-013 through D-019 and the costing domain addendum, conventions, non-goals, and A-Q5, A-Q6; D-001 through D-012 untouched. Updated again 2026-10-13 in the same run after Dario reframed the spec into the Beans Control Center, appending D-020 through D-023 (the command-center shell), the shell addendum, conventions, non-goals, and A-Q7 through A-Q9; D-019's default-landing clause is refined by D-023, the rest of D-013 through D-019 untouched.
