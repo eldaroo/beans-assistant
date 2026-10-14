@@ -16,7 +16,9 @@ from backend.modules.protocol import Module
 from backend.modules.providers import (
     caja_module,
     costos_module,
+    logistica_module,
     produccion_module,
+    proveedores_module,
     stock_module,
     ventas_module,
 )
@@ -49,11 +51,12 @@ _MODULES: "list[Module]" = [
         rail_group=GROUP_OPERATION,
         order=30,
     ),
-    # Costos (spec 003 M2): the first module with a dedicated page rather than a
-    # dashboard tab. Its route is absolute ("/costos/{phone}"); the status-home
-    # template resolves an absolute route as-is and substitutes {phone}. The tile
-    # shows the lead bracelet type's landed cost with its completeness state; the
-    # margin-per-country headline arrives with the multi-country compute in M4.
+    # Costos (spec 003 M2 + M4): the first module with a dedicated page rather
+    # than a dashboard tab. Its route is absolute ("/costos/{phone}"); the
+    # status-home template resolves an absolute route as-is and substitutes
+    # {phone}. The tile headlines the margin of the cheapest complete country
+    # (M4, AC9), falling back to the lead country's landed cost when none is
+    # complete; the drill-down carries the per-country comparison.
     Module(
         id="costos",
         label="Costos",
@@ -72,6 +75,29 @@ _MODULES: "list[Module]" = [
         snapshot=produccion_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=50,
+    ),
+    # Logistica (spec 003 M4): shipping + customs per country for the lead
+    # bracelet type, with the pending-customs attention signal. Its lanes are the
+    # same shipping/customs rows the landed cost reads; this is the dedicated lens.
+    Module(
+        id="logistica",
+        label="Logística",
+        route="/logistica/{phone}",
+        snapshot=logistica_module.snapshot,
+        rail_group=GROUP_OPERATION,
+        order=60,
+    ),
+    # Proveedores (spec 003 M5): the active supplier directory with the
+    # overdue-check-in attention signal (computed from stored data, no message
+    # sent). This is the OWNER's lens; the supplier two-rooms self-service login
+    # is M6 behind its named-human gate.
+    Module(
+        id="proveedores",
+        label="Proveedores",
+        route="/proveedores/{phone}",
+        snapshot=proveedores_module.snapshot,
+        rail_group=GROUP_OPERATION,
+        order=70,
     ),
 ]
 

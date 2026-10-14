@@ -606,6 +606,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
     country TEXT,
     contact TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
+    last_checkin_at TEXT,
     created_at TEXT DEFAULT (datetime('now')) NOT NULL
 );
 

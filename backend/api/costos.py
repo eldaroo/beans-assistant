@@ -33,6 +33,33 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 _service = CostingService()
 
 
+def _usd(cents):
+    return None if cents is None else f"{cents / 100:.2f}"
+
+
+def _comparison_view(product_id):
+    """The per-country comparison for one bracelet type (AC9): each of the three
+    countries with its landed total, completeness, and margin, and the lowest
+    COMPLETE total marked. None when there is no costable type."""
+    comp = _service.country_comparison(int(product_id))
+    rows = []
+    for m in comp.margins:
+        rows.append({
+            "country": m.country,
+            "total": _usd(m.landed.total_cents),
+            "is_complete": m.landed.is_complete,
+            "pending_labels": m.landed.pending_labels,
+            "margin": _usd(m.margin_cents),
+            "margin_pending_reason": m.pending_reason,
+            "is_lowest_complete": (m.country == comp.lowest_complete_country),
+        })
+    return {
+        "product_name": comp.product_name,
+        "lowest_complete_country": comp.lowest_complete_country,
+        "rows": rows,
+    }
+
+
 def _build_view(product, country):
     """Compute the landed cost (lead type by default) and shape it for the
     template. Returns None when the tenant has no costing data yet."""
@@ -60,6 +87,9 @@ def _build_view(product, country):
         "filled_count": landed.filled_count,
         "total_components": TOTAL_COMPONENTS,
         "pending_labels": landed.pending_labels,
+        # Per-country comparison for this bracelet type (AC9). Keyed off the same
+        # product the breakdown is showing.
+        "comparison": _comparison_view(landed.product_id),
     }
 
 
