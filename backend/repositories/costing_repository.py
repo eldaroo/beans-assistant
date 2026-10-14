@@ -173,3 +173,49 @@ class CostingRepository:
             ORDER BY purchased_at DESC, id DESC
         """
         return self.db.fetch_all(query, (cost_input_id,))
+
+    # ---------------------------------------------- cost-input write paths (M3)
+    def record_cost_input(self, *, name: str, category: str, unit: str = "u") -> int:
+        """Create a cost input (one of the BOM categories: cafe, tostado, madera,
+        hilo, piedras, broches) and return its id (T-012). RETURNING works on both
+        Postgres and the modern SQLite the repo runs on (see products create)."""
+        query = """
+            INSERT INTO cost_inputs (name, category, unit)
+            VALUES (%s, %s, %s)
+            RETURNING id
+        """
+        row = self.db.fetch_one(query, (name, category, unit))
+        return int(row["id"])
+
+    def record_bom_line(self, *, product_id: int, cost_input_id: int, country: str, quantity: float) -> None:
+        """Add a BOM line: how many of an input go into one bracelet of a type in
+        a country (T-012). The materials component sums every BOM line's quantity
+        times that input's latest USD unit cost."""
+        query = """
+            INSERT INTO bom_lines (product_id, cost_input_id, country, quantity)
+            VALUES (%s, %s, %s, %s)
+        """
+        self.db.execute(query, (product_id, cost_input_id, country, quantity))
+
+    def record_packaging_cost(self, *, product_id: int, country: str, usd_amount_cents: int) -> None:
+        """Record the per-unit packaging cost for a bracelet type in a country
+        (T-012). Newest row wins in the landed-cost read."""
+        query = """
+            INSERT INTO packaging_costs (product_id, country, usd_amount_cents)
+            VALUES (%s, %s, %s)
+        """
+        self.db.execute(query, (product_id, country, usd_amount_cents))
+
+    # ----------------------------------------------------- labor write path (M3)
+    def record_labor_batch(
+        self, *, product_id: int, country: str, batch_payment_cents: int, units_completed: int
+    ) -> None:
+        """Record a direct-labor batch payment over the units actually completed
+        (T-013, AC11 completed basis). Per-unit labor is the payment divided by
+        units COMPLETED, not planned, so a short batch raises the per-unit cost.
+        Append-only: a correction is a new row, newest wins in the landed read."""
+        query = """
+            INSERT INTO labor_costs (product_id, country, batch_payment_cents, units_completed)
+            VALUES (%s, %s, %s, %s)
+        """
+        self.db.execute(query, (product_id, country, batch_payment_cents, units_completed))

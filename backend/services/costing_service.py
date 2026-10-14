@@ -30,6 +30,32 @@ COMPONENT_ORDER = [
 ]
 TOTAL_COMPONENTS = len(COMPONENT_ORDER)  # 6
 
+# The canonical BOM input categories a bracelet is built from (T-012 breadth).
+# Each is a cost_inputs.category; the materials component sums every BOM line
+# regardless of category, so adding an input in any of these shows up in the
+# total. The Spanish labels are owned here, never in the template.
+INPUT_CATEGORIES = [
+    ("cafe", "Café"),
+    ("tostado", "Tostado"),
+    ("madera", "Madera"),
+    ("hilo", "Hilo"),
+    ("piedras", "Piedras"),
+    ("broches", "Broches"),
+]
+
+
+def labor_per_unit(batch_payment_cents, units_completed):
+    """Direct labor per unit on a COMPLETED basis (AC11 / T-013).
+
+    The batch payment is divided by the units actually COMPLETED, not the units
+    planned. Marcus: batch labor is a fixed cost masquerading as variable, so a
+    short batch (fewer units completed for the same payment) RAISES the per-unit
+    labor. Returns USD cents, or None when there is no completed batch to divide
+    by (pending, never a divide-by-zero)."""
+    if not units_completed:
+        return None
+    return int(round(float(batch_payment_cents) / float(units_completed)))
+
 
 @dataclass(frozen=True)
 class CostComponent:
@@ -121,11 +147,11 @@ class CostingService:
         materials_cents, materials_detail = self._materials(product_id, country)
 
         lab = repo.labor_cost(product_id, country)
-        if lab and lab["units_completed"]:
-            labor_cents = int(round(float(lab["batch_payment_cents"]) / float(lab["units_completed"])))
+        labor_cents = labor_per_unit(lab["batch_payment_cents"], lab["units_completed"]) if lab else None
+        if labor_cents is not None:
             labor_detail = f"por unidad, lote de {int(lab['units_completed'])}"
         else:
-            labor_cents, labor_detail = None, "sin lote registrado"
+            labor_detail = "sin lote registrado"
 
         pack = repo.packaging_cost(product_id, country)
         packaging_cents = _as_cents(pack["usd_amount_cents"]) if pack else None

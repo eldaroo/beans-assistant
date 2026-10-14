@@ -369,6 +369,26 @@ def create_tenant_schema(schema_name: str):
                 """
             )
 
+            # Production module (spec 003 M3). Units produced per week against a
+            # target, per country; expected_next_at drives the arrival-cadence
+            # attention item (T-011). The monthly sum of units_produced per country
+            # is the indirect-allocation denominator M4 wires in.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS production_records (
+                    id BIGSERIAL PRIMARY KEY,
+                    product_id BIGINT REFERENCES products(id),
+                    country VARCHAR(64) NOT NULL,
+                    period_week VARCHAR(8) NOT NULL,
+                    units_produced INTEGER NOT NULL DEFAULT 0 CHECK (units_produced >= 0),
+                    units_target INTEGER CHECK (units_target IS NULL OR units_target >= 0),
+                    expected_next_at DATE,
+                    recorded_at DATE DEFAULT CURRENT_DATE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+
             # Core views
             cur.execute(
                 """

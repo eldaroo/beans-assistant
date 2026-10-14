@@ -709,6 +709,21 @@ CREATE TABLE IF NOT EXISTS landed_cost_snapshots (
     created_at TEXT DEFAULT (datetime('now')) NOT NULL,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
+
+-- Production module (spec 003 M3). Units produced per week against a target, per
+-- country; expected_next_at drives the arrival-cadence attention item (T-011).
+CREATE TABLE IF NOT EXISTS production_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER,
+    country TEXT NOT NULL,
+    period_week TEXT NOT NULL,
+    units_produced INTEGER NOT NULL DEFAULT 0 CHECK (units_produced >= 0),
+    units_target INTEGER CHECK (units_target IS NULL OR units_target >= 0),
+    expected_next_at TEXT,
+    recorded_at TEXT DEFAULT (date('now')) NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
 """
 
     def _get_default_config(self) -> Dict[str, Any]:
