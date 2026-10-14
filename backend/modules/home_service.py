@@ -26,7 +26,22 @@ logger = logging.getLogger(__name__)
 # how long build_home WAITS; a genuinely hung worker is left orphaned on the
 # pool (a thread cannot be killed in Python), so a DB statement_timeout should
 # back this so the worker itself eventually unblocks the pool slot.
-SNAPSHOT_TIMEOUT_S = 3.0
+#
+# Budget note (2026-10-14): in production each provider opens its own tenant
+# scope, and tenant_context resolves the tenant and binds the schema over a
+# fresh cross-container DB connection. The DB work itself is ~0.8s, but that
+# per-call connection-plus-resolve overhead puts a single provider at ~3.3s and
+# the slowest of seven concurrent snapshots at ~6s on the live cluster. A 3.0s
+# budget degraded EVERY tile on the real home even though every provider
+# returns correct data. The budget is raised to 10.0s (the value verified green
+# against the live home: all seven tiles rendered real numbers, ~6s wall-clock)
+# so the home shows its real figures with headroom over the observed tail. This
+# is a single-user mitigation: the tail drifts up under concurrent loads because
+# _POOL is a shared pool and queue-wait burns the budget, so the durable fix is
+# connection pooling / cached tenant resolution AND pool sizing so a snapshot
+# costs ~0.3s again (tracked: eldaroo/beans-assistant#138), after which this
+# budget comes back down under 3.0s.
+SNAPSHOT_TIMEOUT_S = 10.0
 
 # One shared pool, fanned out across modules so total latency is the slowest
 # module, not the sum. Sized above the M1 module count with headroom for M2-M5.
