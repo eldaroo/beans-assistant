@@ -46,9 +46,27 @@ def get_connection_pool():
     """Get or create the connection pool."""
     global _connection_pool
     if _connection_pool is None:
-        _connection_pool = pool.SimpleConnectionPool(
+        # ThreadedConnectionPool, not SimpleConnectionPool: the Control Center
+        # status home fans out one snapshot per module across concurrent worker
+        # threads (backend/modules/home_service.py), each calling get_conn, so
+        # getconn/putconn are hit from several threads at once. SimpleConnectionPool
+        # is not thread-safe for that; ThreadedConnectionPool guards its free/used
+        # lists with a lock.
+        #
+        # maxconn is sized for the fan-out: one home load takes up to 7 connections
+        # (one per module) for the length of the slowest snapshot, so two concurrent
+        # home loads alone need 14. 25 leaves headroom for the home plus the rest of
+        # the app's traffic while staying well under Postgres max_connections across
+        # the handful of app instances that share the server.
+        #
+        # statement_timeout bounds a hung query server-side so an orphaned snapshot
+        # worker (home_service cannot kill a timed-out thread) self-aborts and its
+        # connection returns to the pool instead of being pinned indefinitely. It is
+        # set under SNAPSHOT_TIMEOUT_S (10s) and far above any real OLTP statement
+        # (~sub-second), so it only ever fires on a genuine hang.
+        _connection_pool = pool.ThreadedConnectionPool(
             minconn=1,
-            maxconn=10,  # Adjust based on your needs
+            maxconn=25,
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
@@ -57,9 +75,9 @@ def get_connection_pool():
             cursor_factory=RealDictCursor,
             # Explicit encoding configuration to avoid UTF-8 issues
             client_encoding='UTF8',
-            options='-c client_encoding=UTF8'
+            options='-c client_encoding=UTF8 -c statement_timeout=9000'
         )
-        print(f"[DB] Connection pool created (1-10 connections)")
+        print(f"[DB] Connection pool created (1-25 connections, threaded, statement_timeout=9s)")
     return _connection_pool
 
 
