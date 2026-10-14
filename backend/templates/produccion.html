@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Producción · Beans&Co</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F6F7F9; --card:#FFFFFF; --line:#E4E7EC; --line-hover:#D0D5DD;
+  --text:#101828; --muted:#667085;
+  --accent:#4F46E5; --accent-hover:#4338CA; --accent-soft:#EEF0FE; --on-accent:#FFFFFF;
+  --good:#067647; --good-soft:#ECFDF3; --warn:#B54708; --warn-soft:#FFFAEB; --danger:#B42318; --danger-soft:#FEF3F2;
+  --shadow-card:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06);
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none;
+}}
+:root[data-theme="dark"]{
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:640px;margin:0 auto;padding:28px 16px 56px}
+@media(min-width:1000px){.wrap{padding:40px 16px 64px}}
+.back{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;font-weight:600;margin-bottom:18px}
+.back:hover{color:var(--accent)}
+h1.page{font-size:26px;font-weight:700;margin:2px 0;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-card);padding:24px;margin-bottom:16px}
+.ctry{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.ctry .name{font-size:15px;font-weight:600}
+.ctry .wk{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.units{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:34px;font-weight:600;line-height:1.05;margin:4px 0 2px}
+.cap{color:var(--muted);font-size:13px;margin:0 0 12px}
+.cap.good{color:var(--good)} .cap.warn{color:var(--warn)}
+.bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin:10px 0 2px}
+.bar > span{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.bar.met > span{background:var(--good)}
+.bar.behind > span{background:var(--warn)}
+.att{display:flex;align-items:center;gap:9px;margin-top:14px;padding:11px 12px;border-radius:10px;background:var(--warn-soft);color:var(--warn);font-size:13px;font-weight:500}
+.att .tri{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid var(--warn);flex:0 0 auto}
+footer{margin:28px 0 8px;font-size:12px;color:var(--muted);text-align:center}
+.empty{text-align:center;padding:40px 24px}
+.empty h2{margin:0 0 8px;font-size:18px;font-weight:600}
+.empty p{color:var(--muted);margin:0 auto;max-width:360px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/home/{{ phone }}">&#8592; Volver al inicio</a>
+
+  {% if view %}
+  <h1 class="page">Producción</h1>
+  <p class="sub">Unidades por semana contra la meta, por país.</p>
+
+  {% for row in view.rows %}
+  <div class="card">
+    <div class="ctry">
+      <span class="name">{{ row.country }}</span>
+      <span class="wk">{{ row.period_week }}</span>
+    </div>
+    <div class="units">{{ row.units_produced }} u</div>
+    {% if row.has_target %}
+      <p class="cap {{ 'good' if row.meets_target else 'warn' }}">Meta {{ row.units_target }} u &middot; {{ row.pct }}%</p>
+      <div class="bar {{ 'met' if row.meets_target else 'behind' }}"><span style="width: {{ row.pct if row.pct <= 100 else 100 }}%"></span></div>
+    {% else %}
+      <p class="cap">Sin meta registrada para esta semana.</p>
+    {% endif %}
+    {% if row.is_overdue %}
+    <div class="att"><span class="tri"></span>Llegada atrasada{% if row.expected_next_at %}: el próximo lote se esperaba el {{ row.expected_next_at }}{% endif %}.</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% else %}
+  <h1 class="page">Producción</h1>
+  <div class="card empty">
+    <h2>Todavía no hay producción cargada</h2>
+    <p>Registrá las unidades producidas por semana y su meta por país, y acá vas a ver el avance contra la meta y los lotes atrasados.</p>
+  </div>
+  {% endif %}
+
+  <footer>Beans&amp;Co control center</footer>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  try{var t=localStorage.getItem("beans_cc_theme");if(t)root.setAttribute("data-theme",t);}catch(e){}
+})();
+</script>
+</body>
+</html>

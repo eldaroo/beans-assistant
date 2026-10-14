@@ -13,7 +13,13 @@ descriptor lights up its tile and rail entry automatically.
 from __future__ import annotations
 
 from backend.modules.protocol import Module
-from backend.modules.providers import caja_module, costos_module, stock_module, ventas_module
+from backend.modules.providers import (
+    caja_module,
+    costos_module,
+    produccion_module,
+    stock_module,
+    ventas_module,
+)
 
 # Rail groups match the mockup's left-rail sections.
 GROUP_OPERATION = "Operación"
@@ -55,6 +61,17 @@ _MODULES: "list[Module]" = [
         snapshot=costos_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=40,
+    ),
+    # Produccion (spec 003 M3): units produced this week against the target, with
+    # an arrival-cadence-overdue attention item. Its monthly units feed the
+    # indirect-allocation denominator the Costos module reads once M4 wires it.
+    Module(
+        id="produccion",
+        label="Producción",
+        route="/produccion/{phone}",
+        snapshot=produccion_module.snapshot,
+        rail_group=GROUP_OPERATION,
+        order=50,
     ),
 ]
 
