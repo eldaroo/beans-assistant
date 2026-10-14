@@ -37,6 +37,18 @@ class CostingRepository:
             "SELECT id, sku, name FROM products WHERE id = %s", (product_id,)
         )
 
+    def sale_price_cents(self, product_id):
+        """The product's sale price in USD cents, or None when no price is set
+        yet (price pending). Read for the margin compute (AC9); a margin is shown
+        only when a price exists AND the landed cost is complete, so a missing
+        price makes the margin pending, never a false figure."""
+        row = self.db.fetch_one(
+            "SELECT unit_price_cents FROM products WHERE id = %s", (product_id,)
+        )
+        if not row:
+            return None
+        return row["unit_price_cents"]
+
     # -------------------------------------------------------------- materials
     def materials_breakdown(self, product_id, country):
         """BOM lines for (product, country) joined to each input's latest USD unit
@@ -101,17 +113,9 @@ class CostingRepository:
         """
         return self.db.fetch_one(query, (product_id, country))
 
-    def indirect_latest(self, country):
-        """The most recent indirect pool for a country. units_produced NULL or 0
-        means indirect allocation is pending for that month (no divide by zero)."""
-        query = """
-            SELECT period_month, pool_cents, units_produced
-            FROM indirect_costs
-            WHERE country = %s
-            ORDER BY period_month DESC, id DESC
-            LIMIT 1
-        """
-        return self.db.fetch_one(query, (country,))
+    # (M2's indirect_latest, which read the hand-entered units_produced column,
+    # was removed in M4: the denominator now comes from production_records via
+    # indirect_pool_latest + ProductionRepository.weekly_units. See D-M4-1.)
 
     # ----------------------------------------------------- input purchases (AC7)
     @staticmethod
@@ -219,3 +223,57 @@ class CostingRepository:
             VALUES (%s, %s, %s, %s)
         """
         self.db.execute(query, (product_id, country, batch_payment_cents, units_completed))
+
+    # --------------------------------------- logistics write paths (M4, T-016)
+    def record_shipping_lane(self, *, product_id: int, country: str, usd_amount_cents=None, note=None) -> None:
+        """Record a shipping lane for a bracelet type into a country (T-016).
+        ``usd_amount_cents`` None means the lane exists but is not yet priced
+        (pending, never summed as zero); ``note`` carries the carrier or quote
+        context. Append-only, newest row wins in the landed-cost read."""
+        query = """
+            INSERT INTO shipping_lanes (product_id, country, usd_amount_cents, note)
+            VALUES (%s, %s, %s, %s)
+        """
+        self.db.execute(query, (product_id, country, usd_amount_cents, note))
+
+    def record_customs_duty(self, *, product_id: int, country: str, usd_amount_cents=None, note=None) -> None:
+        """Record a customs duty for a bracelet type entering a country (T-016).
+        ``usd_amount_cents`` None means the duty is not yet known (pending, the
+        pending-customs attention signal reads exactly this); ``note`` carries the
+        HS code or broker context. Append-only, newest row wins."""
+        query = """
+            INSERT INTO customs_duties (product_id, country, usd_amount_cents, note)
+            VALUES (%s, %s, %s, %s)
+        """
+        self.db.execute(query, (product_id, country, usd_amount_cents, note))
+
+    # -------------------------------------------- indirect pool write path (M4)
+    def record_indirect_pool(self, *, country: str, period_month: str, pool_cents: int) -> None:
+        """Record the indirect-cost POOL (display stands plus overhead) for a
+        country in a calendar month (T-014, AC12). The per-unit allocation is the
+        pool divided by the units PRODUCED in that country that month, and those
+        units are derived from production_records at compute time, never stored
+        here (D-M3-9: attribute units by production period, not data-entry date).
+        ``units_produced`` on the row is left NULL and is no longer read; it stays
+        on the table for the M2/M3 schema compatibility. Append-only: a correction
+        is a new row, newest wins (ORDER BY id DESC in the read)."""
+        query = """
+            INSERT INTO indirect_costs (country, period_month, pool_cents, units_produced)
+            VALUES (%s, %s, %s, NULL)
+        """
+        self.db.execute(query, (country, period_month, pool_cents))
+
+    def indirect_pool_latest(self, country):
+        """The most recent indirect POOL for a country: its period_month and
+        pool_cents, newest row wins. None when no pool was ever recorded (the
+        indirect component is then pending: 'sin pool indirecto cargado'). The
+        units-produced denominator is derived from production_records for that
+        same month by the service, not read from this row (M4)."""
+        query = """
+            SELECT period_month, pool_cents
+            FROM indirect_costs
+            WHERE country = %s
+            ORDER BY period_month DESC, id DESC
+            LIMIT 1
+        """
+        return self.db.fetch_one(query, (country,))

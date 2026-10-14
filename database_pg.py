@@ -236,6 +236,7 @@ def create_tenant_schema(schema_name: str):
                     country VARCHAR(64),
                     contact VARCHAR(255),
                     is_active BOOLEAN DEFAULT TRUE NOT NULL,
+                    last_checkin_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
                 )
                 """

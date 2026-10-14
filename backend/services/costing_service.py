@@ -11,12 +11,20 @@ build and the read-only assistant scenario path (D-022 / AC10, consumed in M5):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Optional
 
 from backend.repositories.costing_repository import CostingRepository
+from backend.repositories.production_repository import ProductionRepository
 
 STATUS_COMPLETE = "completo"
 STATUS_PARTIAL = "parcial"
+
+# The three countries Beans&Co produces and ships across (spec Problem; the
+# mockup's per-country comparison). The margin comparison walks a bracelet type
+# across these in this order; a type with no data in a country shows that country
+# empty rather than dropping it, so the comparison is always the full set.
+THREE_COUNTRIES = ["Colombia", "Armenia-Colombia", "Costa Rica"]
 
 # The six components in render order; the Spanish labels are owned here (never in
 # the template or the shell), matching the frozen costing mockup.
@@ -42,6 +50,41 @@ INPUT_CATEGORIES = [
     ("piedras", "Piedras"),
     ("broches", "Broches"),
 ]
+
+
+def month_of_iso_week(period_week: str) -> str:
+    """Map an ISO ``YYYY-Www`` week to its calendar month ``YYYY-MM`` (AC12).
+
+    A week can straddle two months, so the month is decided by the week's
+    Thursday — the ISO-8601 rule that fixes which year/month a week belongs to
+    (``date.fromisocalendar(year, week, 4)``). Deterministic at every boundary,
+    where "first day of the week" or "last day" would flip a boundary week into
+    the wrong month. Raises on a malformed week (the write already normalizes,
+    so a bad value here is a real bug, surfaced loud, not a silent mis-attribution)."""
+    import re
+
+    m = re.fullmatch(r"(\d{4})-W(\d{1,2})", str(period_week).strip())
+    if not m:
+        raise ValueError(f"period_week must be ISO 'YYYY-Www': {period_week!r}")
+    year, wk = int(m.group(1)), int(m.group(2))
+    thursday = date.fromisocalendar(year, wk, 4)
+    return thursday.strftime("%Y-%m")
+
+
+def units_in_month(weekly_rows, period_month: str) -> int:
+    """Sum units produced in a calendar month from per-week rows (AC12).
+
+    ``weekly_rows`` is ``[{period_week, units}]`` already deduped to the newest
+    record per (country, week) by the repository, so a same-week correction is
+    not double-counted. Each week is attributed to its calendar month by its
+    Thursday (``month_of_iso_week``); the units of the weeks that fall in
+    ``period_month`` are summed. Returns 0 when no week falls in the month, which
+    the caller renders as indirect PENDING, never a divide-by-zero."""
+    total = 0
+    for row in weekly_rows:
+        if month_of_iso_week(row["period_week"]) == period_month:
+            total += int(row["units"] or 0)
+    return total
 
 
 def labor_per_unit(batch_payment_cents, units_completed):
@@ -91,6 +134,37 @@ class LandedCost:
         return sum(1 for c in self.components if c.is_filled)
 
 
+@dataclass(frozen=True)
+class Margin:
+    """Margin for one bracelet type in one country (AC9). ``margin_cents`` is None
+    when pending — the landed cost is not complete or no sale price is set — and
+    ``pending_reason`` names why. A real margin is sale price minus a COMPLETE
+    landed total, never computed off a partial cost."""
+
+    country: str
+    landed: "LandedCost"
+    price_cents: Optional[int]
+    margin_cents: Optional[int]
+    pending_reason: Optional[str]
+
+    @property
+    def is_pending(self) -> bool:
+        return self.margin_cents is None
+
+
+@dataclass(frozen=True)
+class CountryComparison:
+    """One bracelet type compared across the three countries (AC9). Each entry is
+    a Margin carrying its own completeness state. ``lowest_complete_country`` names
+    the country with the lowest COMPLETE landed total (the honest "cheapest to
+    land"), or None when no country is complete yet (a parcial total never wins)."""
+
+    product_id: int
+    product_name: str
+    margins: list           # list[Margin], one per country in THREE_COUNTRIES order
+    lowest_complete_country: Optional[str]
+
+
 def recompute(components, overrides=None):
     """Pure landed-cost core.
 
@@ -123,8 +197,35 @@ def _as_cents(value):
 class CostingService:
     """Orchestrates the costing repository and the landed-cost computation."""
 
-    def __init__(self, repository: CostingRepository | None = None):
+    def __init__(
+        self,
+        repository: CostingRepository | None = None,
+        production: ProductionRepository | None = None,
+    ):
         self.repository = repository or CostingRepository()
+        # The indirect-allocation denominator is units PRODUCED per country per
+        # month, read from production_records (M4 wires Costos to Produccion).
+        self.production = production or ProductionRepository()
+
+    def indirect_per_unit(self, country, period_month=None):
+        """Indirect cost allocated per unit for a country in a calendar month (AC12).
+
+        The pool (display stands plus overhead) for the country's latest recorded
+        month divided by the units PRODUCED in that country that month. Units come
+        from production_records, attributed by production period (never by the
+        data-entry date, D-M3-9). A month with zero recorded production returns
+        pending (None), never a divide-by-zero. Returns ``(cents_or_None, detail)``.
+        """
+        pool = self.repository.indirect_pool_latest(country)
+        if not pool:
+            return None, "sin pool indirecto cargado"
+        month = period_month or pool["period_month"]
+        weekly = self.production.weekly_units(country)
+        units = units_in_month(weekly, month)
+        if not units:
+            return None, f"sin producción registrada en {month}"
+        per_unit = int(round(float(pool["pool_cents"]) / float(units)))
+        return per_unit, f"exhibidores + overhead, {month} ({units} u)"
 
     def _materials(self, product_id, country):
         """Materials via the BOM: sum of each line's quantity times that input's
@@ -165,12 +266,10 @@ class CostingService:
         customs_cents = _as_cents(cust["usd_amount_cents"]) if cust and cust["usd_amount_cents"] is not None else None
         customs_detail = (cust["note"] if cust and cust["note"] else "por averiguar")
 
-        ind = repo.indirect_latest(country)
-        if ind and ind["units_produced"]:
-            indirect_cents = int(round(float(ind["pool_cents"]) / float(ind["units_produced"])))
-            indirect_detail = f"exhibidores + overhead, {ind['period_month']}"
-        else:
-            indirect_cents, indirect_detail = None, "sin producción registrada este mes"
+        # Indirect allocation (M4, AC12): the pool for the country's latest month
+        # divided by units PRODUCED there that month (derived from production_records),
+        # not the stale hand-entered units_produced column the M2/M3 read used.
+        indirect_cents, indirect_detail = self.indirect_per_unit(country)
 
         by_key = {
             "materials": CostComponent("materials", "Materiales", materials_cents, materials_detail),
@@ -198,6 +297,56 @@ class CostingService:
             status=status,
             pending_labels=pending,
         )
+
+    def margin(self, product_id, country, overrides=None) -> "Margin":
+        """Margin for one bracelet type in one country (AC9).
+
+        Margin is the sale price minus the landed cost. It is a real number ONLY
+        when the landed cost is COMPLETE and a sale price is set; otherwise it is
+        pending with a named reason. A margin is never computed off a partial
+        landed cost (that would be a false-precise figure the honesty treatment
+        forbids) and never shown without a price. The sale price is the product's
+        ``unit_price_cents`` read as a USD reference price (D-M4-3)."""
+        landed = self.landed_cost(product_id, country, overrides)
+        price = self.repository.sale_price_cents(product_id)
+        if price is None:
+            return Margin(country=country, landed=landed, price_cents=None,
+                          margin_cents=None, pending_reason="sin precio de venta")
+        if not landed.is_complete:
+            faltan = ", ".join(lbl.lower() for lbl in landed.pending_labels)
+            return Margin(country=country, landed=landed, price_cents=int(price),
+                          margin_cents=None, pending_reason=f"costo parcial · falta {faltan}")
+        return Margin(country=country, landed=landed, price_cents=int(price),
+                      margin_cents=int(price) - landed.total_cents, pending_reason=None)
+
+    def country_comparison(self, product_id, countries=None) -> "CountryComparison":
+        """Per-country landed cost and margin for one bracelet type across the
+        three countries (AC9). Each country carries its own completeness state;
+        the lowest COMPLETE landed total is marked (a parcial total is never the
+        winner, because its true total is unknown and could be higher). Returns a
+        CountryComparison; ``lowest_complete_country`` is None when no country has
+        a complete total yet."""
+        countries = countries or THREE_COUNTRIES
+        margins = [self.margin(product_id, c) for c in countries]
+        complete = [m for m in margins if m.landed.is_complete]
+        lowest = min(complete, key=lambda m: m.landed.total_cents).country if complete else None
+        # Reuse the product name each margin's landed cost already carries rather
+        # than re-fetching products (council Winston LOW: 4 product() calls -> 0 extra).
+        product_name = margins[0].landed.product_name if margins else str(product_id)
+        return CountryComparison(
+            product_id=product_id,
+            product_name=product_name,
+            margins=margins,
+            lowest_complete_country=lowest,
+        )
+
+    def lead_comparison(self) -> "Optional[CountryComparison]":
+        """The country comparison for the lead bracelet type, for the Costos tile
+        and drill-down. None when no costable bracelet type exists yet."""
+        types = self.repository.list_bracelet_types()
+        if not types:
+            return None
+        return self.country_comparison(types[0]["id"])
 
     def lead_landed_cost(self, overrides=None) -> Optional[LandedCost]:
         """The lead bracelet type and its first country, for the home tile and the

@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -91,6 +91,10 @@ app.include_router(home.router, tags=["Control Center"])
 app.include_router(costos.router, tags=["Control Center"])
 # Produccion module drill-down (spec 003 M3). Owner-gated inside the router.
 app.include_router(produccion.router, tags=["Control Center"])
+# Logistica module drill-down (spec 003 M4). Owner-gated inside the router.
+app.include_router(logistica.router, tags=["Control Center"])
+# Proveedores module drill-down (spec 003 M5). Owner-gated inside the router.
+app.include_router(proveedores.router, tags=["Control Center"])
 
 # Onboarding routers, both mounted under /api/onboarding.
 # Order matters: the web router exposes the literal path /web, the WhatsApp

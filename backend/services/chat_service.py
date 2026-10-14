@@ -356,6 +356,34 @@ class ChatService:
 
         logger.info(f"chat_with_tenant: setting tenant context for phone={resolved_phone}")
         with tenant_context(resolved_phone):
+            # COST_SCENARIO read-only recompute (spec 003 M5, T-019/AC10). A clear
+            # "what if I produce this in Colombia" hypothetical is answered by
+            # recomputing the stored landed cost without writing anything, before
+            # the LLM graph runs. A non-scenario message returns None and falls
+            # through to the normal pipeline untouched.
+            try:
+                from backend.services.cost_scenario import handle_message as _scenario_reply
+
+                scenario = _scenario_reply(message)
+            except Exception:
+                logger.exception("chat_with_tenant: cost-scenario pre-check failed (non-fatal)")
+                scenario = None
+            if scenario is not None:
+                logger.info("chat_with_tenant: answered COST_SCENARIO read-only (no write)")
+                envelope = cls._build_envelope(
+                    {"error": None, "metadata": {"intent": "COST_SCENARIO", "operation_type": None,
+                                                 "confidence": None, "navigation": None}},
+                    scenario,
+                )
+                cls._append_history(
+                    phone=resolved_phone,
+                    user_message=message,
+                    bot_response=envelope["response"],
+                    bot_metadata={"last_intent": "COST_SCENARIO", "operation_type": None,
+                                  "pending_entities": None},
+                )
+                return envelope
+
             logger.info(f"chat_with_tenant: invoking graph with message={message[:50]}...")
             result = cls._invoke_graph(phone=resolved_phone, message=message, owner_name=owner_name)
             logger.info(f"chat_with_tenant: graph returned result with keys={list(result.keys())}")

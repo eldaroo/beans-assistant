@@ -8,6 +8,9 @@
 --   SET search_path TO <tenant_schema>, public;
 --   \i postgres/migrations/03_costing_tables.sql
 
+-- NOTE: the suppliers.last_checkin_at column (M5, T-018) is NOT here — it is
+-- added by migration 05_supplier_checkin.sql. A standalone `\i 03` then `\i 05`
+-- lands the full shape; run 03 alone and the column is absent until 05 follows.
 CREATE TABLE IF NOT EXISTS suppliers (
     id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,

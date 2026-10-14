@@ -124,9 +124,16 @@ def test_landed_cost_partial_with_pending_components(test_db):
             (product_id, country),
         )
         # customs: no row -> pending
-        # indirect: 2800-cent pool over 100 units this month -> 28 c/u (filled)
+        # indirect: 2800-cent pool for 2026-10; the denominator is units PRODUCED
+        # that month, derived from production_records (M4, AC12), not a stored
+        # units_produced column. 2026-W40's Thursday is 2026-10-01, so it maps to
+        # month 2026-10. 100 units produced -> 28 c/u (filled).
         conn.execute(
-            "INSERT INTO indirect_costs (country, period_month, pool_cents, units_produced) VALUES (?, '2026-10', 2800, 100)",
+            "INSERT INTO indirect_costs (country, period_month, pool_cents) VALUES (?, '2026-10', 2800)",
+            (country,),
+        )
+        conn.execute(
+            "INSERT INTO production_records (country, period_week, units_produced) VALUES (?, '2026-W40', 100)",
             (country,),
         )
 
@@ -174,8 +181,14 @@ def test_landed_cost_complete_when_every_component_present(test_db):
             "INSERT INTO customs_duties (product_id, country, usd_amount_cents) VALUES (?, ?, 30)",
             (product_id, country),
         )
+        # indirect: 1000-cent pool for 2026-10 over 100 units produced (from
+        # production_records, M4/AC12) -> 10 c/u.
         conn.execute(
-            "INSERT INTO indirect_costs (country, period_month, pool_cents, units_produced) VALUES (?, '2026-10', 1000, 100)",
+            "INSERT INTO indirect_costs (country, period_month, pool_cents) VALUES (?, '2026-10', 1000)",
+            (country,),
+        )
+        conn.execute(
+            "INSERT INTO production_records (country, period_week, units_produced) VALUES (?, '2026-W40', 100)",
             (country,),
         )
 

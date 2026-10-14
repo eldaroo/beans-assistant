@@ -147,7 +147,29 @@ class ProductionRepository:
         """
         return self.db.fetch_one(query, (period_week,))
 
-    # The indirect-allocation denominator (units produced per country per month)
-    # is built in M4, where OQ1 (calendar month vs rolling trailing window) is
-    # decided with the CEO. M4 reads these production_records directly; M3 does
-    # not ship the month query because its window semantics are still open.
+    # The indirect-allocation denominator (units produced per country per month),
+    # wired in M4 (OQ1 default: calendar month). The month cannot be derived in
+    # SQL portably (SQLite and Postgres disagree on ISO-week date math), so the
+    # repository returns the deduped weekly units for a country and the service
+    # maps each week to its calendar month and sums (see costing_service.units_in_month).
+    def weekly_units(self, country: str):
+        """Units produced per ISO week for a country, summing the NEWEST record
+        per (country, period_week) so a same-week append-only correction (newest
+        wins) is not double-counted (the same dedup discipline as week_rollup and
+        latest_per_country). Returns ``[{period_week, units}]`` newest week first.
+        The service derives the calendar month from period_week and sums per month
+        to build the indirect-allocation denominator (AC12)."""
+        query = """
+            SELECT p.period_week AS period_week,
+                   p.units_produced AS units
+            FROM production_records p
+            WHERE p.country = %s
+              AND p.id = (
+                SELECT x.id FROM production_records x
+                WHERE x.country = p.country AND x.period_week = p.period_week
+                ORDER BY x.id DESC
+                LIMIT 1
+              )
+            ORDER BY p.period_week DESC
+        """
+        return self.db.fetch_all(query, (country,))

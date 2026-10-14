@@ -169,6 +169,9 @@ CREATE TABLE suppliers (
   country TEXT,
   contact TEXT,
   is_active INTEGER NOT NULL DEFAULT 1,
+  -- last recorded check-in/reply from the supplier (M5, T-018/AC13). NULL means
+  -- no check-in recorded yet; the overdue signal reads this with no message sent.
+  last_checkin_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
