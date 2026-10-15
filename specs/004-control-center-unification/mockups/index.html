@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="es" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beans and Co - Control Center (mockup)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Mockup-only chrome: lets Dario flip screen / state / volume / viewport / theme -->
+  <div class="mockbar" role="region" aria-label="Controles del mockup">
+    <strong>Mockup</strong>
+    <label for="m-screen">Pantalla</label>
+    <select id="m-screen" aria-label="Pantalla">
+      <option value="home">Home</option>
+      <option value="productos" selected>Productos</option>
+    </select>
+    <label for="m-state">Estado</label>
+    <select id="m-state" aria-label="Estado">
+      <option value="populated" selected>Con datos</option>
+      <option value="empty">Vacío</option>
+      <option value="loading">Cargando</option>
+      <option value="error-500">Error servidor</option>
+      <option value="error-validation">Error validación</option>
+      <option value="error-403">Sin permiso</option>
+    </select>
+    <label for="m-volume">Volumen</label>
+    <select id="m-volume" aria-label="Volumen">
+      <option value="1">1 fila</option>
+      <option value="50" selected>50 filas</option>
+      <option value="5000">5000 filas</option>
+    </select>
+    <button class="seg" id="m-view" aria-label="Alternar viewport">Ver escritorio</button>
+    <button class="seg" id="m-theme" aria-label="Alternar tema">Modo oscuro</button>
+  </div>
+
+  <div class="app" id="app">
+    <!-- Held nav rail: persists across screens, never a full-page bounce -->
+    <nav class="rail" aria-label="Navegación principal">
+      <div class="brand"><b>Bitácora<span class="accent"> AI</span></b></div>
+      <div class="rail-group">Operación</div>
+      <a class="railitem" data-nav="home" href="#"><span class="dot"></span> Inicio</a>
+      <a class="railitem" data-nav="caja" href="#"><span class="dot"></span> Resultado</a>
+      <a class="railitem" data-nav="productos" href="#"><span class="dot"></span> Productos</a>
+      <a class="railitem" data-nav="stock" href="#"><span class="dot"></span> Stock</a>
+      <a class="railitem" data-nav="ventas" href="#"><span class="dot"></span> Ventas</a>
+      <a class="railitem more" data-nav="more" href="#"><span class="dot"></span> Más</a>
+    </nav>
+
+    <main class="content" id="slot" tabindex="-1"></main>
+  </div>
+
+  <!-- Timonel dock, mounted once in the shell -->
+  <div class="timonel">
+    <span class="tag">Timonel. Pedile lo que necesites</span>
+    <button aria-label="Abrir Timonel">&#9993;</button>
+  </div>
+
+  <!-- Add / edit modal -->
+  <div class="backdrop" id="backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal">
+      <header>
+        <h3 id="modal-title">Agregar producto</h3>
+        <button class="xbtn" id="modal-x" aria-label="Cerrar">&times;</button>
+      </header>
+      <div class="body">
+        <div class="field" id="f-nombre">
+          <label for="i-nombre">Nombre</label>
+          <input id="i-nombre" type="text" placeholder="Café molido 500g" />
+          <div class="err-msg" hidden>El nombre es obligatorio</div>
+        </div>
+        <div class="field">
+          <label for="i-desc">Descripción</label>
+          <input id="i-desc" type="text" placeholder="Opcional" />
+        </div>
+        <div class="field">
+          <label for="i-costo">Costo</label>
+          <input id="i-costo" type="number" step="0.01" placeholder="0.00" />
+        </div>
+        <div class="field">
+          <label for="i-precio">Precio</label>
+          <input id="i-precio" type="number" step="0.01" placeholder="0.00" />
+        </div>
+      </div>
+      <footer>
+        <button class="btn ghost" id="modal-cancel">Cancelar</button>
+        <button class="btn" id="modal-save">Guardar</button>
+      </footer>
+    </div>
+  </div>
+
+  <script type="module">
+    import { TILES, ATTENTION, VOLUMES, money, readParams, writeParam } from "./fixture.js";
+
+    const slot = document.getElementById("slot");
+    let st = readParams();
+
+    function applyChrome() {
+      document.documentElement.setAttribute("data-theme", st.theme);
+      // viewport sim: clamp the app to 390px when "mobile"
+      const app = document.getElementById("app");
+      if (st.viewport === "mobile") { app.style.maxWidth = "402px"; app.style.margin = "0 auto"; app.style.boxShadow = "0 0 0 1px var(--line)"; }
+      else { app.style.maxWidth = ""; app.style.margin = ""; app.style.boxShadow = ""; }
+      document.getElementById("m-view").textContent = st.viewport === "mobile" ? "Ver escritorio" : "Ver móvil";
+      document.getElementById("m-theme").textContent = st.theme === "dark" ? "Modo claro" : "Modo oscuro";
+      document.getElementById("m-screen").value = st.screen;
+      document.getElementById("m-state").value = st.state;
+      document.getElementById("m-volume").value = String(st.volume);
+      for (const a of document.querySelectorAll(".railitem")) {
+        const n = a.getAttribute("data-nav");
+        a.classList.toggle("active", (st.screen === "home" && n === "home") || n === st.screen);
+      }
+    }
+
+    function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+    function renderHome() {
+      const attn = ATTENTION.length
+        ? `<div class="attn"><span>&#9888;</span><span class="txt">${esc(ATTENTION[0].text)}</span><a href="#" data-nav="stock">${esc(ATTENTION[0].action)}</a></div>`
+        : `<div class="attn calm"><span>&#10003;</span><span class="txt">Todo al día</span></div>`;
+      const tiles = TILES.map((t, i) => `
+        <a class="tile ${i === 0 ? "hero" : ""}" href="#" data-nav="${t.id}">
+          <div class="tl"><span>${esc(t.label)}</span></div>
+          <div class="val ${t.tone === "warn" ? "warn" : ""}">${esc(t.value)}</div>
+          <div class="tr">${esc(t.trend)}</div>
+        </a>`).join("");
+      slot.innerHTML = `
+        <div class="page-head"><h1>Beans and Co</h1><p>Tu negocio, anotado y al día.</p></div>
+        ${attn}
+        <div class="tiles">${tiles}</div>`;
+    }
+
+    function tableRows(rows) {
+      return rows.map(r => `
+        <tr>
+          <td class="sku">${esc(r.sku)}</td>
+          <td>${esc(r.nombre)}</td>
+          <td class="hide-m">${esc(r.desc || "—")}</td>
+          <td class="num hide-m">${money(r.costo)}</td>
+          <td class="num">${money(r.precio)}</td>
+          <td class="hide-m"><span class="pill ${r.estado === "activo" ? "" : "off"}">${esc(r.estado)}</span></td>
+          <td>
+            <div class="rowact">
+              <button class="iconbtn" data-edit="${esc(r.sku)}" aria-label="Editar ${esc(r.nombre)}">&#9998; Editar</button>
+              <button class="iconbtn del" data-del="${esc(r.nombre)}" aria-label="Eliminar ${esc(r.nombre)}">&times; Eliminar</button>
+            </div>
+          </td>
+        </tr>`).join("");
+    }
+
+    function renderProductos() {
+      const head = `
+        <div class="ph">
+          <div><h1 style="margin:0;font-size:24px;letter-spacing:-.02em;">Productos</h1>
+          <div class="count" id="pcount"></div></div>
+          <button class="btn" id="add-btn">+ Agregar producto</button>
+        </div>`;
+
+      if (st.state === "empty") {
+        slot.innerHTML = head.replace('<div class="count" id="pcount"></div>', '<div class="count">0 productos</div>') + `
+          <div class="card-table"><div class="empty">
+            <div class="ico">&#9749;</div>
+            <h2>Todavía no cargaste productos</h2>
+            <p>Agregá tu primer producto para empezar a ver stock, ventas y resultado.</p>
+            <button class="btn" id="add-btn2">+ Agregar el primero</button>
+          </div></div>`;
+        return;
+      }
+      if (st.state === "loading") {
+        slot.innerHTML = head.replace('<div class="count" id="pcount"></div>', '<div class="count">Cargando...</div>') + `
+          <div class="card-table">
+            <table><thead><tr><th>SKU</th><th>Nombre</th><th class="hide-m">Descripción</th><th class="hide-m">Costo</th><th>Precio</th><th class="hide-m">Estado</th><th></th></tr></thead></table>
+            ${Array.from({ length: 6 }).map(() => '<div class="skel-row"></div>').join("")}
+          </div>`;
+        return;
+      }
+      if (st.state === "error-500") {
+        slot.innerHTML = head + `
+          <div class="banner err"><span>&#9888;</span><span>No pudimos cargar los productos. El servidor no respondió.</span><button id="retry">Reintentar</button></div>
+          <div class="card-table"><div class="empty"><div class="ico">&#9729;</div><p>La lista vuelve cuando el servidor responde. El resto del Control Center sigue disponible.</p></div></div>`;
+        return;
+      }
+      if (st.state === "error-403") {
+        slot.innerHTML = `
+          <div class="ph"><div><h1 style="margin:0;font-size:24px;">Productos</h1><div class="count">Solo lectura</div></div></div>
+          <div class="banner info"><span>&#128274;</span><span>Tu cuenta puede ver los productos pero no editarlos. Pedile acceso al dueño.</span></div>
+          <div class="card-table"><table><thead><tr><th>SKU</th><th>Nombre</th><th>Precio</th></tr></thead><tbody>
+            ${VOLUMES[1].map(r => `<tr><td class="sku">${esc(r.sku)}</td><td>${esc(r.nombre)}</td><td class="num">${money(r.precio)}</td></tr>`).join("")}
+          </tbody></table></div>`;
+        return;
+      }
+
+      // populated (with optional validation-error demo opening the modal)
+      const rows = VOLUMES[st.volume] || VOLUMES[50];
+      const shown = rows.slice(0, 50);
+      slot.innerHTML = head + `
+        <div class="filters">
+          <label class="chk" tabindex="0"><input type="checkbox" /> Solo activos</label>
+          <label class="chk" tabindex="0"><input type="checkbox" /> Solo bajo stock</label>
+        </div>
+        <div class="card-table">
+          <table>
+            <thead><tr><th>SKU</th><th>Nombre</th><th class="hide-m">Descripción</th><th class="hide-m">Costo</th><th>Precio</th><th class="hide-m">Estado</th><th style="text-align:right">Acciones</th></tr></thead>
+            <tbody>${tableRows(shown)}</tbody>
+          </table>
+          ${rows.length > shown.length ? `<div class="scrollnote">Mostrando 50 de ${rows.length.toLocaleString("es")} productos. Paginá o buscá para ver más.</div>` : ""}
+        </div>`;
+      document.getElementById("pcount").textContent = `${rows.length.toLocaleString("es")} ${rows.length === 1 ? "producto" : "productos"} activos`;
+    }
+
+    // ---------- Modal ----------
+    const backdrop = document.getElementById("backdrop");
+    let lastFocus = null;
+    function openModal(mode, name) {
+      lastFocus = document.activeElement;
+      document.getElementById("modal-title").textContent = mode === "edit" ? "Editar producto" : "Agregar producto";
+      document.getElementById("i-nombre").value = mode === "edit" ? (name || "") : "";
+      clearValidation();
+      if (st.state === "error-validation" && mode !== "edit") showValidation();
+      backdrop.classList.add("show");
+      document.getElementById("i-nombre").focus();
+    }
+    function closeModal() { backdrop.classList.remove("show"); if (lastFocus) lastFocus.focus(); }
+    function clearValidation() {
+      const f = document.getElementById("f-nombre");
+      f.classList.remove("invalid"); f.querySelector(".err-msg").hidden = true;
+      document.getElementById("modal-save").disabled = false;
+    }
+    function showValidation() {
+      const f = document.getElementById("f-nombre");
+      f.classList.add("invalid"); f.querySelector(".err-msg").hidden = false;
+      document.getElementById("modal-save").disabled = true;
+    }
+
+    // ---------- Wiring ----------
+    function render() { applyChrome(); st.screen === "home" ? renderHome() : renderProductos(); slot.focus({ preventScroll: true }); }
+
+    document.getElementById("m-screen").addEventListener("change", e => { st.screen = e.target.value; writeParam("screen", st.screen); render(); });
+    document.getElementById("m-state").addEventListener("change", e => { st.state = e.target.value; writeParam("state", st.state); st.screen = "productos"; writeParam("screen", "productos"); render(); if (st.state === "error-validation") openModal("add"); });
+    document.getElementById("m-volume").addEventListener("change", e => { st.volume = Number(e.target.value); writeParam("volume", st.volume); render(); });
+    document.getElementById("m-view").addEventListener("click", () => { st.viewport = st.viewport === "mobile" ? "desktop" : "mobile"; writeParam("viewport", st.viewport); applyChrome(); });
+    document.getElementById("m-theme").addEventListener("click", () => { st.theme = st.theme === "dark" ? "light" : "dark"; writeParam("theme", st.theme); applyChrome(); });
+
+    document.addEventListener("click", e => {
+      const nav = e.target.closest("[data-nav]");
+      if (nav) { e.preventDefault(); const n = nav.getAttribute("data-nav"); st.screen = (n === "productos") ? "productos" : "home"; writeParam("screen", st.screen); render(); return; }
+      if (e.target.closest("#add-btn") || e.target.closest("#add-btn2")) { openModal("add"); return; }
+      const ed = e.target.closest("[data-edit]"); if (ed) { openModal("edit", e.target.closest("tr").children[1].textContent); return; }
+      const del = e.target.closest("[data-del]"); if (del) { const nm = del.getAttribute("data-del"); if (confirm(`Eliminar "${nm}"? El producto se desactiva y podés reactivarlo después.`)) {} return; }
+      if (e.target.closest("#retry")) { st.state = "populated"; writeParam("state", "populated"); render(); return; }
+      if (e.target.id === "modal-x" || e.target.id === "modal-cancel" || e.target === backdrop) closeModal();
+      if (e.target.id === "modal-save") { if (!document.getElementById("i-nombre").value.trim()) { showValidation(); } else { closeModal(); } }
+    });
+    document.getElementById("i-nombre").addEventListener("input", clearValidation);
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && backdrop.classList.contains("show")) closeModal(); });
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 ---
 name: timonel-architecture
-last_spec: production-landed-cost-engine
+last_spec: control-center-unification
 created: 2026-06-11
-last_updated: 2026-10-13
+last_updated: 2026-10-14
 mode: update
 author: Winston (BuildOS Architect, architecture-author role)
 ---
@@ -270,6 +270,54 @@ Dario reframed the spec mid-run: the target is the Beans Control Center, a comma
 - **Implications.** D-019's additive, delete-nothing principle stands. Only its clause "the default landing route is the costing home" becomes "the default landing is the status home; costing is one module".
 - **Panel source.** Winston, grounding Dario.
 
+## Control Center unification addendum (spec 004, 2026-10-14)
+
+Dario made the Control Center the single owner-facing product. All CRUD moves off the legacy `/tenants/{phone}` page onto dedicated Control Center pages; legacy stays live, Admin-only, a fallback. These decisions govern how one design system and real write paths arrive without regressing the deployed home. They build on D-020 (registry plus provider protocol) and D-023 (existing surfaces as modules).
+
+### D-024: One owner-facing base, extracted from the home; legacy base untouched; extraction is foundational
+
+- **Chosen.** Extract a shared Jinja base `cc_base.html` from the current `control_center.html`, keeping its current modern Control Center design (indigo/Inter): shell structure, held nav, theme toggle, chat slot, and the existing token set. The home and every module page, read-only and new CRUD, extend it. Legacy `base.html` (coffee) is left exactly as is under Admin; the four coffee-styled read-only pages migrate onto the modern base. The extraction is the first cohort, before any new CRUD page. Note: Kaze (panel) recommended re-theming to coffee/cream since the business sells beans; Dario overruled and chose to keep the modern Control Center design, so the unified brand is the current modern look, not coffee.
+- **Alternatives.** (a) A shared CSS or partial include across the standalone pages. (b) Leave pages standalone, theme-match by hand. (c) Migrate the legacy page onto the new base too.
+- **Why this won.** Duplication across standalone documents is the debt; one base is the single place brand and nav change. Extracting from the already-shipped home re-bases it to a visually equal surface, preserved by construction and proven by the pixel self-regression gate (home as golden). First means each new page is born extending the base, written once.
+- **Why the alternatives lost.** (a) A CSS include still leaves each page re-declaring doctype, head, nav, and theme, so nav drift persists. (b) Hand theme-matching is the status quo that produced the mixed surfaces. (c) Touching the legacy base risks the Admin fallback for zero owner gain.
+- **Implications.** Two bases: `cc_base.html` (owner) and legacy `base.html` (Admin). The four existing read-only pages migrate in a styling-only cohort right after extraction. Building the base last (the naive M6) rewrites all four CRUD pages twice; this reorders design to the front.
+- **Panel source.** Winston, with Bob on shell-first sequencing and Kaze on one brand, one nav; the brand choice (modern over coffee) is Dario's, overruling Kaze's coffee recommendation.
+
+### D-025: CRUD pages are Alpine over the existing JSON endpoints; three read layers stay distinct
+
+- **Chosen.** Each new page server-renders its initial read through the route `_build_view` (fast paint, tenant-scoped, `no-store`, fail-open) and hydrates one Alpine factory per page, mirroring the legacy `tenantDashboard`, that owns every mutation by calling the existing `/api/tenants/{phone}/...` endpoints then refetching. Three read surfaces keep separate jobs: provider `snapshot()` is the home tile number, route `_build_view` is the page initial render, `/api` endpoints are the Alpine CRUD path.
+- **Alternatives.** (a) A client framework (React/SPA). (b) Server-side form posts with full reloads. (c) Fold page detail into the provider snapshot so tile and page share one fetch.
+- **Why this won.** Alpine is already loaded and the legacy page already writes through this exact factory against these exact endpoints, so no new toolchain and the reuse constraint is honored by construction. The three-layer split keeps each path at its own cost and failure mode.
+- **Why the alternatives lost.** (a) A framework adds a bundler and breaks D-020's server-rendered-descriptor convention. (b) Full reloads lose the inline stock-adjust interaction and fight the no-store model. (c) A shared fetch makes the home pay the page's full query, the regression D-027 guards.
+- **Implications.** One Alpine factory per page template. Endpoints are never rewritten. The JS methods port verbatim but every Tailwind class and `--color-*` token re-expresses into the shared base vocabulary; the signed-delta stock conversion (`newQty - currentQty`) must survive the port. The two legacy gaps (unwired record-sale, alert-stub view-detail) are built on the new Ventas page against the present `POST /sales` and `GET /sales/{id}`; record-sale is a build, not a port.
+- **Panel source.** Winston, with Amelia on reusing the endpoint contracts verbatim and the port traps.
+
+### D-026: Routing stays registry-driven; productos is a new descriptor; tile repoints are registry edits
+
+- **Chosen.** Every new or repointed surface is a change to `backend/modules/registry.py` plus a route, never a home-template edit (preserves D-020 and the Control Center AC1). `href_for` already treats a `/`-prefixed route as absolute, so repointing a bounced tile is a one-line change from `?tab=x` to `/{module}/{phone}`. `productos` is a new descriptor. The Resultado-to-expenses mislabel and the `?tab=expenses` base pointer are fixed when the caja/Resultado tile repoints.
+- **Alternatives.** (a) Hard-code the new tiles and routes in the home template. (b) Keep a query-param tab router for the new pages.
+- **Why this won.** The registry is already the single source of module truth; repointing through it keeps the home untouched and the invariant intact. Dedicated `/{module}/{phone}` routes replace the `?tab=` bounce to legacy.
+- **Why the alternatives lost.** (a) Couples the home to every module, the coupling D-020 forbids. (b) The tab router is the mechanism that bounces to legacy; keeping it reintroduces the problem.
+- **Implications.** Five registry touches: one add (productos), three repoints (stock, ventas, caja/Resultado), one label fix. No home-template edit.
+- **Panel source.** Winston.
+
+### D-027: Provider snapshots stay one bounded query; productos is the eighth concurrent snapshot
+
+- **Chosen.** The productos provider does one bounded query (active product count) and fails open to a degraded tile, per D-020 and D-021. Page detail lives only in the route `_build_view`, never in the snapshot. New CRUD pages are client-fetch so they stay off the shared snapshot pool.
+- **Alternatives.** (a) A richer productos snapshot feeding the tile. (b) Raise `SNAPSHOT_TIMEOUT_S` again.
+- **Why this won.** The fan-out is concurrent, so one more bounded query does not serialize, but it is one more connection on the shared pool under the 10s deadline and the live latency. One count bounds the home's growth to one cheap query per module and protects the 0.9s render.
+- **Why the alternatives lost.** (a) A richer snapshot makes the home pay page-weight for a tile. (b) Raising the timeout hides pool saturation and degrades felt speed.
+- **Implications.** Productos is the eighth concurrent snapshot. Before it ships, confirm the pool serves eight concurrent bounded queries within the deadline at live latency; if it saturates, that fan-out is what #138 must fix (a combined per-module aggregate, per A-Q9), not a reason to inflate any snapshot.
+- **Panel source.** Winston, grounded in the #138 perf debt.
+
+### D-028: Timonel is embedded once in the shared base, not per page
+
+- **Chosen.** The chat widget (`chat_widget.js` factory `window.beansChat`, `chat_widget.css`) mounts through a chat slot in `cc_base.html`, so every Control Center page inherits Timonel from the base. The chat-to-screen refresh contract (`beans:navigate` / `beans:refresh`), which assumed one Alpine scope with four tabs, is re-established per page: a chat action refreshes the page it is on and never claims to refresh a screen it cannot reach.
+- **Alternatives.** (a) Include the widget on each page. (b) A dedicated `/chat` page only.
+- **Why this won.** Chat is a shell concern; one mount gives every owner surface the assistant without the legacy page, and the asset loads once.
+- **Why the alternatives lost.** (a) Per-page includes duplicate the mount and drift. (b) A chat-only page splits the assistant off the surfaces it should assist.
+- **Panel source.** Winston, with Kaze on presence on every owner surface and Amelia on the refresh-contract break.
+
 ## Conventions
 
 - **Naming.** New modules `agents/expander.py` (factory `create_expander_node`, pure helper `expand_items`) and `agents/attributes.py` (the single color and size vocabularies). SKUs stay `BC-{TYPE}-{DESCRIPTORS}` with discriminating tokens retained.
@@ -291,6 +339,14 @@ Dario reframed the spec mid-run: the target is the Beans Control Center, a comma
 - **Module-registry contract.** A descriptor is `Module(id, label, route, headline, attention)`. Both providers are read-only, tenant-scoped, and bounded to one query each; one that fails returns a degraded headline or an empty list, never an exception.
 - **Ownership.** A module owns its headline and its attention rules; the home and the attention service own only aggregation and ordering, never a threshold.
 - **Role scope.** Supplier-scoped users (D-017) see only the modules their role permits; the home filters the registry by role, so a supplier never sees a margin tile.
+
+### Control Center unification conventions (spec 004)
+
+- **One owner base.** New pages extend `cc_base.html`. Never add a third owner-facing base. Legacy `base.html` is Admin-only.
+- **One Alpine factory per page.** `productosDashboard`, `stockDashboard`, and so on, mirroring the legacy `tenantDashboard` split per domain.
+- **Writes reuse endpoints.** Mutations go only through the existing `/api/tenants/{phone}/...` endpoints. No endpoint rewritten, no second write path. Soft-delete stays soft; stock adjust sends the signed delta; sale cancel restores stock.
+- **Snapshot stays bounded.** Provider `snapshot()` is one bounded query and fails open. Page detail belongs in the route `_build_view`. New CRUD pages fetch client-side so they never join the snapshot pool.
+- **Tiles are registry edits.** Tile wiring is a change to `registry.py`, never a home-template edit. Re-basing the home is gated by the pixel self-regression check, current home as golden.
 
 ## Non-goals
 
@@ -314,6 +370,15 @@ Dario reframed the spec mid-run: the target is the Beans Control Center, a comma
 - No written scenario snapshots; scenarios are read-only.
 - No client component framework; modules are server-rendered descriptors.
 
+### Control Center unification non-goals (spec 004)
+
+- No deletion or edit of the legacy page or its `base.html`; it stays the Admin-only fallback.
+- No new or rewritten CRUD endpoints; new pages are surfaces over existing APIs.
+- No change to auth, multi-tenant scoping, channels, or chat widget internals.
+- No richer provider snapshots to feed tiles.
+- No resolution of the #138 snapshot-pool performance debt; this spec must not regress the home and files against #138 if the pool saturates.
+- No database objects; this spec adds no table, column, or migration.
+
 ## Open architectural questions
 
 - **A-Q1.** Should expansion also serve sales ("vendi 5 medias azules y grises")? Disagreement: clean single-purpose node now versus a general fan-out. Fallback: ship REGISTER_PRODUCT only, leave the node general enough to extend. Tracked as spec OQ3.
@@ -325,6 +390,9 @@ Dario reframed the spec mid-run: the target is the Beans Control Center, a comma
 - **A-Q7.** Static Python module registry or DB-driven registration? Fallback: a static list in `backend/modules/registry.py`; DB registration only if modules become tenant-configurable. (D-020)
 - **A-Q8.** Attention computed on read or materialized? Fallback: on read in M1; materialize via the Nomad periodic seam when module count or query cost grows. (D-021)
 - **A-Q9.** Headline aggregation is one bounded query per module per home load? Fallback: accept that at this module count; a combined aggregate query is a later optimization. (D-020)
+- **A-Q10.** Migrate the four read-only pages in one styling-only cohort, or alongside each CRUD page? Fallback: one styling-only cohort right after the base extraction, so the brand converges before CRUD work. The pixel self-regression gate makes an early migration safe. (D-024)
+- **A-Q11.** Does the eighth concurrent snapshot (productos) fit the pool within the deadline at live latency, or must #138 land first? Fallback: ship the shell and Productos with the bounded count and measure on the live cluster; resolve #138 before the later repoints only if saturated. (D-027)
+- **A-Q12.** Record-sale on the new Ventas page: reuse the existing `POST /sales` shape, or does the missing modal need a contract the endpoint lacks? Fallback: build against the existing contract; treat any gap as a separate endpoint task. (D-025)
 
 ## Source
 
@@ -336,7 +404,8 @@ Dario reframed the spec mid-run: the target is the Beans Control Center, a comma
 
 - D-013 through D-019 (production and landed-cost engine): ./specs/003-production-landed-cost-engine/spec.md and ./specs/003-production-landed-cost-engine/plan.md. Panel: Winston (author), with Amelia, Marcus, Bob, Kaze, Edut, Mar'ah.
 - D-020 through D-023 (Beans Control Center shell, the spec 003 mid-run reframe): same spec dir. Reframe panel: Winston (author), with Compass, Bob, and Kaze plus Sally on the status-home mockup.
+- D-024 through D-028 (Control Center unification, the single-product spec): ./specs/004-control-center-unification/spec.md and ./specs/004-control-center-unification/plan.md. Panel: Winston (author), with Amelia, Bob, and Kaze plus Sally on the unification mockup.
 
 ## Mode
 
-This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched. Updated 2026-10-13 by /create-spec (spec 003 production-landed-cost-engine) appending D-013 through D-019 and the costing domain addendum, conventions, non-goals, and A-Q5, A-Q6; D-001 through D-012 untouched. Updated again 2026-10-13 in the same run after Dario reframed the spec into the Beans Control Center, appending D-020 through D-023 (the command-center shell), the shell addendum, conventions, non-goals, and A-Q7 through A-Q9; D-019's default-landing clause is refined by D-023, the rest of D-013 through D-019 untouched.
+This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched. Updated 2026-10-13 by /create-spec (spec 003 production-landed-cost-engine) appending D-013 through D-019 and the costing domain addendum, conventions, non-goals, and A-Q5, A-Q6; D-001 through D-012 untouched. Updated again 2026-10-13 in the same run after Dario reframed the spec into the Beans Control Center, appending D-020 through D-023 (the command-center shell), the shell addendum, conventions, non-goals, and A-Q7 through A-Q9; D-019's default-landing clause is refined by D-023, the rest of D-013 through D-019 untouched. Updated 2026-10-14 by /create-spec (spec 004 control-center-unification) appending D-024 through D-028 (the single-product unification), the unification addendum, conventions, non-goals, and A-Q10 through A-Q12; D-001 through D-023 untouched. D-024 to D-028 build on D-020 and D-023.
