@@ -60,7 +60,15 @@ async def status_home(request: Request, phone: str, _user: dict = Depends(requir
     response = templates.TemplateResponse(
         request,
         "control_center.html",
-        {"phone": phone, "business_name": business_name, "view": view},
+        {
+            "phone": phone,
+            "business_name": business_name,
+            "view": view,
+            # cc_base renders the held rail from `nav`; the home passes its own
+            # rail_groups so the shell is byte-identical to the pre-rebase home.
+            "nav": view.rail_groups,
+            "active_route": "home",
+        },
     )
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response

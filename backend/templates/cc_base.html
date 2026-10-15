@@ -1,0 +1,169 @@
+{#- =========================================================================
+   cc_base.html — the single owner-facing base template (spec 004, S1-shell).
+
+   Extracted from the shipped control_center.html so the home re-bases onto it
+   with no visible change (AC1, proven by a DOM-identity + CSS-rule-presence
+   self-regression of the before/after render). Carries the modern
+   Control Center design (indigo/Inter, kept per Dario's call over the panel's
+   coffee recommendation), the held nav rail, the theme toggle, the shared
+   empty-state / skeleton / page-enter components (T-002), and the Timonel chat
+   slot (T-004). Every owner page — the home and each module page — extends this
+   one base, so the brand converges once and is written once.
+
+   Context an owner route passes:
+     business_name : str   — tenant display name (rail + topbar + title)
+     phone         : str   — tenant phone (routes, rail links)
+     nav           : list  — rail groups [{label, items:[{module_id,label,route}]}]
+     active_route  : str   — 'home' or a module_id, for the rail aria-current
+   The home also passes `view` (the HomeView); module pages pass their own view.
+
+   Blocks a page fills: title, page_css, head_extra, content, footer, chat,
+   body_scripts.
+   ========================================================================= -#}
+{%- from "_cc_macros.html" import href_for -%}
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{% block title %}{{ business_name }} · Control Center{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F6F7F9; --card:#FFFFFF; --line:#E4E7EC; --line-hover:#D0D5DD;
+  --text:#101828; --muted:#667085;
+  --accent:#4F46E5; --accent-hover:#4338CA; --accent-soft:#EEF0FE; --on-accent:#FFFFFF;
+  --good:#067647; --good-soft:#ECFDF3; --warn:#B54708; --warn-soft:#FFFAEB; --danger:#B42318; --danger-soft:#FEF3F2;
+  --shadow-card:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06);
+  --shadow-strip:0 2px 8px rgba(16,24,40,.08);
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none; --shadow-strip:none;
+}}
+:root[data-theme="dark"]{
+  --bg:#0C0E12; --card:#16181D; --line:#2A2E37; --line-hover:#3a404b;
+  --text:#E6E8EC; --muted:#98A2B3;
+  --accent:#818CF8; --accent-hover:#A5B0FC; --accent-soft:#1E2033; --on-accent:#0C0E12;
+  --good:#47C97E; --good-soft:#0F2A1D; --warn:#E0A458; --warn-soft:#2E2514; --danger:#F08C84; --danger-soft:#2E1816;
+  --shadow-card:none; --shadow-strip:none;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+
+.app{display:flex;min-height:100vh;max-width:1400px;margin:0 auto}
+.rail{display:none}
+.main{flex:1;min-width:0;padding:16px}
+@media(min-width:1000px){
+  .rail{display:flex;flex-direction:column;gap:2px;width:240px;flex:0 0 240px;padding:22px 14px;border-right:1px solid var(--line)}
+  .main{padding:32px 32px 48px}
+}
+.railbrand{display:flex;align-items:center;gap:9px;font-weight:700;padding:4px 10px 18px}
+.raildot{width:22px;height:22px;border-radius:7px;background:var(--accent);display:inline-block}
+.railbrand small{color:var(--muted);font-weight:500;font-size:12px}
+.railitem{display:flex;align-items:center;gap:10px;background:transparent;border:0;border-radius:8px;padding:9px 11px;color:var(--muted);font:inherit;font-weight:500;cursor:pointer;text-align:left;min-height:40px;position:relative}
+.railitem:hover{background:var(--accent-soft);color:var(--text)}
+.railitem:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.railitem[aria-current="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.railitem[aria-current="true"]::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--accent)}
+.railsep{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;padding:14px 11px 6px;font-weight:600}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.tbbrand{display:flex;align-items:center;gap:8px;font-weight:700}
+@media(min-width:1000px){.tbbrand{display:none}}
+.sec{background:var(--card);border:1px solid var(--line);padding:7px 13px;border-radius:8px;color:var(--muted);cursor:pointer;min-height:44px;font:inherit;font-weight:500}
+.sec:hover{border-color:var(--line-hover)}
+.sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+h1.page{font-size:28px;font-weight:700;margin:2px 0 2px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 24px}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-card);padding:24px;max-width:640px}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-top:18px;background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:13px 20px;font:inherit;font-weight:600;cursor:pointer;min-height:44px}
+.cta:hover{background:var(--accent-hover)}
+footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
+
+/* Shared components (T-002): one empty-state, one skeleton loader, one page-enter,
+   available to every owner page built on the base. The new CRUD pages (later
+   cohorts) use these for their loading/empty states; the migrated read-only
+   pages keep their own .empty to preserve their exact pre-migration render. */
+.cc-empty{text-align:center;padding:40px 24px}
+.cc-empty h2{margin:0 0 8px;font-size:18px;font-weight:600}
+.cc-empty p{color:var(--muted);margin:0 auto;max-width:380px}
+.cc-skeleton{position:relative;overflow:hidden;background:var(--line);border-radius:8px;min-height:16px}
+.cc-skeleton-row{height:48px;border-radius:10px;margin:8px 0}
+.cc-skeleton-tile{height:120px;border-radius:12px}
+
+@media(prefers-reduced-motion:no-preference){
+  .tile,.att,.railitem,.cta{transition:background .14s ease,border-color .14s ease,color .14s ease,box-shadow .14s ease,transform .14s ease}
+  .reveal{animation:rise .32s cubic-bezier(.16,1,.3,1) both}
+  .cc-main-enter{animation:rise .3s cubic-bezier(.16,1,.3,1) both}
+  .cc-skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);animation:cc-shimmer 1.3s infinite}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .cc-skeleton::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent)}}
+  :root[data-theme="dark"] .cc-skeleton::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.06),transparent)}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes cc-shimmer{to{transform:translateX(100%)}}
+}
+@media(prefers-reduced-motion:reduce){.reveal,.cc-main-enter{animation:fade .12s ease both}.cc-skeleton::after{display:none}@keyframes fade{from{opacity:0}to{opacity:1}}}
+{% block page_css %}{% endblock %}
+</style>
+<!-- Alpine powers the shared Timonel slot (and any page's Alpine CRUD factory). -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+{% block head_extra %}{% endblock %}
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Módulos">
+    <div class="railbrand"><span class="raildot"></span><span>{{ business_name }}<br><small>control center</small></span></div>
+    <a class="railitem"{% if active_route is defined and active_route == 'home' %} aria-current="true"{% endif %} href="/home/{{ phone }}">Inicio</a>
+    {% for group in (nav if nav is defined else []) %}
+      {% if group.label %}<div class="railsep">{{ group.label }}</div>{% endif %}
+      {% for tile in group.items %}
+        <a class="railitem"{% if active_route is defined and active_route == tile.module_id %} aria-current="true"{% endif %} href="{{ href_for(tile.route, phone) }}">{{ tile.label }}</a>
+      {% endfor %}
+    {% endfor %}
+  </nav>
+
+  <main class="main">
+    <div class="topbar">
+      <div class="tbbrand"><span class="raildot"></span>{{ business_name }}</div>
+      <button class="sec" id="themebtn" aria-label="Cambiar tema" aria-pressed="false" type="button">tema</button>
+    </div>
+
+    {% block content %}{% endblock %}
+
+    {% block footer %}<footer>{{ business_name }} control center</footer>{% endblock %}
+  </main>
+</div>
+
+{% block chat %}{% include "_timonel_slot.html" %}{% endblock %}
+
+<!-- Timonel chat factory (window.beansChat); the slot above binds to it. -->
+<script src="/static/js/chat_widget.js?v=20260508a"></script>
+<script>
+(function(){
+  var root=document.documentElement;
+  var btn=document.getElementById("themebtn");
+  function reflect(){var t=root.getAttribute("data-theme");var dark=t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme: dark)").matches);if(btn)btn.setAttribute("aria-pressed",String(dark));}
+  if(btn){btn.addEventListener("click",function(){
+    var cur=root.getAttribute("data-theme");
+    var next=cur==="dark"?"light":(cur==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));
+    root.setAttribute("data-theme",next);
+    try{localStorage.setItem("beans_cc_theme",next);}catch(e){}
+    reflect();
+  });}
+  try{var t=localStorage.getItem("beans_cc_theme");if(t)root.setAttribute("data-theme",t);}catch(e){}
+  reflect();
+})();
+</script>
+{% block body_scripts %}{% endblock %}
+</body>
+</html>

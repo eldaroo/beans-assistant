@@ -1,0 +1,140 @@
+{#- =========================================================================
+   _timonel_slot.html — the shared Timonel chat slot (spec 004, S7 + T-004).
+
+   Mounted once from cc_base.html's {% block chat %}, so Timonel appears on the
+   home and every owner module page. Reuses the existing window.beansChat Alpine
+   factory (backend/static/js/chat_widget.js) unchanged — the factory is the
+   logic, this is a plain-CSS modern-token shell over the same bindings, so no
+   Tailwind and no legacy --color-* tokens leak onto the Control Center brand.
+
+   Cohort A ships the SLOT: Timonel present, openable, sends and receives on the
+   real /api/tenants/{phone}/chat endpoint, floating-by-default (dock:'floating')
+   so it never takes over the calm home on first load. The chat-to-screen refresh
+   contract across separate documents (beans:navigate / beans:refresh re-wiring)
+   is spec 004 Cohort D (AC8), not this slot.
+   ========================================================================= -#}
+<style>
+[x-cloak]{display:none !important}
+.tim-launch{position:fixed;right:16px;bottom:16px;z-index:40;display:inline-flex;align-items:center;gap:9px;height:48px;padding:0 16px 0 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);font:inherit;font-weight:600;cursor:pointer;box-shadow:var(--shadow-strip)}
+.tim-launch:hover{border-color:var(--line-hover)}
+.tim-launch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tim-badge{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent);flex:0 0 auto}
+.tim-badge svg{width:18px;height:18px}
+.tim-shell{position:fixed;z-index:41;display:flex;flex-direction:column;background:var(--card);color:var(--text);border:1px solid var(--line)}
+.tim-shell.floating{right:16px;bottom:16px;width:380px;height:560px;max-height:calc(100dvh - 32px);border-radius:16px;box-shadow:var(--shadow-strip)}
+.tim-shell.pinned{right:0;top:0;bottom:0;width:420px;border-left:1px solid var(--line);border-radius:0}
+@media(max-width:640px){.tim-shell.floating,.tim-shell.pinned{inset:0;width:100%;height:100%;border-radius:0;border:0}}
+.tim-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.tim-head .tim-badge{width:34px;height:34px}
+.tim-id{min-width:0;flex:1}
+.tim-id .nm{font-size:14px;font-weight:600;line-height:1.2}
+.tim-id .st{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tim-ico{display:grid;place-items:center;width:36px;height:36px;border-radius:8px;border:0;background:transparent;color:var(--muted);cursor:pointer;font:inherit}
+.tim-ico:hover{background:var(--bg);color:var(--text)}
+.tim-ico:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.tim-ico[aria-pressed="true"]{color:var(--accent)}
+.tim-ico svg{width:18px;height:18px}
+.tim-thread{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:16px}
+.tim-empty{margin:auto;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:8px;align-items:center;padding:0 12px}
+.tim-empty svg{width:44px;height:44px;color:var(--accent);opacity:.7}
+.tim-empty .t1{font-size:14px;font-weight:600;color:var(--text)}
+.tim-empty .t2{font-size:12px}
+.tim-bubble{max-width:85%;padding:10px 14px;border-radius:16px;font-size:14px;line-height:1.5;word-wrap:break-word}
+.tim-bubble.tim-user{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
+.tim-bubble.tim-assistant{align-self:flex-start;background:var(--bg);color:var(--text);border:1px solid var(--line);border-bottom-left-radius:6px}
+.tim-bubble.tim-system{align-self:center;max-width:90%;text-align:center;font-size:12px;color:var(--muted);background:transparent;padding:4px 0}
+.tim-toolcard{align-self:flex-start;max-width:85%;font-size:13px;font-weight:600;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg)}
+.tim-toolcard.tim-tool-success{border-color:var(--good);color:var(--good);background:var(--good-soft)}
+.tim-toolcard.tim-tool-failure{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+.tim-think{align-self:flex-start;display:inline-flex;gap:4px;padding:12px 16px;border-radius:16px;border-bottom-left-radius:6px;background:var(--bg);border:1px solid var(--line)}
+.tim-think span{width:6px;height:6px;border-radius:50%;background:var(--muted);display:inline-block}
+.tim-foot{border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:8px}
+.tim-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tim-chip{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:999px;padding:6px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;min-height:32px}
+.tim-chip:hover{background:var(--bg)}
+.tim-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tim-form{display:flex;align-items:flex-end;gap:8px}
+.tim-ta{flex:1;resize:none;min-height:44px;max-height:128px;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px}
+.tim-ta:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tim-send{display:inline-flex;align-items:center;height:44px;padding:0 16px;border:0;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-weight:600;cursor:pointer}
+.tim-send:hover{background:var(--accent-hover)}
+.tim-send:disabled{opacity:.5;cursor:not-allowed}
+@media(prefers-reduced-motion:no-preference){
+  .tim-think span{animation:tim-blink 1.2s infinite both}
+  .tim-think span:nth-child(2){animation-delay:.18s}.tim-think span:nth-child(3){animation-delay:.36s}
+  @keyframes tim-blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
+}
+</style>
+
+{% set tim_icon %}<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.5c3.3 0 6 2.4 6 5.4 0 2.6-2 4.8-4.7 5.3-.6 1.6-2 2.9-3.8 3.3-.5.1-.9-.3-.8-.8.3-1.1.2-2.2-.2-3.2-1.4-.9-2.5-2.4-2.5-4.6 0-3 2.7-5.4 6-5.4Zm-1.6 4.3c-.4.4-.4 1 0 1.4l3.4 3.4c.4.4 1 .4 1.4 0 .4-.4.4-1 0-1.4l-3.4-3.4c-.4-.4-1-.4-1.4 0Z"/></svg>{% endset %}
+
+<div x-data='beansChat({ phone: {{ phone | tojson }}, dock: "floating" })' x-effect="beansDock = docked; beansOpen = isOpen">
+  {# Launcher: visible when closed #}
+  <button type="button" class="tim-launch" x-show="!isOpen" x-cloak @click="open()" aria-label="Abrir chat con tu Timonel">
+    <span class="tim-badge">{{ tim_icon }}</span>
+    <span>Timonel</span>
+  </button>
+
+  {# Chat dialog #}
+  <div x-show="isOpen" x-cloak x-ref="shell"
+       :class="docked === 'pinned' ? 'tim-shell pinned' : 'tim-shell floating'"
+       @keydown.escape.stop="onEscape()"
+       role="dialog" aria-label="Chat con tu Timonel" aria-modal="false">
+    <header class="tim-head">
+      <span class="tim-badge">{{ tim_icon }}</span>
+      <div class="tim-id">
+        <p class="nm">Timonel</p>
+        <p class="st" x-text="status" aria-live="polite"></p>
+      </div>
+      <button type="button" class="tim-ico" @click="togglePin()"
+              :aria-pressed="docked === 'pinned' ? 'true' : 'false'"
+              :aria-label="docked === 'pinned' ? 'Desanclar' : 'Anclar a la derecha'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76V6h-1V4h8v2h-1v4.76l3 3.24v2H6v-2l3-3.24Z"/></svg>
+      </button>
+      <button type="button" class="tim-ico" @click="close()" aria-label="Cerrar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+      </button>
+    </header>
+
+    <div class="tim-thread" x-ref="thread" role="log" aria-live="polite">
+      <template x-if="messages.length === 0">
+        <div class="tim-empty">
+          <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <p class="t1">Tu negocio, anotado y al día.</p>
+          <p class="t2">Pedile lo que necesites: stock, ventas, gastos.</p>
+        </div>
+      </template>
+      <template x-for="m in messages" :key="m.id">
+        <div>
+          {# tool-card messages carry no html (the factory sets m.toolCall, not m.html);
+             render them as a labelled card so they never show as an empty bubble. #}
+          <template x-if="m.kind === 'tool-card'">
+            <div class="tim-toolcard" :class="m.toolCall ? ('tim-tool-' + m.toolCall.state) : ''" x-text="m.toolCall ? m.toolCall.label : ''"></div>
+          </template>
+          <template x-if="m.kind !== 'tool-card'">
+            <div :class="'tim-bubble tim-' + m.role"><span x-html="m.html"></span></div>
+          </template>
+        </div>
+      </template>
+      <div class="tim-think" x-show="state === 'thinking'" x-cloak aria-label="Timonel está pensando">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+
+    <div class="tim-foot">
+      <template x-if="!input.trim() && suggestions.length && state === 'idle'">
+        <div class="tim-chips" role="group" aria-label="Sugerencias de Timonel">
+          <template x-for="s in suggestions" :key="s">
+            <button type="button" class="tim-chip" @click="send(s)" x-text="s"></button>
+          </template>
+        </div>
+      </template>
+      <form class="tim-form" @submit.prevent="send(input)">
+        <textarea class="tim-ta" x-ref="input" x-model="input" rows="1"
+                  @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(input) }"
+                  placeholder="Pedile algo a Timonel..." aria-label="Mensaje para Timonel"></textarea>
+        <button type="submit" class="tim-send" :disabled="!input.trim() || state === 'thinking' || state === 'tool_running'">Enviar</button>
+      </form>
+    </div>
+  </div>
+</div>
