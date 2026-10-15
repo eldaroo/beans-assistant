@@ -33,7 +33,9 @@ LOW_STOCK_THRESHOLD = 20
 # total is flagged partial rather than silently undercounted.
 MAX_PRODUCTS = 2000
 
-_ROUTE = "?tab=stock"
+# Repointed to the dedicated Stock page (spec 004 S3 / T-007); the low-stock
+# attention item drills into /stock/{phone}, not the legacy ?tab=stock bounce.
+_ROUTE = "/stock/{phone}"
 _service = StockService()
 
 

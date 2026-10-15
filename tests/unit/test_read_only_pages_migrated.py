@@ -61,7 +61,8 @@ def test_owner_rail_is_snapshot_free():
     it carries all seven modules in registry order with no DB read."""
     groups = nav.owner_rail("+100")
     labels = [it.label for g in groups for it in g.items]
-    assert labels == ["Resultado", "Stock", "Ventas semana", "Costos", "Producción", "Logística", "Proveedores"]
+    assert labels == ["Resultado", "Productos", "Stock", "Ventas semana", "Costos", "Producción", "Logística", "Proveedores"]
     # absolute routes stay absolute (page modules), legacy tabs stay tabs
     routes = {it.module_id: it.route for g in groups for it in g.items}
-    assert routes["costos"] == "/costos/{phone}" and routes["stock"] == "?tab=stock"
+    # stock is repointed to its own page in Cohort B (T-007); no longer a legacy tab.
+    assert routes["costos"] == "/costos/{phone}" and routes["stock"] == "/stock/{phone}"

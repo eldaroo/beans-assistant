@@ -44,7 +44,12 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_TIMEOUT_S = 10.0
 
 # One shared pool, fanned out across modules so total latency is the slowest
-# module, not the sum. Sized above the M1 module count with headroom for M2-M5.
+# module, not the sum. As of spec 004 Cohort B the registry holds EIGHT modules
+# (caja, productos, stock, ventas, costos, produccion, logistica, proveedores)
+# against max_workers=8 — the pool is at exact capacity, zero headroom. A ninth
+# module would queue behind the others and its result-wait would start burning
+# the SNAPSHOT_TIMEOUT_S budget, so grow this pool (and resolve the connection-
+# reuse debt eldaroo/beans-assistant#138) before registering a 9th module.
 _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cc-snapshot")
 
 

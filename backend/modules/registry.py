@@ -18,6 +18,7 @@ from backend.modules.providers import (
     costos_module,
     logistica_module,
     produccion_module,
+    productos_module,
     proveedores_module,
     stock_module,
     ventas_module,
@@ -35,10 +36,27 @@ _MODULES: "list[Module]" = [
         rail_group=GROUP_OPERATION,
         order=10,
     ),
+    # Productos (spec 004 M-B / S2): the eighth module and the exemplar CRUD
+    # surface. Its tile headlines the active product count (one bounded query,
+    # fail-open via the home service's degrade path); its dedicated page does
+    # full product ABM over products.py. Sits between Resultado and Stock in the
+    # rail, matching the approved mockup's left-rail order.
+    Module(
+        id="productos",
+        label="Productos",
+        route="/productos/{phone}",
+        snapshot=productos_module.snapshot,
+        rail_group=GROUP_OPERATION,
+        order=15,
+    ),
+    # Stock (spec 004 S3 / T-007): repointed from the legacy ?tab=stock bounce to
+    # its own Control Center page. The tile and the low-stock attention item now
+    # open /stock/{phone}, so no owner path crosses the brand boundary into
+    # /tenants/{phone}.
     Module(
         id="stock",
         label="Stock",
-        route="?tab=stock",
+        route="/stock/{phone}",
         snapshot=stock_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=20,

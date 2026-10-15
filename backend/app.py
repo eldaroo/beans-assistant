@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores, productos, stock_page
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -87,6 +87,10 @@ app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], depende
 # Control Center status home (the owner's default landing). The route is
 # tenant-scoped and owner-gated inside the router via require_tenant_match.
 app.include_router(home.router, tags=["Control Center"])
+# Productos module ABM page (spec 004 S2, T-006). Owner-gated inside the router.
+app.include_router(productos.router, tags=["Control Center"])
+# Stock module page (spec 004 S3, T-007). Owner-gated inside the router.
+app.include_router(stock_page.router, tags=["Control Center"])
 # Costos module drill-down (spec 003 M2). Owner-gated inside the router.
 app.include_router(costos.router, tags=["Control Center"])
 # Produccion module drill-down (spec 003 M3). Owner-gated inside the router.
