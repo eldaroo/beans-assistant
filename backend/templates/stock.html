@@ -1,0 +1,309 @@
+{#- Stock page (spec 004, S3, T-007), built on cc_base.html. One Alpine factory
+   (stockDashboard) over the existing /api/tenants/{phone}/stock endpoints: add
+   units via POST /stock/add, adjust an existing quantity via POST /stock/adjust
+   with the SIGNED delta newQty-currentQty (the cell shows the absolute, the
+   endpoint takes the delta — the trap Amelia flagged). Low-stock filter is a
+   client-side filter at the module threshold. No endpoint rewrite, no second
+   write path. The brand/rail/theme/Timonel come from the base; the Stock tile is
+   repointed to /stock/{phone} in the registry so it no longer bounces to the
+   legacy coffee tab (AC4). -#}
+{% extends "cc_base.html" %}
+{% block title %}Stock · {{ business_name }}{% endblock %}
+{% block page_css %}
+.wrap{max-width:1040px;margin:0 auto;padding:12px 2px 64px}
+.ph{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+.ph .count{color:var(--muted);font-size:14px;margin-top:2px}
+.btn{font:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:10px 16px;min-height:44px;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{background:var(--accent-hover)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--line)}
+.btn.ghost:hover{border-color:var(--line-hover);background:var(--bg)}
+.btn.sm{min-height:36px;padding:7px 12px;font-size:12.5px}
+.filters{display:flex;gap:14px;margin-bottom:14px;align-items:center}
+.chk{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13.5px;min-height:40px;cursor:pointer}
+.card-table{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-card)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:13px 16px;font-size:13.5px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;background:var(--bg)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--bg)}
+td.sku{font-family:var(--mono);font-size:12px}
+.qtycell{display:flex;align-items:center;gap:8px}
+.qtyinput{width:84px;font:inherit;font-family:var(--mono);font-variant-numeric:tabular-nums;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);min-height:38px}
+.qtyinput:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.pill{font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--good-soft);color:var(--good);font-weight:600}
+.pill.low{background:var(--warn-soft);color:var(--warn)}
+.scrollnote{padding:11px 16px;color:var(--muted);font-size:12px;background:var(--bg);border-top:1px solid var(--line)}
+.banner{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:13.5px}
+.banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:var(--text)}
+.banner button{color:var(--accent);font-weight:600;background:none;border:0;cursor:pointer;font:inherit;margin-left:auto}
+.skel-row{height:46px;border-bottom:1px solid var(--line)}
+h1.page{font-size:24px;font-weight:700;margin:0;letter-spacing:-.02em}
+.backdrop{position:fixed;inset:0;background:rgba(16,24,40,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modal{background:var(--card);border-radius:12px;width:100%;max-width:460px;box-shadow:var(--shadow-strip);border:1px solid var(--line)}
+.modal header{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line)}
+.modal header h3{margin:0;font-size:16px;font-weight:600}
+.xbtn{background:var(--bg);border:1px solid var(--line);border-radius:8px;width:36px;height:36px;cursor:pointer;color:var(--muted);font-size:16px}
+.xbtn:hover{color:var(--danger);border-color:var(--danger)}
+.modal .body{padding:18px;display:grid;gap:14px}
+.field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+.field input,.field select{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);min-height:44px}
+.field input:focus,.field select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.modal footer{padding:14px 18px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
+.form-err{color:var(--danger);font-size:13px;padding:0 18px 4px}
+@media(max-width:720px){th.hide-m,td.hide-m{display:none}.ph{flex-direction:column}.ph .btn{width:100%;justify-content:center}}
+{% endblock %}
+{% block content %}
+{#- x-data is SINGLE-quoted: the tojson seed contains double quotes, so a double-
+   quoted attribute would terminate early (broken island + attribute-breakout
+   injection). tojson escapes ' -> ', so single quotes are safe. (Tamir) -#}
+<div class="wrap" x-data='stockDashboard({ phone: {{ phone | tojson }}, initial: {{ view.stock | tojson }}, threshold: {{ view.low_stock_threshold | tojson }} })'>
+  <div class="ph">
+    <div>
+      <h1 class="page">Stock</h1>
+      <div class="count" x-text="countLabel()"></div>
+    </div>
+    <button class="btn" @click="openAdd()" :disabled="items.length === 0">+ Agregar stock</button>
+  </div>
+
+  <template x-if="error === 'load'">
+    <div class="banner err" role="alert">
+      <span>&#9888;</span><span>No pudimos cargar el stock. El servidor no respondió.</span>
+      <button @click="refetch()">Reintentar</button>
+    </div>
+  </template>
+
+  <template x-if="writeError">
+    <div class="banner err" role="alert">
+      <span>&#9888;</span><span x-text="writeError"></span>
+      <button @click="writeError=''">Cerrar</button>
+    </div>
+  </template>
+
+  <div class="filters">
+    <label class="chk"><input type="checkbox" x-model="lowOnly"> Solo bajo stock</label>
+  </div>
+
+  <template x-if="loading">
+    <div class="card-table">
+      <table><thead><tr><th>Producto</th><th class="hide-m">SKU</th><th>Stock actual</th><th>Estado</th></tr></thead></table>
+      <template x-for="i in 5" :key="i"><div class="cc-skeleton skel-row"></div></template>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && items.length === 0">
+    <div class="card-table">
+      <div class="cc-empty">
+        <h2>Todavía no hay stock cargado</h2>
+        <p>Cargá productos primero; después vas a poder agregar y ajustar su stock acá.</p>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && items.length > 0 && visible().length === 0">
+    <div class="card-table"><div class="cc-empty"><p>Ningún producto está en o por debajo del mínimo de <span x-text="threshold"></span> unidades.</p></div></div>
+  </template>
+
+  <template x-if="!loading && !error && visible().length > 0">
+    <div class="card-table">
+      <table>
+        <thead><tr><th>Producto</th><th class="hide-m">SKU</th><th>Stock actual</th><th style="text-align:right">Estado</th></tr></thead>
+        <tbody>
+          <template x-for="p in visible()" :key="p.product_id">
+            <tr>
+              <td x-text="p.name"></td>
+              <td class="sku hide-m" x-text="p.sku"></td>
+              <td>
+                <div class="qtycell">
+                  <input class="qtyinput" type="number" step="1" min="0"
+                         x-model.number="drafts[p.product_id]"
+                         :aria-label="'Stock de ' + p.name">
+                  <button class="btn sm" x-show="changed(p)" :disabled="savingRow === p.product_id"
+                          @click="adjust(p)" x-text="savingRow === p.product_id ? '…' : 'Guardar'"></button>
+                </div>
+              </td>
+              <td style="text-align:right">
+                <span class="pill" :class="isLow(p.stock_qty) ? 'low' : ''"
+                      x-text="isLow(p.stock_qty) ? 'bajo' : 'ok'"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <template x-if="truncated">
+        <div class="scrollnote">Mostrando los primeros 200 productos. Paginá o buscá para ver más.</div>
+      </template>
+    </div>
+  </template>
+
+  <!-- add-stock modal (restock an existing product) -->
+  <div class="backdrop" x-show="modal.open" x-cloak @click.self="closeModal()"
+       role="dialog" aria-modal="true" aria-labelledby="stock-modal-title"
+       @keydown.escape.window="closeModal()">
+    <div class="modal">
+      <header>
+        <h3 id="stock-modal-title">Agregar stock</h3>
+        <button class="xbtn" @click="closeModal()" aria-label="Cerrar">&times;</button>
+      </header>
+      <form @submit.prevent="addStock()">
+        <div class="body">
+          <div class="field">
+            <label for="s-prod">Producto</label>
+            <select id="s-prod" x-model.number="modal.productId">
+              <template x-for="p in items" :key="p.product_id">
+                <option :value="p.product_id" x-text="p.name + ' (' + p.stock_qty + ' u)'"></option>
+              </template>
+            </select>
+          </div>
+          <div class="field">
+            <label for="s-qty">Unidades a agregar</label>
+            <input id="s-qty" type="number" step="1" min="1" x-model.number="modal.quantity" placeholder="0">
+          </div>
+          <div class="field">
+            <label for="s-reason">Motivo</label>
+            <input id="s-reason" type="text" x-model="modal.reason" placeholder="Reposición">
+          </div>
+        </div>
+        <div class="form-err" x-show="formError" x-cloak x-text="formError"></div>
+        <footer>
+          <button type="button" class="btn ghost" @click="closeModal()">Cancelar</button>
+          <button type="submit" class="btn" :disabled="saving" x-text="saving ? 'Guardando…' : 'Agregar'"></button>
+        </footer>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block body_scripts %}
+<script>
+function stockDashboard(opts){
+  var base = "/api/tenants/" + encodeURIComponent(opts.phone) + "/stock";
+  return {
+    phone: opts.phone,
+    items: Array.isArray(opts.initial) ? opts.initial : [],
+    threshold: opts.threshold,
+    drafts: {},
+    loading: false,
+    error: null,
+    lowOnly: false,
+    truncated: false,
+    savingRow: null,
+    modal: { open: false, productId: null, quantity: null, reason: "" },
+    saving: false,
+    formError: "",
+    writeError: "",
+
+    init: function(){ this.syncDrafts(); },
+    syncDrafts: function(){
+      var d = {};
+      this.items.forEach(function(p){ d[p.product_id] = p.stock_qty; });
+      this.drafts = d;
+      this.truncated = this.items.length >= 200;
+    },
+
+    isLow: function(qty){ return qty <= this.threshold; },
+    visible: function(){
+      if (!this.lowOnly) return this.items;
+      var t = this.threshold;
+      return this.items.filter(function(p){ return p.stock_qty <= t; });
+    },
+    changed: function(p){
+      var v = this.drafts[p.product_id];
+      return v !== "" && v !== null && v !== undefined && Number(v) >= 0 && Number(v) !== p.stock_qty;
+    },
+    countLabel: function(){
+      var n = this.items.length;
+      return n.toLocaleString("es") + (n === 1 ? " producto" : " productos");
+    },
+
+    refetch: async function(){
+      this.loading = true; this.error = null;
+      try {
+        var res = await fetch(base + "?limit=200", { headers: { "Accept": "application/json" } });
+        if (!res.ok) throw new Error("http " + res.status);
+        var rows = await res.json();
+        this.items = rows.map(function(s){
+          return { product_id: s.product_id, sku: s.sku, name: s.name, stock_qty: Number(s.stock_qty || 0) };
+        });
+        this.syncDrafts();
+      } catch (e) {
+        this.error = "load";
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    // inline adjust: the cell holds the ABSOLUTE target; the endpoint takes the
+    // SIGNED delta newQty - currentQty (the trap). delta 0 is a no-op.
+    adjust: async function(p){
+      var target = Number(this.drafts[p.product_id]);
+      // integer, non-negative; a fractional target would POST a fractional delta
+      if (!isFinite(target) || target < 0 || !Number.isInteger(target)) return;
+      var delta = target - p.stock_qty;
+      if (delta === 0) return;
+      this.savingRow = p.product_id;
+      this.writeError = "";
+      try {
+        var res = await fetch(base + "/adjust", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ product_id: p.product_id, quantity: delta, reason: "Ajuste manual" })
+        });
+        // /stock/adjust is a NON-IDEMPOTENT signed delta: on ANY failure,
+        // reconcile the cell against the true server quantity before the owner
+        // can retry, so a stale retry recomputes delta against the real base and
+        // never double-applies the same +N (council Marcus).
+        if (!res.ok) {
+          var msg = "No se pudo guardar el ajuste.";
+          try { var b = await res.json(); if (b && b.detail) msg = b.detail; } catch (e) {}
+          this.writeError = msg;
+          await this.refetch();
+          return;
+        }
+        await this.refetch();
+      } catch (e) {
+        this.writeError = "No se pudo guardar el ajuste. Revisá la conexión.";
+        await this.refetch();
+      } finally {
+        this.savingRow = null;
+      }
+    },
+
+    openAdd: function(){
+      this.modal = {
+        open: true,
+        productId: this.items.length ? this.items[0].product_id : null,
+        quantity: null, reason: ""
+      };
+      this.formError = "";
+    },
+    closeModal: function(){ this.modal.open = false; },
+    addStock: async function(){
+      this.formError = "";
+      var qty = Number(this.modal.quantity);
+      if (!this.modal.productId) { this.formError = "Elegí un producto."; return; }
+      if (!isFinite(qty) || qty <= 0) { this.formError = "Las unidades deben ser mayores a 0."; return; }
+      this.saving = true;
+      try {
+        var res = await fetch(base + "/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ product_id: this.modal.productId, quantity: qty, reason: this.modal.reason.trim() || "Reposición" })
+        });
+        if (!res.ok) {
+          var msg = "No se pudo agregar stock.";
+          try { var b = await res.json(); if (b && b.detail) msg = b.detail; } catch (e) {}
+          this.formError = msg; this.saving = false; return;
+        }
+        this.closeModal();
+        await this.refetch();
+      } catch (e) {
+        this.formError = "No se pudo agregar stock. Revisá la conexión.";
+      } finally {
+        this.saving = false;
+      }
+    }
+  };
+}
+</script>
+{% endblock %}
