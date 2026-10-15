@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#153
+
 # Spec 004: Control Center as the single owner product
 
 ## Problem
