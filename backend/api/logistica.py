@@ -19,6 +19,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from backend.api.tenant_scope import tenant_scope
 from backend.auth.dependencies import require_tenant_match
+from backend.modules import nav
 from backend.services.logistics_service import LogisticsService
 
 router = APIRouter()
@@ -74,10 +75,17 @@ async def logistica_page(
             return _build_view()
 
     view = await asyncio.to_thread(_work)
+    business_name = await asyncio.to_thread(nav.business_name, phone)
     response = templates.TemplateResponse(
         request,
         "logistica.html",
-        {"phone": phone, "view": view},
+        {
+            "phone": phone,
+            "view": view,
+            "business_name": business_name,
+            "nav": nav.owner_rail(phone),
+            "active_route": "logistica",
+        },
     )
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response

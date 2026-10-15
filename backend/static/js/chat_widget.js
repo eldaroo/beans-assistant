@@ -209,7 +209,7 @@
      * behavior so existing call sites keep working unchanged.
      */
     function buildConfig(arg) {
-        var cfg = { mode: 'tenant', phone: '', endpoint: '', dockKey: '' };
+        var cfg = { mode: 'tenant', phone: '', endpoint: '', dockKey: '', dock: '' };
         if (typeof arg === 'string') {
             cfg.phone = arg;
         } else if (arg && typeof arg === 'object') {
@@ -217,6 +217,10 @@
             if (typeof arg.phone === 'string')    cfg.phone = arg.phone;
             if (typeof arg.endpoint === 'string') cfg.endpoint = arg.endpoint;
             if (typeof arg.dockKey === 'string')  cfg.dockKey = arg.dockKey;
+            // Optional initial-dock override (spec 004 cc_base slot): 'floating'
+            // lets a surface present Timonel as a launcher rather than the
+            // pinned-open default, while still persisting the user's own choice.
+            if (arg.dock === 'pinned' || arg.dock === 'floating') cfg.dock = arg.dock;
         }
         if (!cfg.endpoint) {
             if (cfg.mode === 'onboarding') {
@@ -271,6 +275,10 @@
 
             // --- private ---
             _mode: cfg.mode,
+            // Fallback dock when the user has no persisted preference yet. The
+            // product default is pinned ("the agent is the operating surface");
+            // a surface may pass dock:'floating' to present a launcher instead.
+            _defaultDock: cfg.dock || DEFAULT_DOCK,
             _endpoint: cfg.endpoint,
             _tenantPhone: cfg.phone,
             _dockKey: cfg.dockKey,
@@ -288,7 +296,7 @@
                     // Tenant mode: read the persisted dock preference.
                     var saved = null;
                     try { saved = localStorage.getItem(this._dockKey); } catch (_) { /* no-op */ }
-                    this.docked = (saved === 'pinned' || saved === 'floating') ? saved : DEFAULT_DOCK;
+                    this.docked = (saved === 'pinned' || saved === 'floating') ? saved : this._defaultDock;
 
                     // Pinned = "I want the chat visible". Auto-open on every
                     // page load when the persisted (or default) preference is
