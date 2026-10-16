@@ -67,7 +67,7 @@
     <div class="card" style="text-align:center;padding:40px 24px;max-width:560px">
       <h2 style="margin:0 0 8px;font-size:18px;font-weight:600">Todavía no hay datos para mostrar</h2>
       <p style="color:var(--muted);margin:0 auto 20px;max-width:380px">A medida que cargues ventas, stock y gastos, cada módulo aparece como un tile acá y las alertas se arman solas.</p>
-      <a class="cta" style="max-width:260px;margin:0 auto" href="/tenants/{{ phone }}">Empezar por inventario</a>
+      <a class="cta" style="max-width:260px;margin:0 auto" href="{{ href_for('/productos/{phone}', phone) }}">Empezar por inventario</a>
     </div>
     {% else %}
     <div class="scorecard">

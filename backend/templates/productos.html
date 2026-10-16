@@ -212,6 +212,14 @@ function productosDashboard(opts){
     writeError: "",
     saving: false,
 
+    // Chat-to-screen refresh contract (spec 004 AC8): a Timonel turn that
+    // changed products refetches THIS page in place. The cc_base bridge calls
+    // window.ccRefetch on beans:refresh.
+    init: function(){
+      var self = this;
+      window.ccRefetch = function(){ self.refetch(); };
+    },
+
     // ----- money: the API speaks cents, the form speaks dollars (one place) --
     money: function(cents){
       if (cents === null || cents === undefined) return "Sin precio";
