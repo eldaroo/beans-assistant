@@ -193,7 +193,13 @@ function stockDashboard(opts){
     formError: "",
     writeError: "",
 
-    init: function(){ this.syncDrafts(); },
+    init: function(){
+      this.syncDrafts();
+      // Chat-to-screen refresh contract (spec 004 AC8): a Timonel turn that
+      // changed stock refetches THIS page in place (cc_base bridge).
+      var self = this;
+      window.ccRefetch = function(){ self.refetch(); };
+    },
     syncDrafts: function(){
       var d = {};
       this.items.forEach(function(p){ d[p.product_id] = p.stock_qty; });

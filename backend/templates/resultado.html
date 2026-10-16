@@ -171,6 +171,13 @@ function resultadoDashboard(opts){
     formError: "",
     saving: false,
 
+    // Chat-to-screen refresh contract (spec 004 AC8): a Timonel turn that
+    // changed expenses/result refetches THIS page in place (cc_base bridge).
+    init: function(){
+      var self = this;
+      window.ccRefetch = function(){ self.refetch(); };
+    },
+
     money: function(cents){
       if (cents === null || cents === undefined) return "—";
       var neg = cents < 0;

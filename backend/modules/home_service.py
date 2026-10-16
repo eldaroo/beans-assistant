@@ -50,7 +50,12 @@ SNAPSHOT_TIMEOUT_S = 10.0
 # module would queue behind the others and its result-wait would start burning
 # the SNAPSHOT_TIMEOUT_S budget, so grow this pool (and resolve the connection-
 # reuse debt eldaroo/beans-assistant#138) before registering a 9th module.
-_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cc-snapshot")
+# One worker slot per registered module (the registry holds 8 as of cohort B),
+# so no module queues behind another and total latency is the slowest module,
+# not the sum. A ninth module would queue and burn SNAPSHOT_TIMEOUT_S, so grow
+# this AND resolve the connection-reuse debt (#138) before registering a 9th.
+POOL_MAX_WORKERS = 8
+_POOL = ThreadPoolExecutor(max_workers=POOL_MAX_WORKERS, thread_name_prefix="cc-snapshot")
 
 
 @dataclass
@@ -125,8 +130,9 @@ def build_home(phone: str, modules: "list[Module] | None" = None) -> HomeView:
     mods = list(modules) if modules is not None else registry.all_modules()
     mods = sorted(mods, key=lambda m: m.order)
 
+    started = time.monotonic()
     futures = [(m, _POOL.submit(m.snapshot, phone)) for m in mods]
-    deadline = time.monotonic() + SNAPSHOT_TIMEOUT_S
+    deadline = started + SNAPSHOT_TIMEOUT_S
     snaps: "list[tuple[Module, ModuleSnapshot | None]]" = []
     for m, fut in futures:
         remaining = max(0.0, deadline - time.monotonic())
@@ -138,6 +144,19 @@ def build_home(phone: str, modules: "list[Module] | None" = None) -> HomeView:
         except Exception:
             logger.exception("snapshot failed for module %s", m.id)
             snaps.append((m, None))
+
+    # Perf guard (spec 004 AC10 / T-013): one observable line per home build so
+    # the eighth-concurrent-snapshot budget is measurable at production latency
+    # without a profiler. `degraded` names the modules that timed out or raised;
+    # a non-empty set on a healthy tenant is the pool-saturation signal the AC
+    # says to file against eldaroo/beans-assistant#138 — never silenced by
+    # inflating a snapshot or raising SNAPSHOT_TIMEOUT_S.
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    degraded = [m.id for m, snap in snaps if snap is None]
+    logger.info(
+        "build_home modules=%d elapsed_ms=%.0f budget_ms=%.0f pool_workers=%d degraded=%s",
+        len(mods), elapsed_ms, SNAPSHOT_TIMEOUT_S * 1000.0, POOL_MAX_WORKERS, degraded or "none",
+    )
 
     tiles = [_tile_from(m, snap) for m, snap in snaps]
     attention = attention_service.aggregate(
