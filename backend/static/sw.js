@@ -1,9 +1,9 @@
-// Bitácora AI service worker.
+// Beans Command Center service worker.
 // Minimal + conservative: it exists to make the app installable (a fetch
 // handler is required for the install prompt) and to serve our static assets
 // offline. It deliberately does NOT cache HTML / authenticated responses, so
 // a logged-in page is never served stale or to the wrong user.
-const CACHE = "bitacora-static-v1";
+const CACHE = "beans-cc-static-v1";
 const ASSETS = [
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
