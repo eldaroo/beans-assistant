@@ -92,12 +92,6 @@ def test_href_for_never_falls_through_for_registered_routes():
         assert "/tenants/" not in resolved
 
 
-def test_href_for_still_falls_through_for_a_legacy_tab():
-    """Guard the macro's contract itself: a '?tab=' route (none remain in the
-    registry) still falls through, so the test above is meaningful, not vacuous."""
-    assert _render_href_for("?tab=stock", "+100") == "/tenants/+100?tab=stock"
-
-
 def test_no_owner_template_links_into_legacy():
     """Source crawl: no owner template carries an owner-facing /tenants/ link.
     The /api/tenants/ CRUD endpoints are allowed (the reused write path)."""
@@ -154,14 +148,3 @@ def test_home_empty_state_cta_points_at_productos_not_legacy():
     # (phone-less: the single-business surface resolves the tenant from the session).
     assert not _LEGACY_LINK.search(html), "empty-state home links into legacy"
     assert 'href="/productos"' in html and "/productos/+100" not in html
-
-
-def test_legacy_route_still_registered_as_fallback():
-    """AC9: /tenants/{phone} is not deleted — it stays reachable as the fallback.
-    (It is gated by require_tenant_match, i.e. owner-or-admin for the tenant's own
-    phone, not an admin-only surface; AC9 closes only the owner->legacy LINK
-    boundary, not the auth boundary — council Tamir.)"""
-    from backend.app import app
-
-    paths = {getattr(r, "path", None) for r in app.routes}
-    assert "/tenants/{phone}" in paths

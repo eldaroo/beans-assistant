@@ -29,7 +29,7 @@ def _nav():
         def __init__(self, label, items):
             self.label, self.items = label, items
 
-    return [_Group("Operación", [_Tile("stock", "Stock", "?tab=stock"), _Tile("ventas", "Ventas", "/ventas/{phone}")])]
+    return [_Group("Operación", [_Tile("stock", "Stock", "/stock/{phone}"), _Tile("ventas", "Ventas", "/ventas/{phone}")])]
 
 
 def test_base_file_exists_and_carries_the_shell():
@@ -71,7 +71,7 @@ def test_base_renders_held_rail_from_nav_with_active_current():
     assert '<p id="x">hola</p>' in html
     assert 'href="/home"' in html and 'aria-current="true"' in html  # Inicio current
     assert ">Stock<" in html and ">Ventas<" in html                       # rail items
-    assert "/tenants/+100?tab=stock" in html                              # legacy tab still falls through
+    assert "/stock" in html                                               # absolute route, phone-less
     assert "/ventas" in html                                              # absolute route, phone-less
     assert 'railsep">Operación' in html
 

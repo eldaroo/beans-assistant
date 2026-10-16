@@ -79,30 +79,20 @@ async def google_callback(request: Request):
     try:
         user = auth.authorize_google_email(email)
     except UserNotAuthorizedError:
-        # Self-service onboarding: emit a pending session and send the user to
-        # the Timonel onboarding flow. The pending session grants no access to
-        # /admin or /tenants/{phone} (see auth/dependencies.py).
-        logger.info(f"google_callback: unauthorized email {email}, starting onboarding")
-        pending_token = auth.issue_pending_session(
-            email=email,
-            name=userinfo.get("name") or userinfo.get("given_name") or "",
-            picture=userinfo.get("picture") or "",
+        # Invite-only: an unauthorized email is sent back to the login with a
+        # clear message, not into an onboarding flow (retired with the
+        # single-business pivot).
+        logger.info(f"google_callback: unauthorized email {email}")
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Tu cuenta no está autorizada. Escribinos para pedir acceso."},
+            status_code=status.HTTP_403_FORBIDDEN,
         )
-        response = RedirectResponse(url="/onboarding", status_code=status.HTTP_302_FOUND)
-        response.set_cookie(
-            key=SESSION_COOKIE_NAME,
-            value=pending_token,
-            max_age=auth.pending_ttl_seconds,
-            **_cookie_kwargs(),
-        )
-        return response
 
     session_token = auth.issue_session(user)
-    if user["role"] == "admin":
-        redirect_path = "/admin"
-    else:
-        redirect_path = f"/tenants/{user['phone_number']}"
-    response = RedirectResponse(url=redirect_path, status_code=status.HTTP_302_FOUND)
+    # One surface: everyone lands on the Control Center home (phone-less; the
+    # single-business middleware resolves the tenant from the session).
+    response = RedirectResponse(url="/home", status_code=status.HTTP_302_FOUND)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_token,
