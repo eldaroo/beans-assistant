@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores, productos, stock_page
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores, productos, stock_page, ventas, resultado
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -91,6 +91,10 @@ app.include_router(home.router, tags=["Control Center"])
 app.include_router(productos.router, tags=["Control Center"])
 # Stock module page (spec 004 S3, T-007). Owner-gated inside the router.
 app.include_router(stock_page.router, tags=["Control Center"])
+# Ventas module page (spec 004 S4, T-008/T-009). Owner-gated inside the router.
+app.include_router(ventas.router, tags=["Control Center"])
+# Resultado module page (spec 004 S5, T-010). Owner-gated inside the router.
+app.include_router(resultado.router, tags=["Control Center"])
 # Costos module drill-down (spec 003 M2). Owner-gated inside the router.
 app.include_router(costos.router, tags=["Control Center"])
 # Produccion module drill-down (spec 003 M3). Owner-gated inside the router.

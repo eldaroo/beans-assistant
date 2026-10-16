@@ -19,7 +19,9 @@ from backend.modules.formatting import usd_from_dollars
 from backend.modules.protocol import STATUS_EMPTY, STATUS_OK, Headline, ModuleSnapshot
 from backend.services.analytics_service import AnalyticsService
 
-_ROUTE = "?tab=expenses"
+# Repointed to the dedicated Resultado page (spec 004 S5 / T-010); the legacy
+# ?tab=expenses route was the mislabel (Resultado opened the gastos form).
+_ROUTE = "/resultado/{phone}"
 _service = AnalyticsService()
 
 
