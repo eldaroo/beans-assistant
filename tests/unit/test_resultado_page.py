@@ -54,7 +54,7 @@ def test_renders_shell_and_active_resultado_item_on_absolute_route():
     html = _render(100000, [_expense()])
     assert 'class="rail"' in html and 'class="tim-launch"' in html
     # the Resultado (caja) rail item is current and links to the NEW page
-    assert 'aria-current="true" href="/resultado/+100"' in html
+    assert 'aria-current="true" href="/resultado"' in html
     assert "?tab=expenses" not in html
 
 

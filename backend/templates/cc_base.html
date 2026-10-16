@@ -123,7 +123,7 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 <div class="app">
   <nav class="rail" aria-label="Módulos">
     <div class="railbrand"><span class="raildot"></span><span>{{ business_name }}<br><small>control center</small></span></div>
-    <a class="railitem"{% if active_route is defined and active_route == 'home' %} aria-current="true"{% endif %} href="/home/{{ phone }}">Inicio</a>
+    <a class="railitem"{% if active_route is defined and active_route == 'home' %} aria-current="true"{% endif %} href="/home">Inicio</a>
     {% for group in (nav if nav is defined else []) %}
       {% if group.label %}<div class="railsep">{{ group.label }}</div>{% endif %}
       {% for tile in group.items %}

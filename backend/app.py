@@ -121,6 +121,33 @@ app.include_router(
 app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"], dependencies=[Depends(require_internal_or_admin)])
 
 
+# ---------------------------------------------------------------------------
+# Single-business surface (2026-10-16): Beans&Co is operated as ONE business, so
+# the owner never sees a phone in the URL. The multi-tenant kernel underneath is
+# untouched and reversible — these phone-less paths resolve the business from the
+# session cookie and rewrite internally to the existing tenant-scoped page routes,
+# so the browser URL stays clean (/home, /productos, ...) while the real handler
+# and require_tenant_match run exactly as before.
+_PHONELESS_CC_PATHS = {
+    "/home", "/productos", "/stock", "/ventas", "/resultado",
+    "/costos", "/produccion", "/logistica", "/proveedores",
+}
+
+
+@app.middleware("http")
+async def single_business_phoneless(request: Request, call_next):
+    path = request.scope.get("path", "")
+    if path in _PHONELESS_CC_PATHS:
+        user = get_session_user(request)
+        if not user or user.get("kind") == "pending" or not user.get("phone_number"):
+            # Not an authenticated owner: bounce a page navigation to login rather
+            # than 404 the clean path (the tenant-scoped route would 401 anyway).
+            return RedirectResponse(url="/login", status_code=302)
+        rewritten = f"{path}/{user['phone_number']}"
+        request.scope["path"] = rewritten
+        request.scope["raw_path"] = rewritten.encode("utf-8")
+    return await call_next(request)
+
 
 # HTML Routes
 @app.exception_handler(StarletteHTTPException)
@@ -157,10 +184,9 @@ async def root(request: Request):
         return RedirectResponse(url="/onboarding", status_code=302)
     if user.get("role") == "admin":
         return RedirectResponse(url="/admin", status_code=302)
-    phone = user.get("phone_number")
-    # Owner landing is the Control Center status home (M1). The prior dashboard
-    # at /tenants/{phone} stays reachable and unchanged (AC5, additive).
-    return RedirectResponse(url=f"/home/{phone}", status_code=302)
+    # Owner landing is the Control Center home. Phone-less: the single-business
+    # middleware resolves the tenant from the session, so no phone in the URL.
+    return RedirectResponse(url="/home", status_code=302)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)

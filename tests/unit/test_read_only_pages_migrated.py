@@ -51,9 +51,9 @@ def test_page_renders_shell_rail_timonel_and_active_item(tpl):
     assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
     assert ">Costos<" in html and ">Stock<" in html and ">Ventas semana<" in html
     # this page's own rail item is current, linking to its absolute route
-    assert 'aria-current="true" href="/%s/+100"' % active in html
+    assert 'aria-current="true" href="/%s"' % active in html
     # back-link preserved (content-level self-regression) + Inicio in rail
-    assert "Volver al inicio" in html and 'href="/home/+100"' in html
+    assert "Volver al inicio" in html and 'href="/home"' in html
 
 
 def test_owner_rail_is_snapshot_free():

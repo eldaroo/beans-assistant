@@ -52,7 +52,7 @@ def test_renders_shell_rail_timonel_and_active_item():
     assert 'class="rail"' in html and 'id="themebtn"' in html
     assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
     # this page's own rail item is current, linking to its absolute route
-    assert 'aria-current="true" href="/productos/+100"' in html
+    assert 'aria-current="true" href="/productos"' in html
 
 
 def test_seeds_products_and_carries_the_crud_factory():

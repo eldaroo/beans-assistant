@@ -139,7 +139,7 @@ def test_home_populated_has_no_legacy_link():
         nav=nav.owner_rail("+100"), active_route="home",
     )
     assert not _LEGACY_LINK.search(html), "populated home links into legacy"
-    assert "/stock/+100" in html  # tile route resolved absolute
+    assert 'href="/stock"' in html and "/stock/+100" not in html  # tile route phone-less
 
 
 def test_home_empty_state_cta_points_at_productos_not_legacy():
@@ -150,9 +150,10 @@ def test_home_empty_state_cta_points_at_productos_not_legacy():
     )
     # The empty-state card renders (the only place the legacy CTA used to live).
     assert "Empezar por inventario" in html
-    # It no longer links to the legacy base, it opens the native Productos page.
+    # It no longer links to the legacy base, it opens the native Productos page
+    # (phone-less: the single-business surface resolves the tenant from the session).
     assert not _LEGACY_LINK.search(html), "empty-state home links into legacy"
-    assert "/productos/+100" in html
+    assert 'href="/productos"' in html and "/productos/+100" not in html
 
 
 def test_legacy_route_still_registered_as_fallback():
