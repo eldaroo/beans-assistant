@@ -1,0 +1,341 @@
+{#- Ventas page (spec 004, S4, T-008 + T-009), built on cc_base.html. One Alpine
+   factory (ventasDashboard) over the existing /api/tenants/{phone}/sales
+   endpoints: list, cancel (DELETE), view-detail (GET /sales/{id}, not an alert),
+   and a built line-item record-sale (POST /sales, against the existing
+   SaleCreate contract). No endpoint rewrite, no second write path. The brand/
+   rail/theme/Timonel come from the base; the Ventas tile is repointed to
+   /ventas/{phone} in the registry so it no longer bounces to the legacy tab.
+   x-data is SINGLE-quoted (the tojson seed holds double quotes). (council Tamir) -#}
+{% extends "cc_base.html" %}
+{% block title %}Ventas · {{ business_name }}{% endblock %}
+{% block page_css %}
+.wrap{max-width:1040px;margin:0 auto;padding:12px 2px 64px}
+.ph{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+.ph .count{color:var(--muted);font-size:14px;margin-top:2px}
+.btn{font:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:10px 16px;min-height:44px;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{background:var(--accent-hover)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.ghost{background:var(--card);color:var(--text);border:1px solid var(--line)}
+.btn.ghost:hover{border-color:var(--line-hover);background:var(--bg)}
+.btn.sm{min-height:36px;padding:7px 12px;font-size:12.5px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.card-table{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-card)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:13px 16px;font-size:13.5px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;background:var(--bg)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--bg)}
+td.sku{font-family:var(--mono);font-size:12px}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.pill{font-size:11.5px;padding:3px 9px;border-radius:999px;background:var(--good-soft);color:var(--good);font-weight:600}
+.pill.pending{background:var(--warn-soft);color:var(--warn)}
+.pill.cancelled{background:var(--bg);color:var(--muted)}
+.rowact{display:flex;gap:6px;justify-content:flex-end}
+.iconbtn{font:inherit;font-size:12.5px;cursor:pointer;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:7px 10px;min-height:36px;display:inline-flex;align-items:center;gap:5px}
+.iconbtn:hover{border-color:var(--accent);color:var(--accent)}
+.iconbtn.del:hover{border-color:var(--danger);color:var(--danger)}
+.iconbtn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.banner{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-size:13.5px}
+.banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:var(--text)}
+.banner button{color:var(--accent);font-weight:600;background:none;border:0;cursor:pointer;font:inherit;margin-left:auto}
+.skel-row{height:46px;border-bottom:1px solid var(--line)}
+h1.page{font-size:24px;font-weight:700;margin:0;letter-spacing:-.02em}
+.backdrop{position:fixed;inset:0;background:rgba(16,24,40,.45);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.modal{background:var(--card);border-radius:12px;width:100%;max-width:560px;box-shadow:var(--shadow-strip);border:1px solid var(--line);max-height:calc(100dvh - 32px);display:flex;flex-direction:column}
+.modal header{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line)}
+.modal header h3{margin:0;font-size:16px;font-weight:600}
+.xbtn{background:var(--bg);border:1px solid var(--line);border-radius:8px;width:36px;height:36px;cursor:pointer;color:var(--muted);font-size:16px}
+.xbtn:hover{color:var(--danger);border-color:var(--danger)}
+.modal .body{padding:18px;display:grid;gap:14px;overflow-y:auto}
+.field label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:5px}
+.field input,.field select{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);min-height:44px}
+.field input:focus,.field select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.line{display:grid;grid-template-columns:1fr 80px auto auto;gap:8px;align-items:center}
+.line .lt{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted);white-space:nowrap}
+.detail-items{list-style:none;margin:0;padding:0}
+.detail-items li{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--line);font-size:13.5px}
+.detail-items .nm .s2{display:block;color:var(--muted);font-size:12px;font-family:var(--mono)}
+.detail-total{display:flex;justify-content:space-between;font-weight:600;padding-top:12px;border-top:2px solid var(--line);margin-top:4px}
+.modal footer{padding:14px 18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px}
+.modal footer .tot{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
+.form-err{color:var(--danger);font-size:13px;padding:0 18px 4px}
+@media(max-width:720px){th.hide-m,td.hide-m{display:none}.ph{flex-direction:column}.ph .btn{width:100%;justify-content:center}.line{grid-template-columns:1fr 64px auto}.line .lt{display:none}}
+{% endblock %}
+{% block content %}
+<div class="wrap" x-data='ventasDashboard({ phone: {{ phone | tojson }}, initial: {{ view.sales | tojson }}, products: {{ view.products | tojson }} })'>
+  <div class="ph">
+    <div>
+      <h1 class="page">Ventas</h1>
+      <div class="count" x-text="countLabel()"></div>
+    </div>
+    <button class="btn" @click="openCreate()" :disabled="products.length === 0">+ Registrar venta</button>
+  </div>
+
+  <template x-if="error === 'load'">
+    <div class="banner err" role="alert"><span>&#9888;</span><span>No pudimos cargar las ventas. El servidor no respondió.</span><button @click="refetch()">Reintentar</button></div>
+  </template>
+  <template x-if="writeError">
+    <div class="banner err" role="alert"><span>&#9888;</span><span x-text="writeError"></span><button @click="writeError=''">Cerrar</button></div>
+  </template>
+
+  <template x-if="loading">
+    <div class="card-table">
+      <table><thead><tr><th>Fecha</th><th>N°</th><th class="hide-m">Cliente</th><th>Estado</th><th>Total</th><th></th></tr></thead></table>
+      <template x-for="i in 5" :key="i"><div class="cc-skeleton skel-row"></div></template>
+    </div>
+  </template>
+
+  <template x-if="!loading && !error && sales.length === 0">
+    <div class="card-table"><div class="cc-empty">
+      <h2>Todavía no registraste ventas</h2>
+      <p>Registrá tu primera venta para verla acá y que impacte en el stock y el resultado.</p>
+      <button class="btn" style="margin-top:14px" @click="openCreate()" :disabled="products.length === 0">+ Registrar la primera</button>
+    </div></div>
+  </template>
+
+  <template x-if="!loading && !error && sales.length > 0">
+    <div class="card-table">
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>N°</th><th class="hide-m">Cliente</th><th>Estado</th>
+          <th style="text-align:right">Total</th><th style="text-align:right">Acciones</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="s in sales" :key="s.id">
+            <tr>
+              <td x-text="s.created_at"></td>
+              <td class="sku" x-text="s.sale_number"></td>
+              <td class="hide-m" x-text="s.customer_name || '—'"></td>
+              <td><span class="pill" :class="statusClass(s.status)" x-text="statusLabel(s.status)"></span></td>
+              <td class="num" x-text="money(s.total_amount_cents)"></td>
+              <td>
+                <div class="rowact">
+                  <button class="iconbtn" @click="openDetail(s)" :aria-label="'Ver detalle de ' + s.sale_number">Ver detalle</button>
+                  <button class="iconbtn del" @click="cancel(s)" x-show="s.status !== 'CANCELLED'" :aria-label="'Cancelar ' + s.sale_number">Cancelar</button>
+                </div>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </template>
+
+  <!-- detail modal: populated from GET /sales/{id} (not an alert) -->
+  <div class="backdrop" x-show="detail.open" x-cloak @click.self="detail.open=false" role="dialog" aria-modal="true" aria-labelledby="vd-title" @keydown.escape.window="detail.open=false">
+    <div class="modal">
+      <header>
+        <h3 id="vd-title" x-text="detail.sale ? ('Venta ' + detail.sale.sale_number) : 'Detalle de venta'"></h3>
+        <button class="xbtn" @click="detail.open=false" aria-label="Cerrar">&times;</button>
+      </header>
+      <div class="body">
+        <template x-if="detail.loading"><p style="color:var(--muted)">Cargando detalle…</p></template>
+        <template x-if="!detail.loading && detail.sale">
+          <div>
+            <div class="field" style="margin:0 0 6px"><span style="color:var(--muted);font-size:12.5px" x-text="(detail.sale.customer_name ? ('Cliente: ' + detail.sale.customer_name + ' · ') : '') + (detail.sale.created_at || '').slice(0, 10)"></span></div>
+            <ul class="detail-items">
+              <template x-for="(it, idx) in (detail.sale.items || [])" :key="idx">
+                <li>
+                  <span class="nm">
+                    <span x-text="it.quantity + ' x ' + (it.product_name || 'producto')"></span>
+                    <span class="s2" x-text="it.product_sku"></span>
+                  </span>
+                  <span class="num" x-text="money(it.line_total_cents)"></span>
+                </li>
+              </template>
+            </ul>
+            <div class="detail-total"><span>Total</span><span class="num" x-text="money(detail.sale.total_amount_cents)"></span></div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- record-sale modal: built, line-item POST /sales -->
+  <div class="backdrop" x-show="create.open" x-cloak @click.self="create.open=false" role="dialog" aria-modal="true" aria-labelledby="vc-title" @keydown.escape.window="create.open=false">
+    <div class="modal">
+      <header>
+        <h3 id="vc-title">Registrar venta</h3>
+        <button class="xbtn" @click="create.open=false" aria-label="Cerrar">&times;</button>
+      </header>
+      <form @submit.prevent="saveSale()" style="display:flex;flex-direction:column;min-height:0">
+        <div class="body">
+          <div class="two">
+            <div class="field">
+              <label for="v-cust">Cliente (opcional)</label>
+              <input id="v-cust" type="text" x-model="create.customer_name" placeholder="Nombre">
+            </div>
+            <div class="field">
+              <label for="v-status">Estado</label>
+              <select id="v-status" x-model="create.status">
+                <option value="PAID">Pagada</option>
+                <option value="PENDING">Pendiente</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:12.5px;color:var(--muted);margin-bottom:6px">Ítems</label>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <template x-for="(ln, idx) in create.lines" :key="idx">
+                <div class="line">
+                  <select x-model.number="ln.product_id" :aria-label="'Producto del ítem ' + (idx+1)">
+                    <option :value="null">Elegí un producto</option>
+                    <template x-for="p in products" :key="p.id"><option :value="p.id" x-text="p.name"></option></template>
+                  </select>
+                  <input type="number" min="1" step="1" x-model.number="ln.quantity" :aria-label="'Cantidad del ítem ' + (idx+1)">
+                  <span class="lt" x-text="lineTotal(ln)"></span>
+                  <button type="button" class="iconbtn del" @click="removeLine(idx)" x-show="create.lines.length > 1" aria-label="Quitar ítem">&times;</button>
+                </div>
+              </template>
+            </div>
+            <button type="button" class="btn ghost sm" style="margin-top:10px" @click="addLine()">+ Agregar ítem</button>
+          </div>
+        </div>
+        <div class="form-err" x-show="create.error" x-cloak x-text="create.error"></div>
+        <footer>
+          <span class="tot" x-text="'Total estimado: ' + estimatedTotal()"></span>
+          <span style="display:flex;gap:10px">
+            <button type="button" class="btn ghost" @click="create.open=false">Cancelar</button>
+            <button type="submit" class="btn" :disabled="create.saving" x-text="create.saving ? 'Guardando…' : 'Registrar'"></button>
+          </span>
+        </footer>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block body_scripts %}
+<script>
+function ventasDashboard(opts){
+  var base = "/api/tenants/" + encodeURIComponent(opts.phone) + "/sales";
+  return {
+    phone: opts.phone,
+    sales: Array.isArray(opts.initial) ? opts.initial : [],
+    products: Array.isArray(opts.products) ? opts.products : [],
+    loading: false,
+    error: null,
+    writeError: "",
+    detail: { open: false, sale: null, loading: false },
+    create: { open: false, customer_name: "", status: "PAID", lines: [{ product_id: null, quantity: 1 }], saving: false, error: "" },
+
+    money: function(cents){
+      if (cents === null || cents === undefined) return "—";
+      return "$" + (cents / 100).toFixed(2);
+    },
+    productById: function(id){ return this.products.find(function(p){ return p.id === id; }); },
+    lineTotal: function(ln){
+      var p = this.productById(ln.product_id);
+      if (!p || p.unit_price_cents === null || p.unit_price_cents === undefined) return "";
+      var q = Number(ln.quantity) || 0;
+      return this.money(p.unit_price_cents * q);
+    },
+    estimatedTotal: function(){
+      var c = 0, known = true;
+      var self = this;
+      this.create.lines.forEach(function(ln){
+        var p = self.productById(ln.product_id);
+        if (!p || p.unit_price_cents === null || p.unit_price_cents === undefined) { if (ln.product_id) known = false; return; }
+        c += p.unit_price_cents * (Number(ln.quantity) || 0);
+      });
+      return known ? this.money(c) : this.money(c) + " +";
+    },
+    statusLabel: function(s){ return s === "PAID" ? "pagada" : (s === "PENDING" ? "pendiente" : "cancelada"); },
+    statusClass: function(s){ return s === "PAID" ? "" : (s === "PENDING" ? "pending" : "cancelled"); },
+    countLabel: function(){
+      var n = this.sales.length;
+      return n.toLocaleString("es") + (n === 1 ? " venta" : " ventas");
+    },
+
+    refetch: async function(){
+      this.loading = true; this.error = null;
+      try {
+        var res = await fetch(base + "?limit=50", { headers: { "Accept": "application/json" } });
+        if (!res.ok) throw new Error("http " + res.status);
+        var rows = await res.json();
+        this.sales = rows.map(function(s){
+          return {
+            id: s.id, sale_number: s.sale_number, status: s.status,
+            total_amount_cents: s.total_amount_cents, customer_name: s.customer_name || "",
+            created_at: (s.created_at || "").slice(0, 10),
+            items: (s.items || []).map(function(it){ return {
+              product_name: it.product_name || "producto", product_sku: it.product_sku || "",
+              quantity: it.quantity, unit_price_cents: it.unit_price_cents, line_total_cents: it.line_total_cents }; })
+          };
+        });
+      } catch (e) { this.error = "load"; } finally { this.loading = false; }
+    },
+
+    openDetail: async function(s){
+      this.detail = { open: true, sale: null, loading: true };
+      try {
+        var res = await fetch(base + "/" + s.id, { headers: { "Accept": "application/json" } });
+        if (!res.ok) { this.detail.loading = false; this.detail.sale = s; return; }
+        this.detail.sale = await res.json();
+      } catch (e) {
+        this.detail.sale = s;   // fall back to the row we already have
+      } finally {
+        this.detail.loading = false;
+      }
+    },
+
+    cancel: async function(s){
+      if (!confirm('Cancelar la venta ' + s.sale_number + '? Si estaba pagada, se repone el stock.')) return;
+      this.writeError = "";
+      try {
+        var res = await fetch(base + "/" + s.id, { method: "DELETE", headers: { "Accept": "application/json" } });
+        if (!res.ok) {
+          var msg = "No se pudo cancelar la venta.";
+          try { var b = await res.json(); if (b && b.detail) msg = b.detail; } catch (e) {}
+          this.writeError = msg; await this.refetch(); return;
+        }
+        await this.refetch();
+      } catch (e) { this.writeError = "No se pudo cancelar la venta. Revisá la conexión."; }
+    },
+
+    openCreate: function(){
+      this.create = { open: true, customer_name: "", status: "PAID", lines: [{ product_id: null, quantity: 1 }], saving: false, error: "" };
+    },
+    addLine: function(){ this.create.lines.push({ product_id: null, quantity: 1 }); },
+    removeLine: function(i){ this.create.lines.splice(i, 1); if (this.create.lines.length === 0) this.addLine(); },
+
+    saveSale: async function(){
+      if (this.create.saving) return;   // reentrancy guard: POST /sales is not idempotent
+      this.create.error = "";
+      var self = this;
+      var items = this.create.lines
+        .filter(function(ln){ return ln.product_id && Number(ln.quantity) > 0; })
+        .map(function(ln){ return { product_id: ln.product_id, quantity: Number(ln.quantity) }; });
+      if (items.length === 0) { this.create.error = "Agregá al menos un ítem con producto y cantidad."; return; }
+      // A product with no catalog price would 500 at the server (no price to
+      // multiply); block it here with a clear message instead (council Amelia).
+      var unknownPrice = this.create.lines.some(function(ln){
+        if (!ln.product_id || !(Number(ln.quantity) > 0)) return false;
+        var p = self.productById(ln.product_id);
+        return !p || p.unit_price_cents === null || p.unit_price_cents === undefined;
+      });
+      if (unknownPrice) { this.create.error = "Uno de los productos elegidos no tiene precio cargado. Cargá su precio en Productos antes de venderlo."; return; }
+      this.create.saving = true;
+      try {
+        var res = await fetch(base, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ status: this.create.status, customer_name: this.create.customer_name.trim() || null, items: items })
+        });
+        if (!res.ok) {
+          var msg = "No se pudo registrar la venta.";
+          try { var b = await res.json(); if (b && b.detail) msg = b.detail; } catch (e) {}
+          this.create.error = msg; this.create.saving = false; return;
+        }
+        this.create.open = false;
+        await this.refetch();
+      } catch (e) {
+        this.create.error = "No se pudo registrar la venta. Revisá la conexión.";
+      } finally {
+        this.create.saving = false;
+      }
+    }
+  };
+}
+</script>
+{% endblock %}

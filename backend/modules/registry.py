@@ -28,10 +28,13 @@ from backend.modules.providers import (
 GROUP_OPERATION = "Operación"
 
 _MODULES: "list[Module]" = [
+    # Resultado (spec 004 S5 / T-010): repointed from the legacy ?tab=expenses
+    # bounce (the mislabel: "Resultado" opened the gastos form) to its own
+    # /resultado/{phone} page showing ingresos, gastos, and ganancia.
     Module(
         id="caja",
         label="Resultado",
-        route="?tab=expenses",
+        route="/resultado/{phone}",
         snapshot=caja_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=10,
@@ -61,10 +64,12 @@ _MODULES: "list[Module]" = [
         rail_group=GROUP_OPERATION,
         order=20,
     ),
+    # Ventas (spec 004 S4 / T-008): repointed from the legacy ?tab=sales bounce
+    # to its own /ventas/{phone} page (list, cancel, view-detail, record-sale).
     Module(
         id="ventas",
         label="Ventas semana",
-        route="?tab=sales",
+        route="/ventas/{phone}",
         snapshot=ventas_module.snapshot,
         rail_group=GROUP_OPERATION,
         order=30,

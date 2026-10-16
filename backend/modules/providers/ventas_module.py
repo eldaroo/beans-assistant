@@ -14,7 +14,8 @@ from backend.modules.formatting import usd_from_cents
 from backend.modules.protocol import STATUS_EMPTY, STATUS_OK, Headline, ModuleSnapshot
 from backend.services.analytics_service import AnalyticsService
 
-_ROUTE = "?tab=sales"
+# Repointed to the dedicated Ventas page (spec 004 S4 / T-008).
+_ROUTE = "/ventas/{phone}"
 _WINDOW_DAYS = 7
 _service = AnalyticsService()
 
