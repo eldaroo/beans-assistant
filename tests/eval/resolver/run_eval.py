@@ -176,10 +176,11 @@ def _parse_args() -> argparse.Namespace:
              "exits with code 2."
     )
     parser.add_argument(
-        "--llm", choices=("none", "gemini"), default="none",
+        "--llm", choices=("none", "gemini", "gateway"), default="none",
         help="'none' (default) skips llm_required cases. 'gemini' loads "
-             "get_llm_cheap() (Gemini 2.5 Flash) and runs all cases. "
-             "Requires GOOGLE_API_KEY in env."
+             "get_llm_cheap() (Gemini 2.5 Flash) and runs all cases (requires GOOGLE_API_KEY). "
+             "'gateway' (spec 005) runs the LLM fallback on the Claude subscription gateway "
+             "(requires BEANS_AI_SHARED_SECRET + a reachable gateway)."
     )
     return parser.parse_args()
 
@@ -187,7 +188,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     n_runs = max(1, args.n_runs)
-    use_llm = args.llm == "gemini"
+    use_llm = args.llm in ("gemini", "gateway")
 
     sys.path.insert(0, str(REPO_ROOT))
     import os
@@ -197,7 +198,12 @@ def main() -> int:
         # Force temperature=0 BEFORE importing llm.py — same discipline as
         # tests/eval/router/run_eval.py. The factory reads the env var.
         os.environ["GEMINI_TEMPERATURE"] = "0"
-        if not os.getenv("GOOGLE_API_KEY"):
+        if args.llm == "gateway":
+            os.environ["TIMONEL_LLM_BACKEND"] = "gateway"
+            if not os.getenv("BEANS_AI_SHARED_SECRET"):
+                print("ERROR: --llm gateway requires BEANS_AI_SHARED_SECRET in environment.", file=sys.stderr)
+                return 3
+        elif not os.getenv("GOOGLE_API_KEY"):
             print("ERROR: --llm gemini requires GOOGLE_API_KEY in environment.", file=sys.stderr)
             return 3
 

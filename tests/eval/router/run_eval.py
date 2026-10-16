@@ -200,6 +200,11 @@ def _parse_args() -> argparse.Namespace:
              "exits with code 2. Default: no threshold enforcement. "
              "PR CI uses 100; nightly typically omits this."
     )
+    parser.add_argument(
+        "--backend", choices=["gemini", "gateway"], default=None,
+        help="LLM backend (spec 005). Default: leave TIMONEL_LLM_BACKEND as-is (gemini), so CI "
+             "is unchanged. 'gateway' runs the router on the Claude subscription gateway."
+    )
     return parser.parse_args()
 
 
@@ -208,6 +213,8 @@ def main() -> int:
     n_runs = max(1, args.n_runs)
 
     _force_deterministic_env()
+    if args.backend:
+        os.environ["TIMONEL_LLM_BACKEND"] = args.backend
 
     sys.path.insert(0, str(REPO_ROOT))
     from agents.router import create_router_agent

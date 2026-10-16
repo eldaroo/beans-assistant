@@ -1,0 +1,11 @@
+{
+  "name": "beans-ai-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "beans-ai warm Claude-subscription gateway (Timonel spec 005) — jobspec, server, and offline tests.",
+  "scripts": {
+    "test": "node test.mjs",
+    "build": "node build-hcl.mjs"
+  }
+}

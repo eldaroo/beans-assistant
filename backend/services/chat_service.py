@@ -19,7 +19,11 @@ class ChatTenantNotFoundError(ValueError):
 class ChatService:
     """Encapsulates chat graph invocation and response extraction."""
 
-    _graph = None
+    # One cached graph per resolved backend (spec 005). Keying by backend is what makes the
+    # per-tenant cutover real: a tenant resolved to "gateway" gets the gateway-built graph, a
+    # tenant on "gemini" gets the gemini graph, and a global flip is picked up per request
+    # (lazily building the other backend's graph) with no process restart.
+    _graphs: dict = {}
     _context_max_turns = int(os.getenv("CHAT_CONTEXT_MAX_TURNS", "6"))
     _context_ttl_seconds = int(os.getenv("CHAT_CONTEXT_TTL_SECONDS", "1800"))
     _history_by_key: dict[str, deque[dict[str, str]]] = defaultdict(
@@ -28,10 +32,14 @@ class ChatService:
     _last_seen_by_key: dict[str, float] = {}
 
     @classmethod
-    def _get_graph(cls):
-        if cls._graph is None:
-            cls._graph = create_business_agent_graph()
-        return cls._graph
+    def _get_graph(cls, backend: str = None):
+        """Return the cached graph for `backend` (spec 005), building it on first use. backend
+        None means the global default; each distinct backend gets its own graph so a per-tenant
+        cutover routes to the right one."""
+        key = backend or "default"
+        if key not in cls._graphs:
+            cls._graphs[key] = create_business_agent_graph(backend=backend)
+        return cls._graphs[key]
 
     @staticmethod
     def _history_key(phone: str) -> str:
@@ -233,8 +241,16 @@ class ChatService:
         
         logger.info(f"_invoke_graph: START with phone={phone}, message={message[:50]}...")
         try:
-            graph = cls._get_graph()
-            logger.info(f"_invoke_graph: got graph")
+            # Resolve the backend for THIS tenant (spec 005): per-tenant override, else the global
+            # flag, else gemini. The graph cache is keyed on it so the cutover actually routes.
+            try:
+                from llm import resolve_backend
+
+                backend = resolve_backend(phone)
+            except Exception:
+                backend = None
+            graph = cls._get_graph(backend)
+            logger.info(f"_invoke_graph: got graph (backend={backend})")
             
             message_with_context = cls._build_message_with_context(phone, message)
             logger.info(f"_invoke_graph: built message with context, length={len(message_with_context)}")

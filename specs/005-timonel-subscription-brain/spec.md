@@ -1,3 +1,7 @@
+---
+date: 2026-10-15
+---
+
 # Spec 005: Timonel on the Claude subscription (our Nomad engine), replacing Gemini
 
 > Proposed 2026-10-15. Owner: Dario. Status: draft, ready to `/develop`.
@@ -130,3 +134,27 @@ This is a BACKEND SWAP, not a feature or an architecture change.
   the first place it becomes mandatory.
 - Nomad deploy mechanics + the shared subscription token live in `.qie/secrets/credentials.yaml`
   (`nomad:` block) and the `quinn-full` Nomad Variable.
+
+## Whole-problem surface
+
+```yaml
+surface:
+  - id: s-01
+    surface: "Warm Claude-subscription process in Nomad: a pool of pre-spawned stream-json children, one logical turn per child, respawn on death, one-shot fallback"
+  - id: s-02
+    surface: "Bearer-gated HTTPS gateway endpoint (POST /run, GET /health, Traefik + LE TLS, positive-allowlist secret template, isolation self-check fails closed)"
+  - id: s-03
+    surface: "Python gateway client exposing the same LangChain model interface the Gemini factory exposes; existing JsonOutputParser schemas unchanged"
+  - id: s-04
+    surface: "Reversible backend selection via the TIMONEL_LLM_BACKEND flag, global and per-tenant, with Gemini the default and the fallback"
+  - id: s-05
+    surface: "Per-call output re-validation and fallback so Timonel never hard-fails on the model path"
+  - id: s-06
+    surface: "Parity verification of the Claude path against Gemini on the known-case golden fixtures before per-tenant cutover"
+  - id: s-07
+    surface: "Live beans-ai cluster deploy, healthy and TLS, on a dedicated beans subscription token"
+    external: operator-credential eldaroo/beans-assistant#157 by:2026-10-31
+  - id: s-08
+    surface: "Live Gemini-vs-gateway parity run and a real-tenant end-to-end Timonel turn on the Claude backend"
+    external: operator-credential eldaroo/beans-assistant#158 by:2026-10-31
+```

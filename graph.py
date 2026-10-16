@@ -59,19 +59,22 @@ def _build_safe_wrappers(
     }
 
 
-def create_business_agent_graph(db_path: str = "sqlite:///beansco.db"):
+def create_business_agent_graph(db_path: str = "sqlite:///beansco.db", backend: str = None):
     """
     Create the complete multi-agent business workflow graph.
 
     Args:
         db_path: Database connection string
+        backend: LLM backend to pin for this graph (spec 005). None resolves from the global
+            TIMONEL_LLM_BACKEND flag. ChatService builds and caches one graph per backend so a
+            per-tenant cutover selects the right pre-built graph.
 
     Returns:
         Compiled LangGraph workflow
     """
-    # Initialize LLMs
-    llm = get_llm()  # Main LLM for router and read agent
-    llm_cheap = get_llm_cheap()  # Cheap LLM for resolver and decomposer
+    # Initialize LLMs (pinned to the backend this graph is built for)
+    llm = get_llm(backend=backend)  # Main LLM for router and read agent
+    llm_cheap = get_llm_cheap(backend=backend)  # Cheap LLM for resolver and decomposer
 
     # Create specialized agents
     decomposer = create_decomposer_agent(llm_cheap)
