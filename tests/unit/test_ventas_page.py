@@ -60,7 +60,7 @@ def test_extends_base_and_drops_own_doctype():
 def test_renders_shell_and_active_ventas_item_on_absolute_route():
     html = _render([_sale()], [_product()])
     assert 'class="rail"' in html and 'id="themebtn"' in html and 'class="tim-launch"' in html
-    assert 'aria-current="true" href="/ventas/+100"' in html
+    assert 'aria-current="true" href="/ventas"' in html
 
 
 def test_seeds_sales_and_carries_all_four_operations():

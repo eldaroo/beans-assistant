@@ -69,10 +69,10 @@ def test_base_renders_held_rail_from_nav_with_active_current():
     )
     html = tpl.render(business_name="Beans&Co", phone="+100", nav=_nav(), active_route="home")
     assert '<p id="x">hola</p>' in html
-    assert 'href="/home/+100"' in html and 'aria-current="true"' in html  # Inicio current
+    assert 'href="/home"' in html and 'aria-current="true"' in html  # Inicio current
     assert ">Stock<" in html and ">Ventas<" in html                       # rail items
     assert "/tenants/+100?tab=stock" in html                              # legacy tab still falls through
-    assert "/ventas/+100" in html                                         # absolute route tenant-filled
+    assert "/ventas" in html                                              # absolute route, phone-less
     assert 'railsep">Operación' in html
 
 
@@ -81,4 +81,4 @@ def test_base_renders_without_nav():
     html = _env().from_string(
         '{% extends "cc_base.html" %}{% block content %}<p>ok</p>{% endblock %}'
     ).render(business_name="Beans&Co", phone="+100")
-    assert "<p>ok</p>" in html and 'href="/home/+100"' in html
+    assert "<p>ok</p>" in html and 'href="/home"' in html

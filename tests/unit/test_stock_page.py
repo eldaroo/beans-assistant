@@ -44,7 +44,7 @@ def test_renders_shell_and_active_stock_item_on_absolute_route():
     assert 'class="rail"' in html and 'id="themebtn"' in html
     assert 'class="tim-launch"' in html
     # the Stock rail item is current and links to the NEW page, not the legacy tab
-    assert 'aria-current="true" href="/stock/+100"' in html
+    assert 'aria-current="true" href="/stock"' in html
     assert "?tab=stock" not in html
 
 

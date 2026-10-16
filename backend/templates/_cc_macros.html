@@ -1,8 +1,9 @@
 {#- Shared Control Center macros. Imported by cc_base.html (rail) and by every
    owner page that links to a module route (home tiles, attention strip, pages).
-   `href_for` mirrors the resolution the home shipped with: an absolute route
-   ('/stock/{phone}') is tenant-filled; a legacy tab ('?tab=stock') falls through
-   to the legacy /tenants/{phone} page until its cohort repoints it. -#}
+   Single-business surface: an absolute route ('/stock/{phone}') renders
+   phone-less ('/stock'). The server resolves the one business from the session,
+   so the owner never sees a phone in the URL. A legacy tab ('?tab=stock') still
+   falls through to /tenants/{phone} (dead path, kept only for the admin fallback). -#}
 {%- macro href_for(route, phone) -%}
-{%- if route.startswith('/') -%}{{ route.replace('{phone}', phone) }}{%- else -%}/tenants/{{ phone }}{{ route }}{%- endif -%}
+{%- if route.startswith('/') -%}{{ route.replace('/{phone}', '') }}{%- else -%}/tenants/{{ phone }}{{ route }}{%- endif -%}
 {%- endmacro -%}
