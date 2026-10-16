@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>{% block title %}Bitácora AI{% endblock %}</title>
+    <title>{% block title %}Beans Command Center{% endblock %}</title>
 
     <!-- PWA: installable on phones ("Instalar en el celular" on the login page). -->
     <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#6b4326">
-    <meta name="application-name" content="Bitácora AI">
+    <meta name="application-name" content="Beans Command Center">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="Bitácora">
+    <meta name="apple-mobile-web-app-title" content="Beans CC">
     <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
 
@@ -312,10 +312,10 @@
         <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between h-14">
                 <div class="flex items-center gap-3">
-                    <a href="/" class="text-xl font-bold tracking-tight text-[color:var(--color-text)]" aria-label="Bitácora AI">
-                        Bitácora <span class="text-[color:var(--color-accent)]">AI</span>
+                    <a href="/" class="text-xl font-bold tracking-tight text-[color:var(--color-text)]" aria-label="Beans Command Center">
+                        Beans Command <span class="text-[color:var(--color-accent)]">Center</span>
                     </a>
-                    <span class="hidden sm:inline text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)]">Tu negocio, anotado y al día.</span>
+                    <span class="hidden sm:inline text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)]">El centro de control de tu negocio.</span>
                 </div>
                 {% if request.state.user is defined and request.state.user %}
                 <div class="flex items-center gap-3">
@@ -341,7 +341,7 @@
     <footer class="mt-16 border-t border-[color:var(--color-border)] bg-[color:var(--color-surface)]">
         <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <p class="text-center text-xs tracking-[0.02em] text-[color:var(--color-text-subtle)]">
-                Bitácora AI · Tu negocio, anotado y al día.
+                Beans Command Center · El centro de control de tu negocio.
             </p>
         </div>
     </footer>
