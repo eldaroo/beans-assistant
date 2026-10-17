@@ -25,15 +25,15 @@ def _render(view, business_name="Beans&Co", phone="+100"):
 
 def test_renders_tiles_strip_shapes_and_tokens():
     tiles = [
-        ModuleTile("caja", "Resultado", "?tab=expenses", "USD 1.4k", "acumulado", "good", "ok", "Operación"),
-        ModuleTile("stock", "Stock", "?tab=stock", "505 u", "1 bajo", "warn", "ok", "Operación"),
-        ModuleTile("ventas", "Ventas semana", "?tab=sales", "USD 1.9k", "3 ventas", "good", "ok", "Operación"),
-        ModuleTile("costos", "Margen", "?tab=x", "—", "no disponible", "warn", "degraded", "Operación"),
+        ModuleTile("caja", "Resultado", "/resultado/{phone}", "USD 1.4k", "acumulado", "good", "ok", "Operación"),
+        ModuleTile("stock", "Stock", "/stock/{phone}", "505 u", "1 bajo", "warn", "ok", "Operación"),
+        ModuleTile("ventas", "Ventas semana", "/ventas/{phone}", "USD 1.9k", "3 ventas", "good", "ok", "Operación"),
+        ModuleTile("costos", "Margen", "/costos/{phone}", "—", "no disponible", "warn", "degraded", "Operación"),
     ]
     att = [
-        AttentionItem(Severity.HIGH, "Stock bajo: Pulsera quedan 5 u", "Reponer", "?tab=stock", "stock"),
-        AttentionItem(Severity.MID, "Algo medio", "Ver", "?tab=sales", "ventas"),
-        AttentionItem(Severity.LOW, "Nota menor", "Ver", "?tab=x", "x"),
+        AttentionItem(Severity.HIGH, "Stock bajo: Pulsera quedan 5 u", "Reponer", "/stock/{phone}", "stock"),
+        AttentionItem(Severity.MID, "Algo medio", "Ver", "/ventas/{phone}", "ventas"),
+        AttentionItem(Severity.LOW, "Nota menor", "Ver", "/costos/{phone}", "x"),
     ]
     view = HomeView(tiles=tiles, attention=att, rail_groups=_rail_groups(tiles))
     html = _render(view)
@@ -47,8 +47,8 @@ def test_renders_tiles_strip_shapes_and_tokens():
     # live tiles + honest degraded tile
     assert "505 u" in html and "USD 1.4k" in html
     assert "no disponible" in html and "degraded" in html
-    # drill-down honours the module route
-    assert "/tenants/+100?tab=stock" in html
+    # drill-down honours the module route (phone-less absolute)
+    assert 'href="/stock"' in html
     assert "Todavía no hay datos" not in html  # not empty
     # no fabricated direction arrow
     assert "▲" not in html and "&#9650;" not in html

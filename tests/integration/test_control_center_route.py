@@ -29,11 +29,11 @@ def client(monkeypatch):
 
 def _fixed_view():
     tiles = [
-        ModuleTile("caja", "Resultado", "?tab=expenses", "USD 1.4k", "acumulado", "good", "ok", "Operación"),
-        ModuleTile("stock", "Stock", "?tab=stock", "505 u", "1 producto bajo", "warn", "ok", "Operación"),
-        ModuleTile("ventas", "Ventas semana", "?tab=sales", "USD 1.9k", "3 ventas · 7 días", "good", "ok", "Operación"),
+        ModuleTile("caja", "Resultado", "/resultado/{phone}", "USD 1.4k", "acumulado", "good", "ok", "Operación"),
+        ModuleTile("stock", "Stock", "/stock/{phone}", "505 u", "1 producto bajo", "warn", "ok", "Operación"),
+        ModuleTile("ventas", "Ventas semana", "/ventas/{phone}", "USD 1.9k", "3 ventas · 7 días", "good", "ok", "Operación"),
     ]
-    att = [AttentionItem(Severity.HIGH, "Stock bajo: Pulsera quedan 5 u", "Reponer", "?tab=stock", "stock")]
+    att = [AttentionItem(Severity.HIGH, "Stock bajo: Pulsera quedan 5 u", "Reponer", "/stock/{phone}", "stock")]
     return HomeView(tiles=tiles, attention=att, rail_groups=_rail_groups(tiles))
 
 
@@ -47,8 +47,8 @@ def test_home_route_renders_200(client, monkeypatch):
     assert "control center" in body.lower()
     assert "505 u" in body and "USD 1.4k" in body and "USD 1.9k" in body
     assert "Stock bajo: Pulsera quedan 5 u" in body
-    # drill-down honours the module route (tab suffix on the dashboard)
-    assert "/tenants/+100?tab=stock" in body
+    # drill-down honours the module route (phone-less absolute)
+    assert 'href="/stock"' in body
     assert resp.headers.get("cache-control", "").startswith("no-store")
 
 

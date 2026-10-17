@@ -112,8 +112,8 @@ def test_existing_surfaces_stay_registered_and_reachable():
     paths = {getattr(r, "path", None) for r in app.routes}
     # new default landing
     assert "/home/{phone}" in paths
-    # existing owner dashboard and API surfaces still present (nothing removed)
-    assert "/tenants/{phone}" in paths
+    # the legacy /tenants dashboard was removed (single-business); API surfaces stay
+    assert "/tenants/{phone}" not in paths
     assert "/api/tenants/{phone}/stock" in paths
     assert "/api/tenants/{phone}/expenses" in paths
     assert "/" in paths

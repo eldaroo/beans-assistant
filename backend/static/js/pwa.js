@@ -1,4 +1,4 @@
-// Bitácora AI — PWA install wiring.
+// Beans Command Center PWA install wiring.
 // Registers the service worker on every page, and (where a #install-app button
 // exists, e.g. the login page) drives the "Instalar en el celular" flow:
 //   - Android/Chromium: captures beforeinstallprompt and fires the native installer.
