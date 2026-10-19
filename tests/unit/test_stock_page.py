@@ -29,7 +29,8 @@ def _render(items, threshold=20):
     rows = [{"product_id": s.product_id, "sku": s.sku, "name": s.name, "stock_qty": int(s.stock_qty)} for s in items]
     return env.get_template("stock.html").render(
         phone="+100", view={"stock": rows, "low_stock_threshold": threshold},
-        business_name="Beans&Co", nav=nav.owner_rail("+100"), active_route="stock",
+        business_name="Beans&Co", nav=nav.owner_rail("+100"),
+        tabs=nav.owner_tabs(), active_tab=nav.tab_id_for_module("stock"), active_route="stock",
     )
 
 
@@ -39,12 +40,14 @@ def test_extends_base_and_drops_own_doctype():
     assert "<!doctype html>" not in src
 
 
-def test_renders_shell_and_active_stock_item_on_absolute_route():
+def test_renders_shell_and_active_tab_on_absolute_route():
+    import re
     html = _render([_stock()])
-    assert 'class="rail"' in html and 'id="themebtn"' in html
+    assert 'class="cc-tabs"' in html and 'id="themebtn"' in html
     assert 'class="tim-launch"' in html
-    # the Stock rail item is current and links to the NEW page, not the legacy tab
-    assert 'aria-current="true" href="/stock"' in html
+    # spec 006 T-005: Stock sits under the Operación tab, selected; no legacy tab bounce
+    m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
+    assert m and 'aria-selected="true"' in m.group(0)
     assert "?tab=stock" not in html
 
 

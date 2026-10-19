@@ -5,17 +5,19 @@
    with no visible change (AC1, proven by a DOM-identity + CSS-rule-presence
    self-regression of the before/after render). Carries the modern
    Control Center design (indigo/Inter, kept per Dario's call over the panel's
-   coffee recommendation), the held nav rail, the theme toggle, the shared
-   empty-state / skeleton / page-enter components (T-002), and the Timonel chat
-   slot (T-004). Every owner page — the home and each module page — extends this
-   one base, so the brand converges once and is written once.
+   coffee recommendation), the three owner job tabs (spec 006, replacing the
+   per-module left rail), the theme toggle, the shared empty-state / skeleton /
+   page-enter components (T-002), and the Timonel chat slot (T-004). Every owner
+   page — the home and each module page — extends this one base, so the brand
+   converges once and is written once.
 
    Context an owner route passes:
-     business_name : str   — tenant display name (rail + topbar + title)
-     phone         : str   — tenant phone (routes, rail links)
-     nav           : list  — rail groups [{label, items:[{module_id,label,route}]}]
-     active_route  : str   — 'home' or a module_id, for the rail aria-current
-   The home also passes `view` (the HomeView); module pages pass their own view.
+     business_name : str   — tenant display name (topbar + title)
+     phone         : str   — tenant phone (routes, tab links)
+     tabs          : list  — nav.owner_tabs() [{id,label,count,items:[{module_id,label,route}]}]
+     active_tab    : str   — the selected tab id ('hoy'|'operacion'|'costos')
+     active_route  : str   — 'home' or a module_id (for a module page's active tab)
+   The home also passes `view` (the HomeView) and `tab_tiles`; module pages pass their own view.
 
    Blocks a page fills: title, page_css, head_extra, content, footer, chat,
    body_scripts.
@@ -59,29 +61,32 @@
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
 
-.app{display:flex;min-height:100vh;max-width:1400px;margin:0 auto}
-.rail{display:none}
-.main{flex:1;min-width:0;padding:16px}
-@media(min-width:1000px){
-  .rail{display:flex;flex-direction:column;gap:2px;width:240px;flex:0 0 240px;padding:22px 14px;border-right:1px solid var(--line)}
-  .main{padding:32px 32px 48px}
-}
-.railbrand{display:flex;align-items:center;gap:9px;font-weight:700;padding:4px 10px 18px}
-.raildot{width:22px;height:22px;border-radius:7px;background:var(--accent);display:inline-block}
-.railbrand small{color:var(--muted);font-weight:500;font-size:12px}
-.railitem{display:flex;align-items:center;gap:10px;background:transparent;border:0;border-radius:8px;padding:9px 11px;color:var(--muted);font:inherit;font-weight:500;cursor:pointer;text-align:left;min-height:40px;position:relative}
-.railitem:hover{background:var(--accent-soft);color:var(--text)}
-.railitem:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.railitem[aria-current="true"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
-.railitem[aria-current="true"]::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--accent)}
-.railsep{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;padding:14px 11px 6px;font-weight:600}
+/* Shell: a full-width topbar, the three-tab rail, and a centered content wrap
+   (spec 006 S1, ported from the approved mockup). Timonel is the collapsed
+   drawer/launcher carried by _timonel_slot.html; the content region is full
+   width at rest. */
+.cc-topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px max(16px,env(safe-area-inset-left,0px));border-bottom:1px solid var(--line);background:var(--card)}
+.cc-brand{display:flex;align-items:center;gap:9px;font-weight:700}
+.cc-brand .dot{width:22px;height:22px;border-radius:7px;background:var(--accent)}
+.cc-brand small{color:var(--muted);font-weight:500;font-size:12px;margin-left:2px}
+.cc-toolbar{margin-left:auto;display:flex;align-items:center;gap:8px}
+.cc-pill{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 13px;color:var(--muted);cursor:pointer;min-height:44px;font:inherit;font-weight:500}
+.cc-pill:hover{border-color:var(--line-hover)}
+.cc-pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
-.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-.tbbrand{display:flex;align-items:center;gap:8px;font-weight:700}
-@media(min-width:1000px){.tbbrand{display:none}}
-.sec{background:var(--card);border:1px solid var(--line);padding:7px 13px;border-radius:8px;color:var(--muted);cursor:pointer;min-height:44px;font:inherit;font-weight:500}
-.sec:hover{border-color:var(--line-hover)}
-.sec:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* Three-tab rail (AC1): Hoy, Operación, Costos y producción. Rendered from
+   nav.owner_tabs() so adding a module group adds a tab with no edit here. On the
+   home the tabs toggle panels client-side (AC6, no new query); on a module page
+   they are links back to the home with the tab preselected. */
+.cc-tabs{display:flex;gap:4px;padding:10px max(16px,env(safe-area-inset-left,0px)) 0;border-bottom:1px solid var(--line);background:var(--card);overflow-x:auto}
+.cc-tab{display:inline-flex;align-items:center;gap:8px;background:transparent;border:0;border-bottom:2px solid transparent;padding:12px 14px;color:var(--muted);font:inherit;font-weight:600;min-height:44px;white-space:nowrap;cursor:pointer}
+.cc-tab:hover{color:var(--text)}
+.cc-tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+.cc-tab:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:6px}
+.cc-tab .count{font-size:12px;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:0 7px}
+
+.cc-wrap{max-width:1320px;margin:0 auto;min-width:0;padding:22px max(16px,env(safe-area-inset-left,0px)) 64px}
+@media(min-width:1000px){.cc-wrap{padding:32px 32px 64px}}
 
 h1.page{font-size:28px;font-weight:700;margin:2px 0 2px;letter-spacing:-.01em}
 .sub{color:var(--muted);margin:0 0 24px}
@@ -119,30 +124,29 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 {% block head_extra %}{% endblock %}
 </head>
-<body data-cc-phone="{{ phone }}" data-cc-route="{% if active_route is defined %}{{ active_route }}{% endif %}">
-<div class="app">
-  <nav class="rail" aria-label="Módulos">
-    <div class="railbrand"><span class="raildot"></span><span>{{ business_name }}<br><small>control center</small></span></div>
-    <a class="railitem"{% if active_route is defined and active_route == 'home' %} aria-current="true"{% endif %} href="/home">Inicio</a>
-    {% for group in (nav if nav is defined else []) %}
-      {% if group.label %}<div class="railsep">{{ group.label }}</div>{% endif %}
-      {% for tile in group.items %}
-        <a class="railitem"{% if active_route is defined and active_route == tile.module_id %} aria-current="true"{% endif %} href="{{ href_for(tile.route, phone) }}">{{ tile.label }}</a>
-      {% endfor %}
-    {% endfor %}
-  </nav>
+<body data-cc-phone="{{ phone }}" data-cc-route="{% if active_route is defined %}{{ active_route }}{% endif %}" data-cc-active-tab="{% if active_tab is defined %}{{ active_tab }}{% endif %}">
+<header class="cc-topbar">
+  <div class="cc-brand"><span class="dot"></span><span>{{ business_name }}<small>control center</small></span></div>
+  <div class="cc-toolbar">
+    <button class="cc-pill" id="themebtn" aria-label="Cambiar tema" aria-pressed="false" type="button">tema</button>
+  </div>
+</header>
 
-  <main class="main">
-    <div class="topbar">
-      <div class="tbbrand"><span class="raildot"></span>{{ business_name }}</div>
-      <button class="sec" id="themebtn" aria-label="Cambiar tema" aria-pressed="false" type="button">tema</button>
-    </div>
+<nav class="cc-tabs" role="tablist" aria-label="Secciones">
+  {% for tab in (tabs if tabs is defined else []) %}
+  <a class="cc-tab" role="tab" id="cc-tab-{{ tab.id }}"
+     href="{{ href_for('/home/{phone}', phone) }}?tab={{ tab.id }}"
+     data-cc-tab="{{ tab.id }}"
+     {% if active_tab is defined and active_tab == tab.id %}aria-selected="true" aria-current="page"{% else %}aria-selected="false"{% endif %}>
+    {{ tab.label }}{% if tab.count %}<span class="count">{{ tab.count }}</span>{% endif %}
+  </a>
+  {% endfor %}
+</nav>
 
-    {% block content %}{% endblock %}
-
-    {% block footer %}<footer>{{ business_name }} control center</footer>{% endblock %}
-  </main>
-</div>
+<main class="cc-wrap">
+  {% block content %}{% endblock %}
+  {% block footer %}<footer>{{ business_name }} control center</footer>{% endblock %}
+</main>
 
 {% block chat %}{% include "_timonel_slot.html" %}{% endblock %}
 
@@ -166,6 +170,40 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
   });}
   try{var t=localStorage.getItem("beans_cc_theme");if(t)root.setAttribute("data-theme",t);}catch(e){}
   reflect();
+})();
+</script>
+<script>
+/* Shell tab-router (spec 006 T-003). The tabs are real links to /home?tab=<id>,
+   so the server renders the right panel with JS off and a tab is deep-linkable
+   (home.py selects active_tab from ?tab=). On the home — the page that carries
+   the [data-cc-panel] sections — the router UPGRADES those links to a no-reload,
+   no-extra-query client switch (AC6). On a module page there are no panels, so
+   the tabs stay plain links that navigate to the home with the tab preselected. */
+(function(){
+  var body=document.body;
+  var tabs=Array.prototype.slice.call(document.querySelectorAll(".cc-tab"));
+  if(!tabs.length) return;
+  var panels=Array.prototype.slice.call(document.querySelectorAll("[data-cc-panel]"));
+  var hasPanel=function(id){ return panels.some(function(p){ return p.getAttribute("data-cc-panel")===id; }); };
+  function select(id){
+    tabs.forEach(function(t){ t.setAttribute("aria-selected", String(t.getAttribute("data-cc-tab")===id)); });
+    panels.forEach(function(p){ p.hidden = (p.getAttribute("data-cc-panel")!==id); });
+    if(id) body.setAttribute("data-cc-active-tab", id);
+  }
+  if(panels.length){
+    tabs.forEach(function(t){
+      t.addEventListener("click", function(e){
+        var id=t.getAttribute("data-cc-tab");
+        if(hasPanel(id)){
+          e.preventDefault(); select(id);
+          try{ var u=new URL(location.href); u.searchParams.set("tab", id); history.replaceState(null,"",u); }catch(_){}
+        }
+      });
+    });
+    var q=null; try{ q=new URLSearchParams(location.search).get("tab"); }catch(_){ }
+    var initial=hasPanel(q)?q:(body.getAttribute("data-cc-active-tab")||(panels[0]&&panels[0].getAttribute("data-cc-panel")));
+    if(initial) select(initial);
+  }
 })();
 </script>
 {% block body_scripts %}{% endblock %}

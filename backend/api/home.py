@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from backend.auth.dependencies import require_tenant_match
-from backend.modules import home_service
+from backend.modules import home_service, nav
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,6 +57,16 @@ async def status_home(request: Request, phone: str, _user: dict = Depends(requir
     """Render the status home for a tenant."""
     business_name = _resolve_business_name(phone)
     view = await asyncio.to_thread(home_service.build_home, phone)
+    # Three-tab shell (spec 006): the tabs come from the registry groups, the
+    # per-tab tiles are grouped from the SINGLE build_home fan-out above (AC6, no
+    # new query per tab).
+    tabs = nav.owner_tabs()
+    tab_tiles = home_service.tiles_by_tab(view, tabs)
+    # The active tab is server-selected from ?tab= so each tab is reachable and
+    # deep-linkable with JS off (the client router then switches with no reload);
+    # an unknown or absent tab lands on Hoy.
+    requested_tab = request.query_params.get("tab")
+    active_tab = requested_tab if requested_tab in {t.id for t in tabs} else nav.HOY_ID
     response = templates.TemplateResponse(
         request,
         "control_center.html",
@@ -64,9 +74,9 @@ async def status_home(request: Request, phone: str, _user: dict = Depends(requir
             "phone": phone,
             "business_name": business_name,
             "view": view,
-            # cc_base renders the held rail from `nav`; the home passes its own
-            # rail_groups so the shell is byte-identical to the pre-rebase home.
-            "nav": view.rail_groups,
+            "tabs": tabs,
+            "tab_tiles": tab_tiles,
+            "active_tab": active_tab,
             "active_route": "home",
         },
     )

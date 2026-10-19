@@ -104,6 +104,29 @@ def _tile_from(module: Module, snap: ModuleSnapshot | None) -> ModuleTile:
     )
 
 
+def tiles_by_tab(view: "HomeView", tabs: list) -> "dict[str, list[ModuleTile]]":
+    """Map each owner tab id to the tiles it shows, from the SINGLE fan-out that
+    built ``view`` (spec 006 AC6: tiles grouped by tab, no new query per tab).
+
+    Hoy (the overview tab) shows every tile; each module-group tab shows only its
+    own modules' tiles, in the tab's registry order. The shell renders all three
+    panels from this one map, so switching tabs is a client-side panel toggle and
+    never triggers another ``build_home`` fan-out. ``tabs`` is ``nav.owner_tabs()``;
+    passed in (rather than imported) so the grouping stays driven by the registry
+    and this module keeps owning no nav policy.
+    """
+    from backend.modules import nav
+
+    by_id = {t.module_id: t for t in view.tiles}
+    result: "dict[str, list[ModuleTile]]" = {}
+    for tab in tabs:
+        if tab.id == nav.HOY_ID:
+            result[tab.id] = list(view.tiles)
+        else:
+            result[tab.id] = [by_id[item.module_id] for item in tab.items if item.module_id in by_id]
+    return result
+
+
 def _rail_groups(tiles: "list[ModuleTile]") -> "list[RailGroup]":
     groups: dict[str, RailGroup] = {}
     order: list[str] = []

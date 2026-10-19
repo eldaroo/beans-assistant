@@ -104,19 +104,29 @@ def test_no_owner_template_links_into_legacy():
     assert not offenders, f"owner templates still link into legacy: {offenders}"
 
 
+# The legacy bounce is a `?tab=` route passed THROUGH href_for (href_for's
+# non-'/' fallthrough renders it to /tenants/{phone}). The spec-006 owner job-tab
+# deep-link `{{ href_for('/home/{phone}', phone) }}?tab=<id>` appends `?tab=` AFTER
+# a resolved absolute '/home' route, so it never enters the fallthrough and is
+# safe. Match the dangerous pattern precisely rather than any `?tab=` substring.
+_LEGACY_TAB_BOUNCE = re.compile(r"""href_for\(\s*['"]?\s*\?tab=""")
+
+
 def test_no_owner_template_uses_a_legacy_tab_bounce():
     """Closes the latent path a raw /tenants/ scan misses (council Edut, Winston):
-    an owner template could carry a legacy `?tab=` route literal (directly or via
-    href_for('?tab=...')), which href_for renders to /tenants/{phone} at request
-    time even though the SOURCE has no /tenants/ literal. Every tile/attention
-    route moved to an absolute '/...' in cohorts B/C, so no owner template should
-    reference `?tab=` at all."""
+    an owner template could pass a legacy `?tab=` route to href_for, which renders
+    to /tenants/{phone} at request time even though the SOURCE has no /tenants/
+    literal. Every tile/attention route moved to an absolute '/...' in cohorts B/C.
+    The spec-006 three-tab shell reintroduced `?tab=` ONLY as the owner job-tab
+    deep-link on the already-absolute /home route, which does not bounce; this test
+    forbids the dangerous `href_for('?tab=...')` form specifically."""
     offenders = {}
     for name in _OWNER_TEMPLATES:
         src = _rendered_source(name)
-        if "?tab=" in src:
-            offenders[name] = src.count("?tab=")
-    assert not offenders, f"owner templates still reference a legacy ?tab= bounce: {offenders}"
+        hits = _LEGACY_TAB_BOUNCE.findall(src)
+        if hits:
+            offenders[name] = len(hits)
+    assert not offenders, f"owner templates still bounce a ?tab= route through href_for: {offenders}"
 
 
 def test_home_populated_has_no_legacy_link():
@@ -130,7 +140,7 @@ def test_home_populated_has_no_legacy_link():
     }
     html = _env().get_template("control_center.html").render(
         phone="+100", view=view, business_name="Beans&Co",
-        nav=nav.owner_rail("+100"), active_route="home",
+        nav=nav.owner_rail("+100"), tabs=nav.owner_tabs(), active_tab="hoy", active_route="home",
     )
     assert not _LEGACY_LINK.search(html), "populated home links into legacy"
     assert 'href="/stock"' in html and "/stock/+100" not in html  # tile route phone-less
@@ -140,7 +150,7 @@ def test_home_empty_state_cta_points_at_productos_not_legacy():
     view = {"is_empty": True, "attention": [], "tiles": []}
     html = _env().get_template("control_center.html").render(
         phone="+100", view=view, business_name="Beans&Co",
-        nav=nav.owner_rail("+100"), active_route="home",
+        nav=nav.owner_rail("+100"), tabs=nav.owner_tabs(), active_tab="hoy", active_route="home",
     )
     # The empty-state card renders (the only place the legacy CTA used to live).
     assert "Empezar por inventario" in html

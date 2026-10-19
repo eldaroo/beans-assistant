@@ -8,6 +8,7 @@ integration page tests. These assert the migration invariants: the extends
 relationship, the shell on every page, the active rail item, and that each
 page kept its own content styling.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,9 @@ def _render(tpl, active):
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES)), autoescape=True)
     return env.get_template(tpl).render(
         phone="+100", view=None, business_name="Beans&Co",
-        nav=nav.owner_rail("+100"), active_route=active,
+        nav=nav.owner_rail("+100"),
+        tabs=nav.owner_tabs(), active_tab=nav.tab_id_for_module(active),
+        active_route=active,
     )
 
 
@@ -43,17 +46,23 @@ def test_page_extends_base_and_drops_its_own_doctype(tpl):
 
 
 @pytest.mark.parametrize("tpl", list(PAGES))
-def test_page_renders_shell_rail_timonel_and_active_item(tpl):
+def test_page_renders_shell_tabs_timonel_and_active_tab(tpl):
+    """spec 006 T-005: each module page renders inside its tab context — the
+    three-tab rail with the module's group tab selected (replacing the old held
+    per-module rail), the topbar theme toggle, and the Timonel slot."""
     active, _ = PAGES[tpl]
     html = _render(tpl, active)
-    # the held rail with every module, the topbar theme toggle, Timonel slot
-    assert 'class="rail"' in html and 'id="themebtn"' in html
+    # the three-tab rail, the topbar theme toggle, Timonel slot
+    assert 'class="cc-tabs"' in html and 'role="tablist"' in html and 'id="themebtn"' in html
     assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
-    assert ">Costos<" in html and ">Stock<" in html and ">Ventas semana<" in html
-    # this page's own rail item is current, linking to its absolute route
-    assert 'aria-current="true" href="/%s"' % active in html
-    # back-link preserved (content-level self-regression) + Inicio in rail
-    assert "Volver al inicio" in html and 'href="/home"' in html
+    assert 'data-cc-tab="hoy"' in html and 'data-cc-tab="operacion"' in html and 'data-cc-tab="costos"' in html
+    assert "Operación" in html and "Costos y producción" in html
+    # this page sits under its group's tab, which is the selected tab
+    want = nav.tab_id_for_module(active)
+    m = re.search(r'<a[^>]*data-cc-tab="%s"[^>]*>' % want, html)
+    assert m and 'aria-selected="true"' in m.group(0)
+    # back-link preserved (content-level self-regression) + the Hoy tab links home
+    assert "Volver al inicio" in html and 'href="/home?tab=hoy"' in html
 
 
 def test_owner_rail_is_snapshot_free():

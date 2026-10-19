@@ -9,6 +9,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from backend.modules import home_service, nav
 from backend.modules.home_service import HomeView, _rail_groups
 from backend.modules.protocol import AttentionItem, ModuleTile, Severity
 
@@ -20,7 +21,14 @@ def _env():
 
 
 def _render(view, business_name="Beans&Co", phone="+100"):
-    return _env().get_template("control_center.html").render(phone=phone, business_name=business_name, view=view)
+    # spec 006: the home renders inside the three-tab shell, landing on Hoy (which
+    # shows every tile + attention). The per-tab tiles are grouped from this one
+    # view, so the assertions below still read the Hoy panel content unchanged.
+    tabs = nav.owner_tabs()
+    return _env().get_template("control_center.html").render(
+        phone=phone, business_name=business_name, view=view,
+        tabs=tabs, tab_tiles=home_service.tiles_by_tab(view, tabs), active_tab=nav.HOY_ID,
+    )
 
 
 def test_renders_tiles_strip_shapes_and_tokens():
