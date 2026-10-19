@@ -2,6 +2,7 @@
 date: 2026-10-17
 slug: 006-native-tool-use-chat
 status: scoped
+tracking_issue: eldaroo/beans-assistant#198
 ---
 
 # Spec 006: Native tool-use chat for Beans & Co
