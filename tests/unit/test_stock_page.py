@@ -44,7 +44,7 @@ def test_renders_shell_and_active_tab_on_absolute_route():
     import re
     html = _render([_stock()])
     assert 'class="cc-tabs"' in html and 'id="themebtn"' in html
-    assert 'class="tim-launch"' in html
+    assert 'class="tim-launcher"' in html
     # spec 006 T-005: Stock sits under the Operación tab, selected; no legacy tab bounce
     m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
     assert m and 'aria-selected="true"' in m.group(0)

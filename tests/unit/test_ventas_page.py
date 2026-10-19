@@ -62,7 +62,7 @@ def test_extends_base_and_drops_own_doctype():
 def test_renders_shell_and_active_tab_on_absolute_route():
     import re
     html = _render([_sale()], [_product()])
-    assert 'class="cc-tabs"' in html and 'id="themebtn"' in html and 'class="tim-launch"' in html
+    assert 'class="cc-tabs"' in html and 'id="themebtn"' in html and 'class="tim-launcher"' in html
     # spec 006 T-005: Ventas sits under the Operación tab, selected
     m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
     assert m and 'aria-selected="true"' in m.group(0)

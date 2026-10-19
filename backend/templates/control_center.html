@@ -36,6 +36,12 @@
 .trend .dot{width:9px;height:9px;border-radius:50%;background:currentColor;flex:0 0 auto}
 .note{font-size:13px;color:var(--muted);margin-top:18px;max-width:1120px}
 
+/* Daily-truth headline (spec 006 T-010 / AC3): the one sentence that tells the
+   owner the truth of her day, at the top of Hoy above everything else. Plain,
+   calm, readable — it is the actual product (Kaze), not a banner. */
+.daily-truth{font-size:17px;font-weight:500;color:var(--text);margin:0 0 20px;max-width:1120px;line-height:1.5}
+@media(min-width:1000px){.daily-truth{font-size:19px}}
+
 @media(prefers-reduced-motion:no-preference){
   .scorecard .tile:nth-child(1){animation-delay:.00s}.scorecard .tile:nth-child(2){animation-delay:.04s}
   .scorecard .tile:nth-child(3){animation-delay:.08s}.scorecard .tile:nth-child(4){animation-delay:.12s}
@@ -72,6 +78,9 @@
   <section role="tabpanel" id="panel-{{ tab.id }}" data-cc-panel="{{ tab.id }}" aria-labelledby="cc-tab-{{ tab.id }}"{% if active_tab is not defined or active_tab != tab.id %} hidden{% endif %}>
     {% if tab.id == 'hoy' %}
     <h1 class="page">Hoy en {{ business_name }}</h1>
+    {% if daily_truth is defined and daily_truth %}
+    <p class="daily-truth" data-cc-daily-truth aria-live="polite">{{ daily_truth }}</p>
+    {% endif %}
     <p class="sub">{{ tab_sub.get('hoy', '') }}</p>
 
     {% if view.attention %}

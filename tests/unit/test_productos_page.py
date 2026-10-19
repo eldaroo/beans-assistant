@@ -53,7 +53,7 @@ def test_renders_shell_tabs_timonel_and_active_tab():
     import re
     html = _render([_product()])
     assert 'class="cc-tabs"' in html and 'id="themebtn"' in html
-    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
+    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launcher"' in html
     # spec 006 T-005: this page sits under its group tab (Operación), selected
     m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
     assert m and 'aria-selected="true"' in m.group(0)

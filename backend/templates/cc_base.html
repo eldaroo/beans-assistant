@@ -151,11 +151,11 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 {% block chat %}{% include "_timonel_slot.html" %}{% endblock %}
 
 <!-- Timonel chat factory (window.beansChat); the slot above binds to it. -->
-<script src="/static/js/chat_widget.js?v=20260508a"></script>
+<script src="/static/js/chat_widget.js?v=20261019a"></script>
 <!-- Chat-to-screen refresh contract across the separate Control Center
      documents (spec 004 AC8 / T-011). Consumes the widget's beans:refresh and
      beans:navigate events; the widget itself is unchanged. -->
-<script src="/static/js/cc_chat_bridge.js?v=20261015d"></script>
+<script src="/static/js/cc_chat_bridge.js?v=20261019a"></script>
 <script>
 (function(){
   var root=document.documentElement;
@@ -172,17 +172,35 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
   reflect();
 })();
 </script>
+<!-- Module -> [id, route, tab] triples (spec 006 T-011), rendered from the
+     registry so the shell tab-router can resolve a beans:navigate {tab, module}
+     to a tab switch plus the module's drill-in page with no server round-trip.
+     A list-of-triples (not a hand-built object) so `tojson` owns the escaping
+     and comma placement and the payload is always valid JSON. -->
+{%- set _ccmods = namespace(items=[]) -%}
+{%- for tab in (tabs if tabs is defined else []) -%}{%- for item in tab.items -%}{%- set _ccmods.items = _ccmods.items + [[item.module_id, item.route, tab.id]] -%}{%- endfor -%}{%- endfor -%}
+<script id="cc-modules" type="application/json">{{ _ccmods.items | tojson }}</script>
 <script>
-/* Shell tab-router (spec 006 T-003). The tabs are real links to /home?tab=<id>,
-   so the server renders the right panel with JS off and a tab is deep-linkable
-   (home.py selects active_tab from ?tab=). On the home — the page that carries
-   the [data-cc-panel] sections — the router UPGRADES those links to a no-reload,
-   no-extra-query client switch (AC6). On a module page there are no panels, so
-   the tabs stay plain links that navigate to the home with the tab preselected. */
+/* Shell tab-router (spec 006 T-003 + T-011). The tabs are real links to
+   /home?tab=<id>, so the server renders the right panel with JS off and a tab is
+   deep-linkable (home.py selects active_tab from ?tab=). On the home — the page
+   that carries the [data-cc-panel] sections — the router UPGRADES those links to
+   a no-reload, no-extra-query client switch (AC6). On a module page there are no
+   panels, so the tabs stay plain links that navigate to the home with the tab
+   preselected.
+
+   T-011 extends the router to consume a beans:navigate {tab, module} event: it
+   switches to the named owner tab and drills into the named module (navigating
+   the module's page when it is not the mounted one), and a navigate to the
+   module already mounted does not full-reload. The legacy domain-tab form of
+   beans:navigate (tab in {products,stock,sales,expenses}, no module) is left to
+   cc_chat_bridge.js; the two listeners partition the event space so neither
+   double-acts (D-031: extend the bridge, do not replace it). */
 (function(){
   var body=document.body;
   var tabs=Array.prototype.slice.call(document.querySelectorAll(".cc-tab"));
   if(!tabs.length) return;
+  var ownerTabIds=tabs.map(function(t){ return t.getAttribute("data-cc-tab"); });
   var panels=Array.prototype.slice.call(document.querySelectorAll("[data-cc-panel]"));
   var hasPanel=function(id){ return panels.some(function(p){ return p.getAttribute("data-cc-panel")===id; }); };
   function select(id){
@@ -204,6 +222,49 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
     var initial=hasPanel(q)?q:(body.getAttribute("data-cc-active-tab")||(panels[0]&&panels[0].getAttribute("data-cc-panel")));
     if(initial) select(initial);
   }
+
+  // --- beans:navigate {tab, module} consumer (T-011 / AC5) ---
+  // Timing contract: the owner-form {tab, module} navigate is dispatched
+  // PROGRAMMATICALLY (a tile drill-in, an explicit shell action), never on the
+  // AI turn that can also carry metadata.complete + redirect_to. Only the legacy
+  // domain-form (cc_chat_bridge.js) rides an AI turn, which is why that bridge
+  // alone needs the 1600ms NAV_GRACE to let a completion redirect win. An
+  // owner-form navigate therefore switches/assigns immediately with no grace; if
+  // a future emitter ever dispatches the owner-form on an AI completion turn,
+  // give this assign the same grace as the bridge.
+  var modules={}; try{
+    var _triples=JSON.parse((document.getElementById("cc-modules")||{}).textContent||"[]");
+    (_triples||[]).forEach(function(t){ if(t&&t[0]) modules[t[0]]={route:t[1], tab:t[2]}; });
+  }catch(_){ modules={}; }
+  var phone=body.getAttribute("data-cc-phone")||"";
+  function moduleHref(route){ return String(route||"").replace("{phone}", encodeURIComponent(phone)); }
+  window.addEventListener("beans:navigate", function(e){
+    var d=(e&&e.detail)||{};
+    var wantsModule = typeof d.module==="string" && d.module.length>0;
+    var wantsOwnerTab = typeof d.tab==="string" && ownerTabIds.indexOf(d.tab)!==-1;
+    // Not our shape (legacy domain form, or empty): cc_chat_bridge handles it.
+    if(!wantsModule && !wantsOwnerTab) return;
+
+    if(wantsModule){
+      var current=body.getAttribute("data-cc-route")||"";  // 'home' or a module_id
+      if(current===d.module) return;                        // already mounted: no full reload
+      var info=modules[d.module];
+      if(info && info.route){ window.location.assign(moduleHref(info.route)); return; }
+      // Unknown module with no route: best-effort switch to the requested/derived tab.
+      var fallbackTab = wantsOwnerTab ? d.tab : (info && info.tab);
+      if(fallbackTab && hasPanel(fallbackTab)) select(fallbackTab);
+      return;
+    }
+
+    // Owner-tab only (no module): switch tab. On the home (panels), client-side
+    // with no full reload; on a module page, navigate to the home with the tab.
+    if(panels.length && hasPanel(d.tab)){
+      select(d.tab);
+      try{ var u2=new URL(location.href); u2.searchParams.set("tab", d.tab); history.replaceState(null,"",u2); }catch(_){}
+    } else {
+      window.location.assign("/home/"+encodeURIComponent(phone)+"?tab="+encodeURIComponent(d.tab));
+    }
+  });
 })();
 </script>
 {% block body_scripts %}{% endblock %}

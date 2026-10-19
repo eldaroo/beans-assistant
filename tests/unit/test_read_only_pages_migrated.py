@@ -54,7 +54,7 @@ def test_page_renders_shell_tabs_timonel_and_active_tab(tpl):
     html = _render(tpl, active)
     # the three-tab rail, the topbar theme toggle, Timonel slot
     assert 'class="cc-tabs"' in html and 'role="tablist"' in html and 'id="themebtn"' in html
-    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
+    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launcher"' in html
     assert 'data-cc-tab="hoy"' in html and 'data-cc-tab="operacion"' in html and 'data-cc-tab="costos"' in html
     assert "Operación" in html and "Costos y producción" in html
     # this page sits under its group's tab, which is the selected tab
