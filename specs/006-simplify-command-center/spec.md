@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#194
+
 # Spec: Simplify the Command Center (AI-first, three tabs)
 
 ## Problem
