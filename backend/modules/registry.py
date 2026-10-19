@@ -41,6 +41,12 @@ TAB_COSTOS = "Costos y producción"
 # key panels and the active-tab highlight. A group value with no entry here falls
 # back to a derived accent-stripped slug in ``nav.owner_tabs`` so a brand-new tab
 # still renders without a template edit (AC1).
+#
+# NAMESPACE NOTE (spec 006 T-011): the tab id "costos" is ALSO a module id (the
+# Costos module below). The shell beans:navigate router resolves the overlap
+# deterministically — a payload with a ``module`` always drills into the module
+# page, a bare ``{tab: "costos"}`` switches to the Costos TAB overview — but a new
+# tab id must never equal a module id without that router rule in mind.
 TAB_IDS = {TAB_HOY: "hoy", TAB_OPERACION: "operacion", TAB_COSTOS: "costos"}
 
 # Left-to-right order of the owner-facing tabs. Hoy is always first (the overview);

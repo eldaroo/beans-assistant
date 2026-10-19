@@ -4,12 +4,13 @@ import logging
 from pathlib import Path
 import sys
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
+from backend.auth.dependencies import require_tenant_match
 from backend.services.chat_service import ChatService, ChatTenantNotFoundError
 from database_config import fetch_one, tenant_context
 from tenant_manager import TenantManager
@@ -69,6 +70,44 @@ async def chat_with_tenant(phone: str, chat: TenantChatMessage):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error processing message",
         )
+
+
+class ThreadTurn(BaseModel):
+    """One prior conversation turn for rehydration (spec 006 T-009)."""
+
+    role: str
+    content: str
+
+
+class TenantChatThread(BaseModel):
+    """The server-side conversation thread for a tenant, for rehydration.
+
+    The chat widget reads this when its own sessionStorage copy is empty, so a
+    returning owner sees the conversation that was already established
+    server-side rather than a blank Timonel (AC4).
+    """
+
+    thread: list[ThreadTurn] = Field(default_factory=list)
+
+
+@router.get("/{phone}/chat/thread", response_model=TenantChatThread)
+async def chat_thread(phone: str, _user: dict = Depends(require_tenant_match)):
+    """Return the server-side conversation thread for a tenant (spec 006 T-009).
+
+    Owner-gated by the same ``require_tenant_match`` dependency the home uses:
+    this endpoint returns conversation CONTENT, so an owner may read only her
+    own thread (admin and internal-token callers bypass as elsewhere). The
+    widget calls it from an already owner-gated page, so the session cookie is
+    present and the check is transparent to the real caller.
+
+    Source of truth is the same in-process conversation memory the dispatcher
+    keeps (spec 001). It is read-only and lean (role + text per turn); empty and
+    stale threads come back as an empty list. Never raises for an unknown or
+    quiet tenant — a blank thread is a valid answer, and the widget then falls
+    back to the proactive greeting.
+    """
+    turns = ChatService.get_history(phone)
+    return TenantChatThread(thread=[ThreadTurn(role=t["role"], content=t["content"]) for t in turns])
 
 
 class TenantGreeting(BaseModel):

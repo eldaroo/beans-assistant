@@ -254,6 +254,19 @@
             messages: [],                // { id, role, html, streaming?, toolCall?, cards? }
             input: '',
 
+            // --- voice input (spec 006 T-012) ---
+            // Whether this browser can transcribe speech at all. The mic control
+            // reads this to stay disabled (never a dead button) where there is
+            // no STT path, and the launcher falls back to opening the drawer for
+            // typing. Computed once; SpeechRecognition is the real, key-less STT
+            // path (no API key of ours). The browser's own implementation may
+            // transcribe server-side at the vendor's cloud (see the voice-input
+            // note below), so this is not an audio-stays-on-device claim.
+            micSupported: (typeof window !== 'undefined' &&
+                !!(window.SpeechRecognition || window.webkitSpeechRecognition)),
+            recording: false,
+            recSeconds: 0,
+
             // State machine. idle | thinking | tool_running | streaming | error
             state: 'idle',
             activeTool: null,
@@ -284,6 +297,9 @@
             _dockKey: cfg.dockKey,
             _focusReturn: null,
             _trapHandler: null,
+            _recognition: null,
+            _recTimer: null,
+            _recTranscript: '',
             _seedMessage: '',
             // PR-A fix #4: set true when the greeting endpoint reports
             // kind="empty_catalog". Used to suppress the post-reply chip
@@ -296,6 +312,13 @@
                     // Tenant mode: read the persisted dock preference.
                     var saved = null;
                     try { saved = localStorage.getItem(this._dockKey); } catch (_) { /* no-op */ }
+                    // A floating-launcher surface (spec 006: the voice-first mic
+                    // launcher) carries NO pin control, so a stale 'pinned' pref
+                    // left by an earlier UI must not auto-open the drawer and
+                    // bypass the collapsed-by-default launcher with no way to
+                    // un-pin. Honor 'pinned' only where this surface actually
+                    // offers pinning; otherwise fall back to the floating default.
+                    if (cfg.dock === 'floating' && saved === 'pinned') saved = null;
                     this.docked = (saved === 'pinned' || saved === 'floating') ? saved : this._defaultDock;
 
                     // Pinned = "I want the chat visible". Auto-open on every
@@ -338,13 +361,117 @@
                     });
                 }
 
-                // Tenant mode: ask the backend for a proactive greeting based
-                // on tenant state (empty catalog → onboarding nudge). Gated
-                // by localStorage so we only show it once per browser per
-                // phone. Suppressed in onboarding mode entirely.
+                // Tenant mode: restore the conversation thread before anything
+                // else, so Timonel is never blank after a tab switch or a
+                // return visit (spec 006 T-008 / T-009). Order of precedence:
+                //   1. sessionStorage (this tab's own copy; survives same-tab
+                //      navigation across the separate Control Center documents).
+                //   2. the server-side conversation memory (spec 001), when the
+                //      session copy is empty (a fresh tab or cleared storage).
+                //   3. the proactive greeting, only when both are empty.
                 if (!isOnboarding && cfg.phone) {
-                    self._maybeFetchGreeting();
+                    if (self._rehydrateFromSession()) {
+                        // Restored from this tab's session; no server round-trip,
+                        // no greeting over an existing thread.
+                    } else {
+                        self._rehydrateFromServer(function (got) {
+                            if (!got) self._maybeFetchGreeting();
+                        });
+                    }
                 }
+            },
+
+            // --- thread persistence + rehydration (spec 006 T-008 / T-009) ---
+            // The visible chat was ephemeral: messages reset on every page load,
+            // so making Timonel the primary surface without this would lose the
+            // conversation on every tab switch (plan risk 1). sessionStorage is
+            // keyed by phone so two tenants on one browser never cross threads,
+            // and it is per-tab so a closed tab starts clean. Every accessor is
+            // wrapped — a private window or blocked storage degrades to "no
+            // persistence", never an exception into the page.
+            _threadKey: function () {
+                return 'beans:thread:' + (this._tenantPhone || this._mode);
+            },
+
+            _serializeThread: function () {
+                // Persist only what re-renders a bubble; drop transient flags
+                // (streaming) and cap the tail so storage never grows unbounded.
+                var out = [];
+                var start = Math.max(0, this.messages.length - 100);
+                for (var i = start; i < this.messages.length; i++) {
+                    var m = this.messages[i] || {};
+                    var keep = { id: m.id, role: m.role, kind: m.kind, html: m.html };
+                    if (m.toolCall) keep.toolCall = m.toolCall;
+                    if (m.cards) keep.cards = m.cards;
+                    out.push(keep);
+                }
+                return out;
+            },
+
+            _saveThread: function () {
+                if (this.isOnboarding) return;  // onboarding is ephemeral by design
+                try {
+                    sessionStorage.setItem(this._threadKey(), JSON.stringify(this._serializeThread()));
+                } catch (_) { /* private mode / quota: skip persistence silently */ }
+            },
+
+            _rehydrateFromSession: function () {
+                if (this.isOnboarding) return false;
+                var raw = null;
+                try { raw = sessionStorage.getItem(this._threadKey()); } catch (_) { return false; }
+                if (!raw) return false;
+                var parsed = null;
+                try { parsed = JSON.parse(raw); } catch (_) { return false; }
+                if (!Array.isArray(parsed) || parsed.length === 0) return false;
+                var restored = [];
+                for (var i = 0; i < parsed.length; i++) {
+                    var m = parsed[i] || {};
+                    if (!m.role) continue;
+                    // streaming is never restored true: a persisted bubble is a
+                    // settled bubble, so no stale cursor sticks on reload.
+                    m.streaming = false;
+                    restored.push(m);
+                }
+                if (!restored.length) return false;
+                this.messages = restored;
+                // A restored thread means the greeting was already shown (or is
+                // moot); suppress chips until the next turn re-offers them.
+                this.suggestions = [];
+                this._scrollSoon();  // land on the latest turn, not the top of a long thread
+                return true;
+            },
+
+            _rehydrateFromServer: function (done) {
+                var self = this;
+                var cb = (typeof done === 'function') ? done : function () {};
+                var url = '/api/tenants/' + encodeURIComponent(this._tenantPhone) + '/chat/thread';
+                fetch(url, { credentials: 'same-origin' })
+                    .then(function (resp) { return resp.ok ? resp.json() : null; })
+                    .then(function (payload) {
+                        var turns = (payload && payload.thread) || [];
+                        // Only rehydrate if the user has not already raced in a
+                        // message, and there is actually a server thread.
+                        if (self.messages.length > 0 || !turns.length) { cb(false); return; }
+                        var restored = [];
+                        for (var i = 0; i < turns.length; i++) {
+                            var t = turns[i] || {};
+                            if (t.role !== 'user' && t.role !== 'assistant') continue;
+                            var content = t.content || '';
+                            restored.push({
+                                id: nextId(),
+                                role: t.role,
+                                kind: 'text',
+                                html: t.role === 'assistant' ? renderMarkdown(content) : escapeHtml(content)
+                            });
+                        }
+                        if (!restored.length) { cb(false); return; }
+                        self.messages = restored;
+                        self.suggestions = [];
+                        self._saveThread();  // mirror the server thread into this tab's session
+                        self._scrollSoon();
+                        cb(true);
+                    })
+                    .catch(function () { cb(false); });
             },
 
             _maybeFetchGreeting: function () {
@@ -389,6 +516,7 @@
                             kind: 'text',
                             html: escapeHtml(payload.greeting),
                         });
+                        self._saveThread();
                         try { localStorage.setItem(greetingKey, '1'); } catch (_) { /* no-op */ }
                     })
                     .catch(function () { /* network error: skip greeting silently */ });
@@ -529,10 +657,17 @@
             send: function (raw, opts) {
                 var text = (raw || '').trim();
                 if (!text) return;
-                if (this.state === 'thinking' || this.state === 'tool_running') return;
+                // Block a second submit while a turn is in flight, including the
+                // ~600ms streaming window after the reply lands (else a fast
+                // double-tap posts twice).
+                if (this.state === 'thinking' || this.state === 'tool_running' || this.state === 'streaming') return;
 
                 if (!opts || !opts.hideUserBubble) {
                     this.messages.push({ id: nextId(), role: 'user', kind: 'text', html: escapeHtml(text) });
+                    // Persist the user turn immediately: if the owner navigates
+                    // before the reply lands, the sent message still survives the
+                    // tab switch (spec 006 T-008).
+                    this._saveThread();
                 }
                 this.input = '';
                 this.suggestions = [];
@@ -726,7 +861,130 @@
                     setTimeout(function () { self._setState('idle', null); }, 1200);
                 }).then(function () {
                     self._scrollSoon();
+                    // Persist the settled thread (assistant bubble + any tool
+                    // cards, or the error bubble) so it survives a navigation.
+                    self._saveThread();
                 });
+            },
+
+            // --- voice input (spec 006 T-012) ---
+            // The mic records the owner's speech and drops the transcription
+            // into the composer for her to review and send — voice is an input
+            // method, not a bypass of her judgement or (once it lands in M3) the
+            // write trust floor. The STT path is the browser's SpeechRecognition:
+            // a real transcriber that needs no API key of ours. NOTE: the common
+            // implementations (Chrome's webkitSpeechRecognition, Safari) stream
+            // the captured audio to the browser vendor's cloud speech service to
+            // transcribe it, so spoken input leaves the device the same way any
+            // web speech input does; this is not an on-device-only guarantee.
+            // Where SpeechRecognition is absent, the mic stays disabled and the
+            // owner types; Timonel never pretends to hear.
+            recTimeLabel: function () {
+                var s = this.recSeconds || 0;
+                var mm = Math.floor(s / 60);
+                var ss = s % 60;
+                return mm + ':' + (ss < 10 ? '0' + ss : String(ss));
+            },
+
+            toggleRecording: function () {
+                if (this.recording) { this.stopRecording(); } else { this.startRecording(); }
+            },
+
+            startRecording: function () {
+                if (this.recording) return;
+                var Rec = (typeof window !== 'undefined') &&
+                    (window.SpeechRecognition || window.webkitSpeechRecognition);
+                if (!Rec) {
+                    // Honest fallback (spec 006 T-020 spirit): no STT here, so say
+                    // so and leave the owner typing rather than a dead mic.
+                    this.messages.push({
+                        id: nextId(), role: 'system', kind: 'text',
+                        html: escapeHtml('Este navegador no permite dictado por voz. Escribí tu mensaje y lo proceso igual.')
+                    });
+                    this._scrollSoon();
+                    return;
+                }
+                var self = this;
+                var rec;
+                try { rec = new Rec(); } catch (_) { return; }
+                rec.lang = 'es-AR';
+                rec.interimResults = false;
+                rec.continuous = false;
+                rec.maxAlternatives = 1;
+                this._recTranscript = '';
+                rec.onresult = function (e) {
+                    var txt = '';
+                    for (var i = e.resultIndex; i < e.results.length; i++) {
+                        if (e.results[i] && e.results[i][0]) txt += e.results[i][0].transcript;
+                    }
+                    self._recTranscript += txt;
+                };
+                rec.onerror = function (e) {
+                    var code = e && e.error;
+                    self._stopRecTimer();
+                    self.recording = false;
+                    self._recognition = null;
+                    self._recTranscript = '';  // never send a partial after an error
+                    if (code === 'not-allowed' || code === 'service-not-allowed') {
+                        self.messages.push({
+                            id: nextId(), role: 'system', kind: 'text',
+                            html: escapeHtml('No pude usar el micrófono (permiso denegado). Activá el micrófono o escribí tu mensaje.')
+                        });
+                        self._scrollSoon();
+                    }
+                    // 'no-speech'/'aborted' are silent: the owner simply says nothing.
+                };
+                rec.onend = function () {
+                    self._stopRecTimer();
+                    self.recording = false;
+                    self._recognition = null;
+                    var said = (self._recTranscript || '').trim();
+                    self._recTranscript = '';
+                    // Place the transcription in the composer for the owner to
+                    // read and send herself — NEVER auto-send. She always sees
+                    // what Timonel heard before it acts on her money or stock, so
+                    // a mis-hear ("trece" for "tres", a mangled "borrá...") is
+                    // caught at a glance instead of becoming an unconfirmed write
+                    // (Edut: M2 ships no confirm floor yet — that is M3). Tapping
+                    // Enviar routes the text through the identical path a typed
+                    // message takes, so when M3's confirm/receipt/undo lands a
+                    // spoken write passes the same floor a typed one does.
+                    if (said) {
+                        self.input = said;
+                        self.open();
+                        self.$nextTick(function () { if (self.$refs.input) self.$refs.input.focus(); });
+                    }
+                };
+                try {
+                    rec.start();  // triggers the browser mic-permission prompt
+                } catch (_) {
+                    // start() throws if called while already running; reset state.
+                    self.recording = false;
+                    return;
+                }
+                this._recognition = rec;
+                this.recording = true;
+                this.recSeconds = 0;
+                this.open();  // voice-first: recording surfaces the drawer
+                this._recTimer = setInterval(function () { self.recSeconds += 1; }, 1000);
+            },
+
+            stopRecording: function () {
+                this._stopRecTimer();
+                if (this._recognition) {
+                    // Normally onend fires after stop() and resets state; if stop()
+                    // throws (already-ended / never-started recognizer), onend may
+                    // not fire, so reset here too — never leave the UI stuck
+                    // showing "Grabando" with a dead recognizer.
+                    try { this._recognition.stop(); }
+                    catch (_) { this.recording = false; this._recognition = null; }
+                } else {
+                    this.recording = false;
+                }
+            },
+
+            _stopRecTimer: function () {
+                if (this._recTimer) { clearInterval(this._recTimer); this._recTimer = null; }
             },
 
             _scrollSoon: function () {

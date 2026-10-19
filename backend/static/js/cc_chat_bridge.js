@@ -95,11 +95,19 @@
     });
 
     // beans:navigate — open the acted-on domain page across documents.
+    //
+    // Spec 006 T-011 extends beans:navigate with an owner-form {tab, module}
+    // consumed by the shell tab-router in cc_base.html. This bridge owns only
+    // the LEGACY domain form (tab in {products,stock,sales,expenses}, no
+    // module). A payload carrying a `module` is the owner-form; skip it here so
+    // the two listeners partition the event space and neither double-acts
+    // (D-031: extend the bridge, do not replace it).
     window.addEventListener('beans:navigate', function (e) {
         var detail = (e && e.detail) || {};
+        if (detail.module) return;  // owner-form: the shell tab-router handles it
         if (!detail.tab) return;
         var target = routeForTab(detail.tab);
-        if (!target) return;  // unreachable domain: never navigate to a dead screen
+        if (!target) return;  // unreachable domain (incl. owner-tab ids): shell router / no-op
 
         // Same document as the one we are on: beans:refresh already updated it.
         var here = normPath(decodeURIComponent(window.location.pathname));
