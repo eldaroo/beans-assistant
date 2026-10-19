@@ -1,8 +1,8 @@
 ---
 name: timonel-architecture
-last_spec: control-center-unification
+last_spec: native-tool-use-chat
 created: 2026-06-11
-last_updated: 2026-10-14
+last_updated: 2026-10-17
 mode: update
 author: Winston (BuildOS Architect, architecture-author role)
 ---
@@ -318,6 +318,58 @@ Dario made the Control Center the single owner-facing product. All CRUD moves of
 - **Why the alternatives lost.** (a) Per-page includes duplicate the mount and drift. (b) A chat-only page splits the assistant off the surfaces it should assist.
 - **Panel source.** Winston, with Kaze on presence on every owner surface and Amelia on the refresh-contract break.
 
+### D-029: The chat brain is a native tool-use loop on the gateway; the LangGraph is retired
+
+- **Chosen.** Replace the body of `ChatService.chat_with_tenant` with one tools-enabled gateway loop. Delete `graph.py` and `agents/*` (router, decomposer, expander, resolver, safe_node, state).
+- **Alternatives.** (a) Keep the graph and re-point one node at tools. (b) An app-mediated tool loop where the app, not the model, drives the tool calls (Winston's prior recommendation).
+- **Why this won.** One reasoner over a fixed tool set removes the router and resolver classification drift specs 001 and 002 fought, and extending the assistant becomes one tool plus one endpoint, not another graph node and prompt.
+- **Why the alternatives lost.** (a) Keeping the graph keeps every fragile hop. (b) The app-mediated loop was overruled by Dario on 2026-10-16, who chose native tool-use on the box.
+- **Implications.** D-022 COST_SCENARIO becomes a read tool; D-018 PRODUCTION_UPDATE routes into the same brain. `llm_gateway.py` is kept and reused.
+- **Panel source.** Winston, grounding Dario's binding choice.
+
+### D-030: Tools are a narrow MCP server; built-ins disallowed; only `mcp__beans__*` allowlisted; no skip-permissions
+
+- **Chosen.** The child runs `--max-turns` greater than 1 with `--allowedTools mcp__beans__*` as the only positive grant, the existing built-in `--disallowedTools` list kept in full, `--strict-mcp-config` pointing only at the beans server, and `--dangerously-skip-permissions` never passed. One child per request, disposed after.
+- **Alternatives.** (a) `--dangerously-skip-permissions` with a disallow list. (b) Tools off, the retired spec 005 design.
+- **Why this won.** Allowlisting only our tools and omitting skip-permissions means, with no TTY in headless, anything off the allowlist still auto-denies: two independent gates, neither one typo from a built-in running.
+- **Why the alternatives lost.** (a) skip-permissions is one disallow-list typo from remote code execution. (b) Tools off cannot drive native tool-use.
+- **Implications.** The pool lifecycle moves from one turn per child to one request per child; warmth and cross-request isolation both hold because each request gets a fresh disposed child. A boot-time tool-posture self-check (below, conventions) enforces the allowlist.
+- **Panel source.** Winston, grounding Tamir.
+
+### D-031: Tools hold no DB credentials; they call an authenticated internal operation API; side effects are observed there
+
+- **Chosen.** Tools call back to FastAPI internal endpoints gated by the existing `INTERNAL_SERVICE_TOKEN` seam (`_has_internal_token` in `backend/auth/dependencies.py`), which run the operation under `tenant_context`. Cache invalidation and the navigation cue are emitted at commit, not parsed from gateway output. The domain guards in `write_agent` (NULL-price block, batch partial-success summary, ADD_STOCK disambiguation, product resolution, SKU generation) move into these endpoints.
+- **Alternatives.** (a) A DB connection on the box. (b) Let the model report its own side effects.
+- **Why this won.** The box stays a pure reasoner; the app that already owns the DB owns re-validation and every side effect, where `tenant_context` and `cache.invalidate_all` already live.
+- **Why the alternatives lost.** (a) A DB credential on the box is one injection from the ledger. (b) Trusting model-reported effects trusts effects an injection can fabricate.
+- **Implications.** The box gains two non-DB secrets (the operation-API base and a scoped bearer); the Nomad allowlist self-check extends to cover the operation-API host.
+- **Panel source.** Winston, with Amelia on reusing the endpoint contracts.
+
+### D-032: Tenant scope is injected out of band, never a model-settable tool parameter
+
+- **Chosen.** The gateway pins the session-resolved phone into the per-request MCP server environment; the tool callback carries it, the model never sees or sets it, and FastAPI re-validates scope on every call.
+- **Alternatives.** (a) `phone` as a model-filled tool argument. (b) Hardcode the one phone.
+- **Why this won.** A scope the model cannot express is a cross-tenant surface that cannot be injected, now or when multi-tenant returns.
+- **Why the alternatives lost.** (a) A model-filled `phone` is the injection target itself. (b) Hardcoding blocks the reversible multi-tenant future for no gain.
+- **Panel source.** Winston, grounding Tamir.
+
+### D-033: Writes are two-phase; the commit is a non-model, operator-clicked endpoint
+
+- **Chosen.** Write tools only stage a validated preview and mint an `op_token` in the server-side pending store (reusing D-008 and D-010). The model surfaces it as a confirm card. The commit happens only on the operator's click, posting the token to a session-authenticated `/chat/confirm` endpoint for which the model has no tool.
+- **Alternatives.** (a) A commit tool the model calls. (b) Direct commit inside the loop.
+- **Why this won.** Removing commit from the model's capability set means a fully hijacked model can only propose; the injection-to-write surface spec 005's council closed stays closed.
+- **Why the alternatives lost.** (a) A commit tool lets an injected confirmation fire it. (b) Direct commit has no human gate at all.
+- **Implications.** The confirm card is a new `metadata` variant on the unchanged envelope, rendered by `chat_widget.js`, reusing D-009. The confirm token is app-minted, args-bound, single-use, and short-TTL.
+- **Panel source.** Winston, with Edut on consent and Tamir on the write boundary.
+
+### D-034: Single business resolves the phone from the session; the brain ignores any client-supplied phone
+
+- **Chosen.** The URL keeps `{phone}` for route compatibility, but for scope the brain uses the phone `require_tenant_match` already resolved from `beansco_session`, ignoring the path value.
+- **Alternatives.** (a) Trust the URL `{phone}`. (b) Drop `{phone}` from the route now.
+- **Why this won.** The session is already the scope authority; using it closes a client-controlled input without breaking the deployed widget.
+- **Why the alternatives lost.** (a) The URL value is client-controlled. (b) Dropping it now needlessly breaks a live widget.
+- **Panel source.** Winston.
+
 ## Conventions
 
 - **Naming.** New modules `agents/expander.py` (factory `create_expander_node`, pure helper `expand_items`) and `agents/attributes.py` (the single color and size vocabularies). SKUs stay `BC-{TYPE}-{DESCRIPTORS}` with discriminating tokens retained.
@@ -347,6 +399,15 @@ Dario made the Control Center the single owner-facing product. All CRUD moves of
 - **Writes reuse endpoints.** Mutations go only through the existing `/api/tenants/{phone}/...` endpoints. No endpoint rewritten, no second write path. Soft-delete stays soft; stock adjust sends the signed delta; sale cancel restores stock.
 - **Snapshot stays bounded.** Provider `snapshot()` is one bounded query and fails open. Page detail belongs in the route `_build_view`. New CRUD pages fetch client-side so they never join the snapshot pool.
 - **Tiles are registry edits.** Tile wiring is a change to `registry.py`, never a home-template edit. Re-basing the home is gated by the pixel self-regression check, current home as golden.
+
+### Native tool-use chat conventions (spec 006)
+
+- **Tool naming.** `mcp__beans__<verb>_<noun>`: reads `read_*`, write previews `preview_*`. There is no `commit_*` tool and never will be; commit is not a model capability (D-033).
+- **Internal API shape.** `POST /internal/ops/{op}` under internal-token auth, 1:1 with the `database_config.py` functions, tenant taken from the pinned scope and never from the body. Previews return `{op_token, preview, missing_fields}`; reads return the module snapshot shapes.
+- **Boot tool-posture self-check.** The gateway entrypoint asserts at boot that the running `claude` allows only `mcp__beans__*` and exits non-zero otherwise, symmetric with the existing secret-shape grep. The secret grep guards leakage; this guards tool execution, the leg native tool-use removes.
+- **How writes confirm.** Preview stages, the human clicks, and `/chat/confirm` consumes the single-use token under `tenant_context`. That is the only place a row commits and the cache invalidates. No confirm gate may be auto-satisfied by model output.
+- **One writer per fact.** The internal API owns committed rows, the pending store owns staged intent, and the acknowledgement is built from returned rows, never from the model's memory of the proposal.
+- **Honesty of acknowledgement.** A post-write message names the SKU or target, the amount in digits, and the resulting balance, read back from the commit response.
 
 ## Non-goals
 
@@ -379,6 +440,14 @@ Dario made the Control Center the single owner-facing product. All CRUD moves of
 - No resolution of the #138 snapshot-pool performance debt; this spec must not regress the home and files against #138 if the pool saturates.
 - No database objects; this spec adds no table, column, or migration.
 
+### Native tool-use chat non-goals (spec 006)
+
+- No built-in tools ever on the box, no DB credentials on the box, no commit capability exposed to the model.
+- No change to the envelope, the widget seam, auth, or `tenant_context` beyond the confirm-card metadata variant.
+- No new operation types; this spec ports the existing menu, it does not grow it.
+- No multi-tenant rollout; one business, with scope injected as if there could be many.
+- No change to the onboarding chat, which stays a separate Gemini tool-calling dispatcher.
+
 ## Open architectural questions
 
 - **A-Q1.** Should expansion also serve sales ("vendi 5 medias azules y grises")? Disagreement: clean single-purpose node now versus a general fan-out. Fallback: ship REGISTER_PRODUCT only, leave the node general enough to extend. Tracked as spec OQ3.
@@ -393,6 +462,10 @@ Dario made the Control Center the single owner-facing product. All CRUD moves of
 - **A-Q10.** Migrate the four read-only pages in one styling-only cohort, or alongside each CRUD page? Fallback: one styling-only cohort right after the base extraction, so the brand converges before CRUD work. The pixel self-regression gate makes an early migration safe. (D-024)
 - **A-Q11.** Does the eighth concurrent snapshot (productos) fit the pool within the deadline at live latency, or must #138 land first? Fallback: ship the shell and Productos with the bounded count and measure on the live cluster; resolve #138 before the later repoints only if saturated. (D-027)
 - **A-Q12.** Record-sale on the new Ventas page: reuse the existing `POST /sales` shape, or does the missing modal need a contract the endpoint lacks? Fallback: build against the existing contract; treat any gap as a separate endpoint task. (D-025)
+- **A-Q13.** Shared `INTERNAL_SERVICE_TOKEN`, or a per-request token scoped to one phone with a short TTL? Fallback: the existing token with the pinned phone and FastAPI re-validation for M1; per-request minting if the callback path widens. (D-031, D-032)
+- **A-Q14.** Does the confirm card need a server-issued nonce bound to the `op_token`? Fallback: session auth plus the single-use args-bound token for M1; add a nonce if `/chat/confirm` is ever reachable without the session. (D-033)
+- **A-Q15.** Does `--max-turns` alone bound the loop, or is a per-request tool-call budget also needed? Fallback: cap `--max-turns` low, measure live, add a tool-call counter if a turn loops. (D-030)
+- **A-Q16.** Keep the gateway `/run` tool-free path beside the new tool path, or retire it with the graph? Fallback: keep `/run` tool-free until nothing calls it, then retire. (D-029)
 
 ## Source
 
@@ -405,7 +478,8 @@ Dario made the Control Center the single owner-facing product. All CRUD moves of
 - D-013 through D-019 (production and landed-cost engine): ./specs/003-production-landed-cost-engine/spec.md and ./specs/003-production-landed-cost-engine/plan.md. Panel: Winston (author), with Amelia, Marcus, Bob, Kaze, Edut, Mar'ah.
 - D-020 through D-023 (Beans Control Center shell, the spec 003 mid-run reframe): same spec dir. Reframe panel: Winston (author), with Compass, Bob, and Kaze plus Sally on the status-home mockup.
 - D-024 through D-028 (Control Center unification, the single-product spec): ./specs/004-control-center-unification/spec.md and ./specs/004-control-center-unification/plan.md. Panel: Winston (author), with Amelia, Bob, and Kaze plus Sally on the unification mockup.
+- D-029 through D-034 (native tool-use chat, retiring the Gemini LangGraph Timonel): ./specs/006-native-tool-use-chat/spec.md and ./specs/006-native-tool-use-chat/plan.md. Panel: Winston (author), with Amelia, Bob, Kaze, Edut, Tamir, and Compass.
 
 ## Mode
 
-This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched. Updated 2026-10-13 by /create-spec (spec 003 production-landed-cost-engine) appending D-013 through D-019 and the costing domain addendum, conventions, non-goals, and A-Q5, A-Q6; D-001 through D-012 untouched. Updated again 2026-10-13 in the same run after Dario reframed the spec into the Beans Control Center, appending D-020 through D-023 (the command-center shell), the shell addendum, conventions, non-goals, and A-Q7 through A-Q9; D-019's default-landing clause is refined by D-023, the rest of D-013 through D-019 untouched. Updated 2026-10-14 by /create-spec (spec 004 control-center-unification) appending D-024 through D-028 (the single-product unification), the unification addendum, conventions, non-goals, and A-Q10 through A-Q12; D-001 through D-023 untouched. D-024 to D-028 build on D-020 and D-023.
+This file was generated fresh on 2026-06-11 by /create-spec. Updated 2026-06-14 by /create-spec (spec 002 timonel-pending-operations) appending D-007 through D-012; D-001 through D-006 untouched. Updated 2026-10-13 by /create-spec (spec 003 production-landed-cost-engine) appending D-013 through D-019 and the costing domain addendum, conventions, non-goals, and A-Q5, A-Q6; D-001 through D-012 untouched. Updated again 2026-10-13 in the same run after Dario reframed the spec into the Beans Control Center, appending D-020 through D-023 (the command-center shell), the shell addendum, conventions, non-goals, and A-Q7 through A-Q9; D-019's default-landing clause is refined by D-023, the rest of D-013 through D-019 untouched. Updated 2026-10-14 by /create-spec (spec 004 control-center-unification) appending D-024 through D-028 (the single-product unification), the unification addendum, conventions, non-goals, and A-Q10 through A-Q12; D-001 through D-023 untouched. D-024 to D-028 build on D-020 and D-023. Updated 2026-10-17 by /create-spec (spec 006 native-tool-use-chat) appending D-029 through D-034 (the native Claude tool-use brain that retires the Gemini LangGraph), the spec-006 conventions, non-goals, and A-Q13 through A-Q16; D-001 through D-028 untouched. D-029 retires the graph the System-shape section and D-001 through D-019 describe, so that pipeline is superseded as the live brain while its decision history stays for the record; D-033 reuses D-008 through D-010.

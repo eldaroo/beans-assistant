@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Beans chat mockup</title>
+  <meta name="description" content="Spec 006 native-tool-use chat for Beans and Co: proposed-vs-committed operation cards." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="demo-head">
+    <h1>Beans & Co: chat con tool-use nativo (spec 006, mockup)</h1>
+    <p>Caminá los estados. El corazon es la diferencia entre una operacion propuesta (provisional, punteada) y una cometida (asentada, solida). Probá Confirmar en una propuesta.</p>
+    <div class="demo-controls" role="toolbar" aria-label="Estados del mockup">
+      <button data-scene="empty" aria-pressed="true">Vacio</button>
+      <button data-scene="read">Lectura</button>
+      <button data-scene="working">Trabajando</button>
+      <button data-scene="sale">Propuesta: venta</button>
+      <button data-scene="expense">Propuesta: gasto</button>
+      <button data-scene="batch">Propuesta: lote</button>
+      <button data-scene="cancel">Cancelacion</button>
+      <button data-scene="error">Error</button>
+      <button data-scene="conversation">Conversacion</button>
+      <span class="spacer"></span>
+      <button class="theme" id="themeBtn" aria-label="Cambiar tema">Tema</button>
+    </div>
+  </div>
+
+  <div class="frame-wrap">
+    <div class="frame" id="chat">
+      <div class="tim-header">
+        <div class="tim-avatar" aria-hidden="true">T</div>
+        <div>
+          <div class="who">Timonel</div>
+          <div class="sub">Beans & Co</div>
+        </div>
+      </div>
+      <div class="tim-thread" role="log" aria-live="polite" aria-label="Conversacion"></div>
+      <div class="composer">
+        <input type="text" aria-label="Escribi un mensaje" placeholder="Escribi lo que pasó..." />
+        <button type="button">Enviar</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { mountChat } from "./fixture.js";
+    const root = document.getElementById("chat");
+    const { scenes } = mountChat(root);
+    scenes.empty();
+
+    const buttons = Array.from(document.querySelectorAll(".demo-controls [data-scene]"));
+    buttons.forEach((b) => {
+      b.addEventListener("click", () => {
+        buttons.forEach((x) => x.setAttribute("aria-pressed", "false"));
+        b.setAttribute("aria-pressed", "true");
+        scenes[b.dataset.scene]();
+      });
+    });
+
+    // theme toggle: cycles auto -> light -> dark
+    const tb = document.getElementById("themeBtn");
+    const root2 = document.documentElement;
+    let mode = "auto";
+    tb.addEventListener("click", () => {
+      mode = mode === "auto" ? "light" : mode === "light" ? "dark" : "auto";
+      if (mode === "auto") root2.removeAttribute("data-theme");
+      else root2.setAttribute("data-theme", mode);
+      tb.textContent = "Tema: " + mode;
+    });
+  </script>
+</body>
+</html>
