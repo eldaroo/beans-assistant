@@ -1,9 +1,11 @@
-{#- Status home (spec 003 M1), re-based onto cc_base.html (spec 004 S1-shell).
-   The shell (tokens, rail, topbar, theme toggle, Timonel slot) lives in cc_base;
-   this template keeps only the home-specific scorecard/strip CSS and the tiles +
-   attention markup, so the render is byte-for-byte the same pixels as before
-   (AC1, DOM-identity self-regression). The route passes nav=view.rail_groups and
-   active_route='home', which cc_base renders into the same held rail. -#}
+{#- Status home (spec 003 M1), re-based onto cc_base.html (spec 004 S1-shell),
+   reshaped into the three owner job tabs (spec 006). The shell (tokens, topbar,
+   three-tab rail, theme toggle, Timonel slot) lives in cc_base; this template
+   keeps the home-specific scorecard/strip CSS and renders one tabpanel per tab:
+   Hoy shows the attention strip plus every tile (its content byte-identical to
+   the pre-reshape home, AC12), Operación and Costos y producción show only their
+   group's tiles (AC6). The route passes tabs=nav.owner_tabs(), tab_tiles grouped
+   from the single build_home fan-out, and active_tab from ?tab= (default Hoy). -#}
 {% extends "cc_base.html" %}
 {% from "_cc_macros.html" import href_for %}
 {% block title %}{{ business_name }} · Control Center{% endblock %}
@@ -42,9 +44,35 @@
   .scorecard .tile:nth-child(n+9){animation-delay:.32s}
 }
 {% endblock %}
+{#- One scorecard tile. Shared by every tab panel so the rendered tile is
+   byte-identical to the pre-reshape home (AC12, no number regressed). -#}
+{% macro tile_card(tile) %}
+      <a class="tile reveal {{ tile.status }}" href="{{ href_for(tile.route, phone) }}">
+        <span class="lbl">{{ tile.label }}</span>
+        <span class="num">{{ tile.value }}</span>
+        {% if tile.trend %}
+        <span class="trend {{ tile.trend_tone }}">{% if tile.trend_tone == 'warn' %}<span class="dot"></span>{% endif %}{{ tile.trend }}</span>
+        {% endif %}
+      </a>
+{% endmacro %}
+{# Per-tab lead copy. Hoy keeps the status-home framing; the two job tabs name
+   what they hold and that tiles are view-and-edit drill-ins (approved mockup). #}
+{# M1 is the shell reshape only: Operación modules (resultado, productos, stock,
+   ventas) are editable today; the Costos y producción modules are view-only until
+   their CRUD drill-ins land in a later cohort, so their copy says "ver el detalle",
+   never "editar" (HONESTY: no copy claims a capability M1 has not shipped). The
+   Timonel-write nudge is deferred until the M3 confirm/receipt/undo trust floor. #}
+{% set tab_sub = {
+  'hoy': 'El estado del negocio de un vistazo. Abrí un módulo desde su tile.',
+  'operacion': 'Tus números para ver y corregir a mano. Tocá un tile para ver y editar.',
+  'costos': 'Costeo, producción, logística y proveedores. Tocá un tile para ver el detalle de cada uno.'
+} %}
 {% block content %}
+  {% for tab in (tabs if tabs is defined else []) %}
+  <section role="tabpanel" id="panel-{{ tab.id }}" data-cc-panel="{{ tab.id }}" aria-labelledby="cc-tab-{{ tab.id }}"{% if active_tab is not defined or active_tab != tab.id %} hidden{% endif %}>
+    {% if tab.id == 'hoy' %}
     <h1 class="page">Hoy en {{ business_name }}</h1>
-    <p class="sub">El estado del negocio de un vistazo. Abrí un módulo desde su tile.</p>
+    <p class="sub">{{ tab_sub.get('hoy', '') }}</p>
 
     {% if view.attention %}
     <div class="strip" role="region" aria-label="Qué necesita tu atención">
@@ -71,16 +99,25 @@
     </div>
     {% else %}
     <div class="scorecard">
-      {% for tile in view.tiles %}
-      <a class="tile reveal {{ tile.status }}" href="{{ href_for(tile.route, phone) }}">
-        <span class="lbl">{{ tile.label }}</span>
-        <span class="num">{{ tile.value }}</span>
-        {% if tile.trend %}
-        <span class="trend {{ tile.trend_tone }}">{% if tile.trend_tone == 'warn' %}<span class="dot"></span>{% endif %}{{ tile.trend }}</span>
-        {% endif %}
-      </a>
-      {% endfor %}
+      {% for tile in (tab_tiles.get(tab.id, []) if tab_tiles is defined else view.tiles) %}{{ tile_card(tile) }}{% endfor %}
     </div>
     <p class="note">Resultado, Stock y Ventas salen de los datos que la plataforma tiene hoy. Los demás módulos aparecen cuando se cargan. Cada tile abre el panel correspondiente del tablero.</p>
     {% endif %}
+
+    {% else %}
+    <h1 class="page" style="font-size:22px">{{ tab.label }}</h1>
+    <p class="sub">{{ tab_sub.get(tab.id, 'Tocá un tile para ver el detalle de cada módulo.') }}</p>
+    {% set this_tiles = (tab_tiles.get(tab.id, []) if tab_tiles is defined else []) %}
+    {% if not view.is_empty and this_tiles %}
+    <div class="scorecard">
+      {% for tile in this_tiles %}{{ tile_card(tile) }}{% endfor %}
+    </div>
+    {% else %}
+    {# Fresh tenant: give the same honest "nothing yet" guidance the Hoy welcome
+       gives, instead of a grid of empty "—" tiles with no cue what to do. #}
+    <div class="cc-empty"><p>{{ 'Cuando cargues ventas, stock y gastos, esta sección se arma sola.' if view.is_empty else 'Esta sección se completa a medida que cargás datos en cada módulo.' }}</p></div>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% endfor %}
 {% endblock %}

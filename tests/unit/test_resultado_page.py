@@ -40,7 +40,8 @@ def _render(ingresos_cents, expenses, truncated=False, ganancia_server_cents=0):
     env = Environment(loader=FileSystemLoader(str(_TEMPLATES)), autoescape=True)
     return env.get_template("resultado.html").render(
         phone="+100", view=_view(ingresos_cents, expenses, truncated, ganancia_server_cents),
-        business_name="Beans&Co", nav=nav.owner_rail("+100"), active_route="caja",
+        business_name="Beans&Co", nav=nav.owner_rail("+100"),
+        tabs=nav.owner_tabs(), active_tab=nav.tab_id_for_module("caja"), active_route="caja",
     )
 
 
@@ -50,11 +51,13 @@ def test_extends_base_and_drops_own_doctype():
     assert "<!doctype html>" not in src
 
 
-def test_renders_shell_and_active_resultado_item_on_absolute_route():
+def test_renders_shell_and_active_tab_on_absolute_route():
+    import re
     html = _render(100000, [_expense()])
-    assert 'class="rail"' in html and 'class="tim-launch"' in html
-    # the Resultado (caja) rail item is current and links to the NEW page
-    assert 'aria-current="true" href="/resultado"' in html
+    assert 'class="cc-tabs"' in html and 'class="tim-launch"' in html
+    # spec 006 T-005: Resultado (caja) sits under the Operación tab, selected
+    m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
+    assert m and 'aria-selected="true"' in m.group(0)
     assert "?tab=expenses" not in html
 
 

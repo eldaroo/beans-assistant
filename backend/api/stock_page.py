@@ -81,7 +81,8 @@ async def stock_page(
             "phone": phone,
             "view": view,
             "business_name": business_name,
-            "nav": nav.owner_rail(phone),
+            "tabs": nav.owner_tabs(),
+            "active_tab": nav.tab_id_for_module("stock"),
             "active_route": "stock",
         },
     )

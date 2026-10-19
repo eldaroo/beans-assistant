@@ -106,7 +106,13 @@ class Module:
     ``route`` is the drill-down suffix appended to the module's current surface
     (M1: a dashboard tab, e.g. ``?tab=stock``). ``rail_group`` places the module
     in the left-rail nav sections ("" top group, "Operación", "Asistente").
-    ``order`` fixes tile and rail ordering so the home is stable across requests.
+    ``group`` places the module under one of the owner-facing job TABS of the
+    simplified Command Center (spec 006 AC1: Operación, or "Costos y producción").
+    A module with no ``group`` falls under the default "Operación" tab, so a new
+    descriptor lands in a tab with no template edit (AC1). ``group`` is the tab
+    dimension; ``rail_group`` is the legacy left-rail section and is kept so the
+    reshape stays reversible. ``order`` fixes tile and rail ordering so the home
+    is stable across requests.
     """
 
     id: str
@@ -114,6 +120,7 @@ class Module:
     route: str
     snapshot: SnapshotProvider
     rail_group: str = ""
+    group: str = ""
     order: int = 100
 
 
