@@ -104,22 +104,37 @@ app.include_router(logistica.router, tags=["Control Center"])
 # Proveedores module drill-down (spec 003 M5). Owner-gated inside the router.
 app.include_router(proveedores.router, tags=["Control Center"])
 
-# Onboarding routers, both mounted under /api/onboarding.
-# Order matters: the web router exposes the literal path /web, the WhatsApp
-# router exposes the path-parameter /{phone}. FastAPI matches in registration
-# order, so the web router MUST be registered first; otherwise /web would be
-# captured as a phone value by the WhatsApp router and gated by the wrong
-# dependency (require_internal_or_admin vs require_pending_session).
-app.include_router(
-    onboarding_web.router,
-    prefix="/api/onboarding",
-    tags=["Onboarding Web"],
-    dependencies=[Depends(require_pending_session)],
-)
+# Onboarding routers removed (single-business pivot): the multi-tenant new-tenant
+# flow is retired. An unauthorized Google login now sees the login error, not an
+# onboarding flow.
 
-# WhatsApp onboarding endpoint: service token or admin (called by the bot).
-app.include_router(onboarding.router, prefix="/api/onboarding", tags=["Onboarding"], dependencies=[Depends(require_internal_or_admin)])
 
+# ---------------------------------------------------------------------------
+# Single-business surface (2026-10-16): Beans&Co is operated as ONE business, so
+# the owner never sees a phone in the URL. The multi-tenant kernel underneath is
+# untouched and reversible — these phone-less paths resolve the business from the
+# session cookie and rewrite internally to the existing tenant-scoped page routes,
+# so the browser URL stays clean (/home, /productos, ...) while the real handler
+# and require_tenant_match run exactly as before.
+_PHONELESS_CC_PATHS = {
+    "/home", "/productos", "/stock", "/ventas", "/resultado",
+    "/costos", "/produccion", "/logistica", "/proveedores",
+}
+
+
+@app.middleware("http")
+async def single_business_phoneless(request: Request, call_next):
+    path = request.scope.get("path", "")
+    if path in _PHONELESS_CC_PATHS:
+        user = get_session_user(request)
+        if not user or user.get("kind") == "pending" or not user.get("phone_number"):
+            # Not an authenticated owner: bounce a page navigation to login rather
+            # than 404 the clean path (the tenant-scoped route would 401 anyway).
+            return RedirectResponse(url="/login", status_code=302)
+        rewritten = f"{path}/{user['phone_number']}"
+        request.scope["path"] = rewritten
+        request.scope["raw_path"] = rewritten.encode("utf-8")
+    return await call_next(request)
 
 
 # HTML Routes
@@ -153,14 +168,11 @@ async def root(request: Request):
     user = get_session_user(request)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    if user.get("kind") == "pending":
-        return RedirectResponse(url="/onboarding", status_code=302)
-    if user.get("role") == "admin":
-        return RedirectResponse(url="/admin", status_code=302)
-    phone = user.get("phone_number")
-    # Owner landing is the Control Center status home (M1). The prior dashboard
-    # at /tenants/{phone} stays reachable and unchanged (AC5, additive).
-    return RedirectResponse(url=f"/home/{phone}", status_code=302)
+    # One surface: everyone authenticated lands on the Control Center home.
+    # Phone-less: the single-business middleware resolves the tenant from the
+    # session (no phone in the URL). The legacy /tenants and /admin pages were
+    # removed; the multi-tenant kernel stays underneath.
+    return RedirectResponse(url="/home", status_code=302)
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
@@ -185,144 +197,8 @@ async def service_worker():
 async def login_page(request: Request):
     user = get_session_user(request)
     if user:
-        if user.get("kind") == "pending":
-            return RedirectResponse(url="/onboarding", status_code=302)
         return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse("login.html", {"request": request, "error": None})
-
-
-@app.get("/onboarding", response_class=HTMLResponse, dependencies=[Depends(require_pending_session)])
-async def onboarding_page(request: Request):
-    """Render the onboarding spectacle (M2). Standalone full-screen page;
-    does not extend base.html (no global nav, no footer)."""
-    return templates.TemplateResponse(
-        "onboarding.html",
-        {"request": request, "pending": request.state.pending},
-    )
-
-
-@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_role("admin"))])
-async def admin_home(request: Request):
-    """Admin tenant list (formerly /)."""
-    from backend.services.tenants_service import TenantsService
-
-    tenants_service = TenantsService()
-    tenant_models = tenants_service.list_tenants(limit=500, offset=0)
-    tenants_list = [
-        tenant.model_dump() if hasattr(tenant, "model_dump") else tenant.dict()
-        for tenant in tenant_models
-    ]
-
-    tenants_with_stats = []
-    for tenant in tenants_list:
-        phone = tenant["phone_number"]
-
-        try:
-            stats_model = tenants_service.get_tenant_stats(phone)
-            stats = stats_model.model_dump() if hasattr(stats_model, "model_dump") else stats_model.dict()
-            stats["products"] = stats["products_count"]
-            stats["sales"] = stats["sales_count"]
-        except Exception as e:
-            print(f"Error getting stats for {phone}: {e}")
-            stats = {
-                "products_count": 0,
-                "sales_count": 0,
-                "products": 0,
-                "sales": 0,
-                "revenue_usd": 0.0,
-                "profit_usd": 0.0
-            }
-
-        tenants_with_stats.append({
-            **tenant,
-            "stats": stats
-        })
-
-    response = templates.TemplateResponse(
-        "tenants.html",
-        {
-            "request": request,
-            "tenants": tenants_with_stats
-        }
-    )
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    return response
-
-
-@app.get("/tenants/{phone}", response_class=HTMLResponse)
-async def tenant_detail(request: Request, phone: str, _user: dict = Depends(require_tenant_match)):
-    """Tenant detail page - dashboard with tabs."""
-    from database_config import db as database, tenant_context
-    from backend.services.tenants_service import TenantsService, TenantNotFoundError
-
-    tenants_service = TenantsService()
-    try:
-        tenant = tenants_service.get_tenant(phone)
-    except TenantNotFoundError:
-        return JSONResponse(
-            status_code=404,
-            content={"detail": f"Tenant {phone} not found"},
-        )
-
-    tenant_phone = tenant.phone_number
-    tenant_config = {
-        "business_name": tenant.business_name,
-        "owner_name": getattr(tenant, "owner_name", None),
-        "language": tenant.language,
-        "currency": tenant.currency,
-    }
-
-    # Get stats from PostgreSQL
-    try:
-        with tenant_context(tenant_phone):
-            # Product count
-            products_count = database.fetch_one("SELECT COUNT(*) as count FROM products")
-
-            # Sales count
-            sales_count = database.fetch_one("SELECT COUNT(*) as count FROM sales")
-
-            # Revenue
-            revenue = database.fetch_one("SELECT total_revenue_cents FROM revenue_paid")
-            revenue_cents = revenue["total_revenue_cents"] if revenue and revenue["total_revenue_cents"] else 0
-
-            # Profit
-            profit = database.fetch_one("SELECT profit_usd FROM profit_summary")
-            profit_usd = profit["profit_usd"] if profit and profit["profit_usd"] else 0.0
-
-            stats = {
-                "products_count": products_count["count"] if products_count else 0,
-                "sales_count": sales_count["count"] if sales_count else 0,
-                "revenue_usd": revenue_cents / 100.0,
-                "profit_usd": profit_usd
-            }
-
-            # Backward-compatible keys
-            stats["products"] = stats["products_count"]
-            stats["sales"] = stats["sales_count"]
-    except Exception as e:
-        print(f"Error getting stats: {e}")
-        stats = {
-            "products_count": 0,
-            "sales_count": 0,
-            "products": 0,
-            "sales": 0,
-            "revenue_usd": 0.0,
-            "profit_usd": 0.0
-        }
-
-    return templates.TemplateResponse(
-        "tenant_detail.html",
-        {
-            "request": request,
-            "tenant": {
-                "phone_number": tenant_phone,
-                **tenant_config
-            },
-            "stats": stats
-        }
-    )
 
 
 @app.get("/health")

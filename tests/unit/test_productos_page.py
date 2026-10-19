@@ -37,7 +37,9 @@ def _render(products):
     ]
     return env.get_template("productos.html").render(
         phone="+100", view={"products": rows}, business_name="Beans&Co",
-        nav=nav.owner_rail("+100"), active_route="productos",
+        nav=nav.owner_rail("+100"),
+        tabs=nav.owner_tabs(), active_tab=nav.tab_id_for_module("productos"),
+        active_route="productos",
     )
 
 
@@ -47,12 +49,14 @@ def test_extends_base_and_drops_own_doctype():
     assert "<!doctype html>" not in src
 
 
-def test_renders_shell_rail_timonel_and_active_item():
+def test_renders_shell_tabs_timonel_and_active_tab():
+    import re
     html = _render([_product()])
-    assert 'class="rail"' in html and 'id="themebtn"' in html
-    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launch"' in html
-    # this page's own rail item is current, linking to its absolute route
-    assert 'aria-current="true" href="/productos/+100"' in html
+    assert 'class="cc-tabs"' in html and 'id="themebtn"' in html
+    assert 'beansChat({ phone: "+100"' in html and 'class="tim-launcher"' in html
+    # spec 006 T-005: this page sits under its group tab (Operación), selected
+    m = re.search(r'<a[^>]*data-cc-tab="operacion"[^>]*>', html)
+    assert m and 'aria-selected="true"' in m.group(0)
 
 
 def test_seeds_products_and_carries_the_crud_factory():

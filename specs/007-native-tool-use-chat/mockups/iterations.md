@@ -1,4 +1,4 @@
-# Mockup iterations — spec 006 native-tool-use chat
+# Mockup iterations — spec 007 native-tool-use chat
 
 The mockup is the chat surface inside the Beans command center. Design pair: Kaze (creative) and Sally (UX/IA). Served at http://127.0.0.1:4186/ (vanilla HTML + CSS + ES module, ports forward as the implementation seed).
 

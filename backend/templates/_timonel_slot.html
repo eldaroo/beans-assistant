@@ -1,39 +1,54 @@
 {#- =========================================================================
-   _timonel_slot.html — the shared Timonel chat slot (spec 004, S7 + T-004).
+   _timonel_slot.html — the shared Timonel chat slot (spec 004 S7; reshaped by
+   spec 006 M2 into the voice-first drawer).
 
    Mounted once from cc_base.html's {% block chat %}, so Timonel appears on the
    home and every owner module page. Reuses the existing window.beansChat Alpine
-   factory (backend/static/js/chat_widget.js) unchanged — the factory is the
-   logic, this is a plain-CSS modern-token shell over the same bindings, so no
-   Tailwind and no legacy --color-* tokens leak onto the Control Center brand.
+   factory (backend/static/js/chat_widget.js) — D-030: single mount kept, this
+   file changes the CONTAINER and CSS only (the launcher, the drawer/sheet, the
+   mic). The factory's thread persistence, server rehydration and voice input
+   (spec 006 T-008/T-009/T-012) are additive methods on the same single mount.
 
-   Cohort A ships the SLOT: Timonel present, openable, sends and receives on the
-   real /api/tenants/{phone}/chat endpoint, floating-by-default (dock:'floating')
-   so it never takes over the calm home on first load. The chat-to-screen refresh
-   contract across separate documents (beans:navigate / beans:refresh re-wiring)
-   is spec 004 Cohort D (AC8), not this slot.
+   Spec 006 shape (approved mockup, 2026-10-19):
+     - Collapsed by default with a MICROPHONE launcher (voice-first): the owner
+       runs the business mostly by talking. The launcher opens the surface and
+       starts recording in one tap (T-007 + T-012).
+     - Opens as a RIGHT DRAWER on desktop (>=1000px) and a BOTTOM SHEET on mobile
+       (<=900px), over a backdrop that closes it. Single mount, one factory.
+     - The composer carries a mic toggle; a visible recording bar shows the live
+       state; the transcription feeds the same send() path as typed text, so a
+       voice-originated money/stock write passes the same trust floor (M3).
    ========================================================================= -#}
 <style>
 [x-cloak]{display:none !important}
-.tim-launch{position:fixed;right:16px;bottom:16px;z-index:40;display:inline-flex;align-items:center;gap:9px;height:48px;padding:0 16px 0 10px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);font:inherit;font-weight:600;cursor:pointer;box-shadow:var(--shadow-strip)}
-.tim-launch:hover{border-color:var(--line-hover)}
-.tim-launch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.tim-badge{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent);flex:0 0 auto}
+
+/* Voice-first launcher: a microphone FAB, collapsed by default (T-007). */
+.tim-launcher{position:fixed;right:18px;bottom:18px;z-index:50;display:grid;place-items:center;width:60px;height:60px;border-radius:50%;border:0;background:var(--accent);color:var(--on-accent);cursor:pointer;box-shadow:var(--shadow-strip)}
+.tim-launcher:hover{background:var(--accent-hover)}
+.tim-launcher:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.tim-launcher svg{width:26px;height:26px}
+
+/* Drawer on desktop, bottom sheet on mobile (T-007). Offscreen by default so it
+   is inert before Alpine mounts; .open slides it in. */
+.tim-backdrop{position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:54}
+.tim-drawer{position:fixed;top:0;right:0;height:100%;width:min(420px,94vw);z-index:55;display:flex;flex-direction:column;background:var(--card);color:var(--text);border-left:1px solid var(--line);box-shadow:var(--shadow-strip);transform:translateX(103%);transition:transform .24s cubic-bezier(.16,1,.3,1);will-change:transform}
+.tim-drawer.open{transform:none}
+@media(max-width:900px){
+  .tim-drawer{left:0;right:0;bottom:0;top:auto;height:84vh;width:100%;border-left:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;transform:translateY(103%)}
+  .tim-drawer.open{transform:none}
+}
+@media(prefers-reduced-motion:reduce){.tim-drawer{transition:none}}
+
+.tim-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.tim-badge{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--accent-soft);color:var(--accent);font-weight:700;flex:0 0 auto}
 .tim-badge svg{width:18px;height:18px}
-.tim-shell{position:fixed;z-index:41;display:flex;flex-direction:column;background:var(--card);color:var(--text);border:1px solid var(--line)}
-.tim-shell.floating{right:16px;bottom:16px;width:380px;height:560px;max-height:calc(100dvh - 32px);border-radius:16px;box-shadow:var(--shadow-strip)}
-.tim-shell.pinned{right:0;top:0;bottom:0;width:420px;border-left:1px solid var(--line);border-radius:0}
-@media(max-width:640px){.tim-shell.floating,.tim-shell.pinned{inset:0;width:100%;height:100%;border-radius:0;border:0}}
-.tim-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.tim-head .tim-badge{width:34px;height:34px}
 .tim-id{min-width:0;flex:1}
-.tim-id .nm{font-size:14px;font-weight:600;line-height:1.2}
-.tim-id .st{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tim-ico{display:grid;place-items:center;width:36px;height:36px;border-radius:8px;border:0;background:transparent;color:var(--muted);cursor:pointer;font:inherit}
-.tim-ico:hover{background:var(--bg);color:var(--text)}
-.tim-ico:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.tim-ico[aria-pressed="true"]{color:var(--accent)}
-.tim-ico svg{width:18px;height:18px}
+.tim-id .nm{font-size:14px;font-weight:700;line-height:1.2;margin:0}
+.tim-id .st{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}
+.tim-close{display:grid;place-items:center;margin-left:auto;background:transparent;border:0;color:var(--muted);font-size:24px;width:42px;height:42px;border-radius:10px;cursor:pointer}
+.tim-close:hover{background:var(--bg);color:var(--text)}
+.tim-close:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
 .tim-thread{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:16px}
 .tim-empty{margin:auto;text-align:center;color:var(--muted);display:flex;flex-direction:column;gap:8px;align-items:center;padding:0 12px}
 .tim-empty svg{width:44px;height:44px;color:var(--accent);opacity:.7}
@@ -43,23 +58,43 @@
 .tim-bubble.tim-user{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:6px}
 .tim-bubble.tim-assistant{align-self:flex-start;background:var(--bg);color:var(--text);border:1px solid var(--line);border-bottom-left-radius:6px}
 .tim-bubble.tim-system{align-self:center;max-width:90%;text-align:center;font-size:12px;color:var(--muted);background:transparent;padding:4px 0}
+.tim-bubble .voice{display:inline-flex;align-items:center;gap:6px}
 .tim-toolcard{align-self:flex-start;max-width:85%;font-size:13px;font-weight:600;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg)}
 .tim-toolcard.tim-tool-success{border-color:var(--good);color:var(--good);background:var(--good-soft)}
 .tim-toolcard.tim-tool-failure{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
 .tim-think{align-self:flex-start;display:inline-flex;gap:4px;padding:12px 16px;border-radius:16px;border-bottom-left-radius:6px;background:var(--bg);border:1px solid var(--line)}
 .tim-think span{width:6px;height:6px;border-radius:50%;background:var(--muted);display:inline-block}
-.tim-foot{border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:8px}
-.tim-chips{display:flex;flex-wrap:wrap;gap:6px}
+
+.tim-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 16px 10px}
 .tim-chip{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:999px;padding:6px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;min-height:32px}
 .tim-chip:hover{background:var(--bg)}
 .tim-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.tim-form{display:flex;align-items:flex-end;gap:8px}
+
+/* Recording state (T-012): a visible, unmistakable bar while the mic is live. */
+.rec-bar{display:flex;flex-direction:column;gap:6px;padding:12px 16px;border-top:1px solid var(--line)}
+.rec-row{display:flex;align-items:center;gap:10px}
+.rec-dot{width:12px;height:12px;border-radius:50%;background:var(--danger)}
+.rec-time{font-variant-numeric:tabular-nums;font-weight:600}
+.rec-label{color:var(--muted)}
+.rec-stop{margin-left:auto;background:var(--accent);color:var(--on-accent);border:0;border-radius:9px;padding:9px 16px;font:inherit;font-weight:600;min-height:40px;cursor:pointer}
+.rec-note{margin:0;font-size:11px;color:var(--muted)}
+
+.tim-form{display:flex;align-items:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.tim-mic{flex:0 0 auto;display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--line);background:var(--bg);color:var(--muted);border-radius:10px;cursor:pointer}
+.tim-mic:hover{border-color:var(--accent);color:var(--accent)}
+.tim-mic:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.tim-mic.active{background:var(--danger-soft);color:var(--danger);border-color:var(--danger)}
+.tim-mic:disabled{opacity:.4;cursor:not-allowed}
+.tim-mic svg{width:20px;height:20px}
 .tim-ta{flex:1;resize:none;min-height:44px;max-height:128px;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px}
 .tim-ta:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tim-send{display:inline-flex;align-items:center;height:44px;padding:0 16px;border:0;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-weight:600;cursor:pointer}
 .tim-send:hover{background:var(--accent-hover)}
 .tim-send:disabled{opacity:.5;cursor:not-allowed}
+
 @media(prefers-reduced-motion:no-preference){
+  .rec-dot{animation:rec-pulse 1s infinite}
+  @keyframes rec-pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .tim-think span{animation:tim-blink 1.2s infinite both}
   .tim-think span:nth-child(2){animation-delay:.18s}.tim-think span:nth-child(3){animation-delay:.36s}
   @keyframes tim-blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
@@ -67,47 +102,46 @@
 </style>
 
 {% set tim_icon %}<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.5c3.3 0 6 2.4 6 5.4 0 2.6-2 4.8-4.7 5.3-.6 1.6-2 2.9-3.8 3.3-.5.1-.9-.3-.8-.8.3-1.1.2-2.2-.2-3.2-1.4-.9-2.5-2.4-2.5-4.6 0-3 2.7-5.4 6-5.4Zm-1.6 4.3c-.4.4-.4 1 0 1.4l3.4 3.4c.4.4 1 .4 1.4 0 .4-.4.4-1 0-1.4l-3.4-3.4c-.4-.4-1-.4-1.4 0Z"/></svg>{% endset %}
+{% set mic_icon %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8.5" y1="21" x2="15.5" y2="21"/></svg>{% endset %}
 
-<div x-data='beansChat({ phone: {{ phone | tojson }}, dock: "floating" })' x-effect="beansDock = docked; beansOpen = isOpen">
-  {# Launcher: visible when closed #}
-  <button type="button" class="tim-launch" x-show="!isOpen" x-cloak @click="open()" aria-label="Abrir chat con tu Timonel">
-    <span class="tim-badge">{{ tim_icon }}</span>
-    <span>Timonel</span>
+<div x-data='beansChat({ phone: {{ phone | tojson }}, dock: "floating" })'>
+  {# Voice-first launcher: a mic FAB, visible when the drawer is collapsed.
+     Tapping it opens the drawer and starts recording in one move (T-007). When
+     this browser has no speech recognition, it just opens the drawer to type. #}
+  <button type="button" class="tim-launcher" x-show="!isOpen" x-cloak
+          @click="micSupported ? startRecording() : open()"
+          :aria-label="micSupported ? 'Hablar o grabar audio con Timonel' : 'Abrir chat con Timonel'">
+    <span x-show="micSupported">{{ mic_icon }}</span>
+    <span x-show="!micSupported" x-cloak>{{ tim_icon }}</span>
   </button>
 
-  {# Chat dialog #}
-  <div x-show="isOpen" x-cloak x-ref="shell"
-       :class="docked === 'pinned' ? 'tim-shell pinned' : 'tim-shell floating'"
-       @keydown.escape.stop="onEscape()"
-       role="dialog" aria-label="Chat con tu Timonel" aria-modal="false">
+  {# Backdrop: closes the drawer on click. #}
+  <div class="tim-backdrop" x-show="isOpen" x-cloak @click="close()" aria-hidden="true"></div>
+
+  {# The drawer / bottom sheet. Single mount; .open slides it in. #}
+  <div x-ref="shell" :class="isOpen ? 'tim-drawer open' : 'tim-drawer'"
+       @keydown.escape.stop="close()"
+       role="dialog" aria-label="Chat con tu Timonel" aria-modal="true"
+       :aria-hidden="isOpen ? 'false' : 'true'">
     <header class="tim-head">
       <span class="tim-badge">{{ tim_icon }}</span>
       <div class="tim-id">
         <p class="nm">Timonel</p>
         <p class="st" x-text="status" aria-live="polite"></p>
       </div>
-      <button type="button" class="tim-ico" @click="togglePin()"
-              :aria-pressed="docked === 'pinned' ? 'true' : 'false'"
-              :aria-label="docked === 'pinned' ? 'Desanclar' : 'Anclar a la derecha'">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76V6h-1V4h8v2h-1v4.76l3 3.24v2H6v-2l3-3.24Z"/></svg>
-      </button>
-      <button type="button" class="tim-ico" @click="close()" aria-label="Cerrar">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
-      </button>
+      <button type="button" class="tim-close" @click="close()" aria-label="Cerrar">&times;</button>
     </header>
 
     <div class="tim-thread" x-ref="thread" role="log" aria-live="polite">
       <template x-if="messages.length === 0">
         <div class="tim-empty">
           <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <p class="t1">Tu negocio, anotado y al día.</p>
-          <p class="t2">Pedile lo que necesites: stock, ventas, gastos.</p>
+          <p class="t1">El centro de control de tu negocio.</p>
+          <p class="t2">Hablá o escribí: stock, ventas, gastos.</p>
         </div>
       </template>
       <template x-for="m in messages" :key="m.id">
         <div>
-          {# tool-card messages carry no html (the factory sets m.toolCall, not m.html);
-             render them as a labelled card so they never show as an empty bubble. #}
           <template x-if="m.kind === 'tool-card'">
             <div class="tim-toolcard" :class="m.toolCall ? ('tim-tool-' + m.toolCall.state) : ''" x-text="m.toolCall ? m.toolCall.label : ''"></div>
           </template>
@@ -121,20 +155,38 @@
       </div>
     </div>
 
-    <div class="tim-foot">
-      <template x-if="!input.trim() && suggestions.length && state === 'idle'">
-        <div class="tim-chips" role="group" aria-label="Sugerencias de Timonel">
-          <template x-for="s in suggestions" :key="s">
-            <button type="button" class="tim-chip" @click="send(s)" x-text="s"></button>
-          </template>
-        </div>
-      </template>
-      <form class="tim-form" @submit.prevent="send(input)">
-        <textarea class="tim-ta" x-ref="input" x-model="input" rows="1"
-                  @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(input) }"
-                  placeholder="Pedile algo a Timonel..." aria-label="Mensaje para Timonel"></textarea>
-        <button type="submit" class="tim-send" :disabled="!input.trim() || state === 'thinking' || state === 'tool_running'">Enviar</button>
-      </form>
+    <template x-if="!input.trim() && suggestions.length && state === 'idle' && !recording">
+      <div class="tim-chips" role="group" aria-label="Sugerencias de Timonel">
+        <template x-for="s in suggestions" :key="s">
+          <button type="button" class="tim-chip" @click="send(s)" x-text="s"></button>
+        </template>
+      </div>
+    </template>
+
+    {# Recording bar (T-012): visible, live state while the mic is on. #}
+    <div class="rec-bar" x-show="recording" x-cloak aria-live="polite">
+      <div class="rec-row">
+        <span class="rec-dot"></span>
+        <span class="rec-time" x-text="recTimeLabel()">0:00</span>
+        <span class="rec-label">Grabando audio...</span>
+        <button type="button" class="rec-stop" @click="stopRecording()">Listo</button>
+      </div>
+      <p class="rec-note">El audio se transcribe con el servicio de voz de tu navegador.</p>
     </div>
+
+    <form class="tim-form" @submit.prevent="send(input)">
+      <button type="button" class="tim-mic" :class="recording ? 'active' : ''"
+              :disabled="!micSupported"
+              @click="toggleRecording()"
+              :aria-pressed="recording ? 'true' : 'false'"
+              :aria-label="recording ? 'Detener grabación' : 'Grabar audio'"
+              :title="micSupported ? '' : 'Tu navegador no permite dictado por voz'">
+        {{ mic_icon }}
+      </button>
+      <textarea class="tim-ta" x-ref="input" x-model="input" rows="1"
+                @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(input) }"
+                placeholder="Escribí o tocá el micrófono..." aria-label="Mensaje para Timonel"></textarea>
+      <button type="submit" class="tim-send" :disabled="!input.trim() || state === 'thinking' || state === 'tool_running' || state === 'streaming'">Enviar</button>
+    </form>
   </div>
 </div>

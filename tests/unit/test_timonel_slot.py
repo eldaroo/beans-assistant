@@ -43,7 +43,7 @@ def test_slot_appears_on_the_home_bound_to_the_factory():
     # the factory is bound for this tenant, floating-by-default (calm home)
     assert 'beansChat({ phone: "+100"' in html and 'dock: "floating" })' in html
     # launcher + dialog affordances present
-    assert 'class="tim-launch"' in html and "Timonel" in html
+    assert 'class="tim-launcher"' in html and "Timonel" in html
     assert 'x-ref="input"' in html and 'x-model="input"' in html
     assert '@submit.prevent="send(input)"' in html
     # Alpine + factory script on the page

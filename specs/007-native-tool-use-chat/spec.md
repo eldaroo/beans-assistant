@@ -1,11 +1,11 @@
 ---
 date: 2026-10-17
-slug: 006-native-tool-use-chat
+slug: 007-native-tool-use-chat
 status: scoped
 tracking_issue: eldaroo/beans-assistant#198
 ---
 
-# Spec 006: Native tool-use chat for Beans & Co
+# Spec 007: Native tool-use chat for Beans & Co
 
 ## Problem
 
@@ -17,7 +17,7 @@ The warm Claude-subscription gateway (`deploy/gateway.mjs`, Nomad job `beans-ai`
 
 ## The binding decision
 
-Dario chose, on 2026-10-16, native Claude tool-use on the gateway box over an app-mediated tool loop. That choice is binding. This spec does not re-litigate it; it makes a tools-enabled box defensible. The architecture (Winston, D-029 through D-034) is: a native tool-use loop replaces the LangGraph inside the unchanged chat seam; the only tools are a narrow MCP server (`mcp__beans__*`), every built-in tool stays denied, and `--dangerously-skip-permissions` is never passed; the tools hold no database credentials and call back to an authenticated internal operation API that re-validates under `tenant_context`; tenant scope is pinned out of band and is never a model-settable parameter; and writes are two-phase, where the model can only stage a preview and the commit happens on an operator click through an endpoint the model has no tool for.
+Dario chose, on 2026-10-16, native Claude tool-use on the gateway box over an app-mediated tool loop. That choice is binding. This spec does not re-litigate it; it makes a tools-enabled box defensible. The architecture (Winston, D-034 through D-039) is: a native tool-use loop replaces the LangGraph inside the unchanged chat seam; the only tools are a narrow MCP server (`mcp__beans__*`), every built-in tool stays denied, and `--dangerously-skip-permissions` is never passed; the tools hold no database credentials and call back to an authenticated internal operation API that re-validates under `tenant_context`; tenant scope is pinned out of band and is never a model-settable parameter; and writes are two-phase, where the model can only stage a preview and the commit happens on an operator click through an endpoint the model has no tool for.
 
 ## Scope
 
@@ -106,7 +106,7 @@ surface:
 
 ## Panelists who contributed
 
-- Winston (BuildOS architecture): the system shape and decisions D-029 through D-034, including the two-phase write that keeps commit out of the model's hands.
+- Winston (BuildOS architecture): the system shape and decisions D-034 through D-039, including the two-phase write that keeps commit out of the model's hands.
 - Amelia (BuildOS dev): implementation feasibility, the headless-MCP-flags spike, and the finding that `write_agent` carries domain guards that must be salvaged into the internal API, not deleted.
 - Bob (BuildOS scrum master): the milestone arc and the insistence that M1 is a demonstrable vertical slice, not plumbing.
 - Kaze (creative direction): the two card species, silent reads, and the materiality split that keeps a proposal from looking like a receipt.

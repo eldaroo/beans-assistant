@@ -20,7 +20,7 @@ class TestAuthRedirect:
     def test_page_navigation_unauth_redirects_to_login(self, client):
         # Browser navigation (HTML accept), no session cookie.
         r = client.get(
-            "/tenants/+54955885565",
+            "/home/+54955885565",
             headers={"accept": "text/html,application/xhtml+xml"},
             follow_redirects=False,
         )
@@ -42,7 +42,7 @@ class TestAuthRedirect:
         # A non-HTML accept (XHR/fetch) to a page route is not a navigation;
         # keep the JSON so we never redirect a programmatic caller.
         r = client.get(
-            "/tenants/+54955885565",
+            "/home/+54955885565",
             headers={"accept": "application/json"},
             follow_redirects=False,
         )

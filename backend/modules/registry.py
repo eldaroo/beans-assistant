@@ -24,8 +24,34 @@ from backend.modules.providers import (
     ventas_module,
 )
 
-# Rail groups match the mockup's left-rail sections.
+# Rail groups match the mockup's left-rail sections (legacy, kept for reversibility).
 GROUP_OPERATION = "Operación"
+
+# Owner-facing job TABS of the simplified Command Center (spec 006 AC1). Every
+# module declares which tab it lives under via its ``group`` field; the three-tab
+# rail is derived from these by ``nav.owner_tabs()`` with no per-module template
+# edit. "Hoy" is a synthesized overview tab (all tiles + attention), not a module
+# group, so it is not named here.
+TAB_HOY = "Hoy"
+TAB_OPERACION = "Operación"
+TAB_COSTOS = "Costos y producción"
+
+# Stable slug ids per tab label, matching the approved mockup's ``data-tab`` ids
+# (specs/006-simplify-command-center/mockups/index.html). Used by the shell to
+# key panels and the active-tab highlight. A group value with no entry here falls
+# back to a derived accent-stripped slug in ``nav.owner_tabs`` so a brand-new tab
+# still renders without a template edit (AC1).
+#
+# NAMESPACE NOTE (spec 006 T-011): the tab id "costos" is ALSO a module id (the
+# Costos module below). The shell beans:navigate router resolves the overlap
+# deterministically — a payload with a ``module`` always drills into the module
+# page, a bare ``{tab: "costos"}`` switches to the Costos TAB overview — but a new
+# tab id must never equal a module id without that router rule in mind.
+TAB_IDS = {TAB_HOY: "hoy", TAB_OPERACION: "operacion", TAB_COSTOS: "costos"}
+
+# Left-to-right order of the owner-facing tabs. Hoy is always first (the overview);
+# module-group tabs follow in the order the groups first appear in the registry.
+TAB_ORDER = [TAB_HOY, TAB_OPERACION, TAB_COSTOS]
 
 _MODULES: "list[Module]" = [
     # Resultado (spec 004 S5 / T-010): repointed from the legacy ?tab=expenses
@@ -37,6 +63,7 @@ _MODULES: "list[Module]" = [
         route="/resultado/{phone}",
         snapshot=caja_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_OPERACION,
         order=10,
     ),
     # Productos (spec 004 M-B / S2): the eighth module and the exemplar CRUD
@@ -50,6 +77,7 @@ _MODULES: "list[Module]" = [
         route="/productos/{phone}",
         snapshot=productos_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_OPERACION,
         order=15,
     ),
     # Stock (spec 004 S3 / T-007): repointed from the legacy ?tab=stock bounce to
@@ -62,6 +90,7 @@ _MODULES: "list[Module]" = [
         route="/stock/{phone}",
         snapshot=stock_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_OPERACION,
         order=20,
     ),
     # Ventas (spec 004 S4 / T-008): repointed from the legacy ?tab=sales bounce
@@ -72,6 +101,7 @@ _MODULES: "list[Module]" = [
         route="/ventas/{phone}",
         snapshot=ventas_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_OPERACION,
         order=30,
     ),
     # Costos (spec 003 M2 + M4): the first module with a dedicated page rather
@@ -86,6 +116,7 @@ _MODULES: "list[Module]" = [
         route="/costos/{phone}",
         snapshot=costos_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_COSTOS,
         order=40,
     ),
     # Produccion (spec 003 M3): units produced this week against the target, with
@@ -97,6 +128,7 @@ _MODULES: "list[Module]" = [
         route="/produccion/{phone}",
         snapshot=produccion_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_COSTOS,
         order=50,
     ),
     # Logistica (spec 003 M4): shipping + customs per country for the lead
@@ -108,6 +140,7 @@ _MODULES: "list[Module]" = [
         route="/logistica/{phone}",
         snapshot=logistica_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_COSTOS,
         order=60,
     ),
     # Proveedores (spec 003 M5): the active supplier directory with the
@@ -120,6 +153,7 @@ _MODULES: "list[Module]" = [
         route="/proveedores/{phone}",
         snapshot=proveedores_module.snapshot,
         rail_group=GROUP_OPERATION,
+        group=TAB_COSTOS,
         order=70,
     ),
 ]

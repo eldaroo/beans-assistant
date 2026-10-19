@@ -1,11 +1,11 @@
 ---
 date: 2026-10-17
-slug: 006-native-tool-use-chat
+slug: 007-native-tool-use-chat
 ---
 
-# Plan 006: Native tool-use chat for Beans & Co
+# Plan 007: Native tool-use chat for Beans & Co
 
-Full decision log in `ARCHITECTURE.md`, D-029 through D-034.
+Full decision log in `ARCHITECTURE.md`, D-034 through D-039.
 
 ## Architecture sketch
 

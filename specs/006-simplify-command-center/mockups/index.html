@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Beans Command Center — mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=4">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="dot"></span>Beans Command <span class="accent">Center</span></div>
+  <div class="toolbar">
+    <span class="pill" style="pointer-events:none">mockup</span>
+    <div class="state-group" role="group" aria-label="Estado de la pantalla">
+      <button data-state="populated" class="sel">con datos</button>
+      <button data-state="empty">vacío</button>
+      <button data-state="loading">cargando</button>
+      <button data-state="error">error</button>
+    </div>
+    <button class="pill" id="themebtn" aria-pressed="false">tema</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Secciones">
+  <button class="tab" role="tab" aria-selected="true" data-tab="hoy">Hoy</button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="operacion">Operación <span class="count">4</span></button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="costos">Costos y producción <span class="count">4</span></button>
+</nav>
+
+<main class="wrap">
+  <div class="errbar hidden" id="errbar" role="alert">
+    <span class="t">No pudimos cargar los datos</span>
+    <span class="d" style="color:var(--muted)">Revisá la conexión. Timonel sigue disponible para consultar.</span>
+    <button class="retry" id="retry">Reintentar</button>
+  </div>
+
+  <div class="shell">
+    <div class="content">
+      <!-- HOY -->
+      <section id="panel-hoy" role="tabpanel">
+        <h1 class="truth" id="truth"></h1>
+        <p class="truth-sub" id="truth-sub"></p>
+        <div class="attn" id="attn">
+          <h3>Atención</h3>
+          <div id="attn-list"></div>
+        </div>
+        <div class="scorecard" id="tiles-hoy"></div>
+        <div id="drill-hoy"></div>
+      </section>
+
+      <!-- OPERACIÓN -->
+      <section id="panel-operacion" role="tabpanel" class="hidden">
+        <h1 class="truth sm">Operación</h1>
+        <p class="truth-sub">Tus números para ver y corregir a mano. O pedíselo a Timonel. Tocá un tile para ver y editar.</p>
+        <div class="scorecard" id="tiles-operacion"></div>
+        <div id="drill-operacion"></div>
+      </section>
+
+      <!-- COSTOS Y PRODUCCIÓN -->
+      <section id="panel-costos" role="tabpanel" class="hidden">
+        <h1 class="truth sm">Costos y producción</h1>
+        <p class="truth-sub">Costeo, producción, logística y proveedores. Tocá un tile para ver y editar cada uno.</p>
+        <div class="scorecard" id="tiles-costos"></div>
+        <div id="drill-costos"></div>
+      </section>
+
+      <p class="hint">Mockup para aprobar la forma. Probá: cambiá el estado (arriba a la derecha), hablá con Timonel (confirmar, recibo, deshacer), tocá un tile para ver/editar cada módulo, y en celular usá el botón fijo de Timonel.</p>
+    </div>
+
+    <!-- Timonel: columna compartida en desktop, hoja fija en celular -->
+    <aside class="timonel" id="timonel" aria-label="Timonel">
+      <div class="tim-head">
+        <span class="tim-badge">T</span>
+        <div><div class="who">Timonel</div><div class="sub">Tu negocio, al mando</div></div>
+        <button class="tim-close" id="tim-close" aria-label="Cerrar Timonel">×</button>
+      </div>
+      <div class="tim-thread" id="thread" role="log" aria-live="polite"></div>
+      <div class="tim-chips" id="chips"></div>
+      <div class="rec-bar hidden" id="rec-bar" aria-live="polite">
+        <span class="rec-dot"></span><span class="rec-time" id="rec-time">0:00</span>
+        <span class="rec-label">Grabando audio...</span>
+        <button class="rec-stop" id="rec-stop" type="button">Listo</button>
+      </div>
+      <form class="tim-input" id="tim-form">
+        <button class="tim-mic" id="tim-mic" type="button" aria-label="Grabar audio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8.5" y1="21" x2="15.5" y2="21"/></svg>
+        </button>
+        <input id="tim-text" placeholder="Escribí o tocá el micrófono..." aria-label="Mensaje para Timonel" autocomplete="off">
+        <button class="tim-send" type="submit">Enviar</button>
+      </form>
+    </aside>
+  </div>
+</main>
+
+<!-- mobile only: always-visible launcher -->
+<button class="tim-launcher" id="tim-launcher" aria-label="Hablar o grabar audio con Timonel">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8.5" y1="21" x2="15.5" y2="21"/></svg>
+</button>
+<div class="tim-backdrop" id="tim-backdrop"></div>
+
+<script type="module">
+import { truth, tiles, attention, ventas, greeting, chips, scriptedSale,
+         proveedores, produccion, logistica, costos, productos, stock } from "./fixture.js?v=4";
+
+const $ = s => document.querySelector(s);
+const el = (t, c, h) => { const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e; };
+let state="populated", tab="hoy";
+
+(function(){ const r=document.documentElement, b=$("#themebtn");
+  const ref=()=>{const t=r.getAttribute("data-theme");const d=t==="dark"||(t!=="light"&&matchMedia("(prefers-color-scheme: dark)").matches);b.setAttribute("aria-pressed",String(d));};
+  try{const t=localStorage.getItem("mk_theme");if(t)r.setAttribute("data-theme",t);}catch(e){}
+  b.onclick=()=>{const c=r.getAttribute("data-theme");const n=c==="dark"?"light":(c==="light"?"dark":(matchMedia("(prefers-color-scheme: dark)").matches?"light":"dark"));r.setAttribute("data-theme",n);try{localStorage.setItem("mk_theme",n);}catch(e){}ref();};
+  ref();
+})();
+
+function tileEl(t, group){
+  const e = el("button","tile");
+  e.innerHTML = `<span class="lbl">${t.label} <span class="chev">›</span></span><span class="num">${t.num}</span><span class="delta ${t.tone}">${t.delta}</span>`;
+  e.dataset.id=t.id; e.onclick=()=>drill(group, t); return e;
+}
+function renderTiles(){
+  for(const g of ["hoy","operacion","costos"]){
+    const host=$("#tiles-"+g); if(!host) continue; host.innerHTML="";
+    if(state==="loading"){ for(let i=0;i<4;i++) host.appendChild(el("div","sk sk-tile")); continue; }
+    if(state==="empty" && g==="hoy") continue;
+    tiles[g].forEach(t=>host.appendChild(tileEl(t,g)));
+  }
+}
+function renderHoyText(){
+  const t=$("#truth"), s=$("#truth-sub");
+  if(state==="empty"){ t.textContent=truth.empty; s.textContent=""; $("#attn").classList.add("hidden"); return; }
+  if(state==="loading"){ t.innerHTML='<div class="sk sk-line" style="width:70%"></div><div class="sk sk-line" style="width:45%"></div>'; s.textContent=""; $("#attn").classList.add("hidden"); return; }
+  $("#attn").classList.remove("hidden");
+  t.innerHTML=`${truth.lead} <span class="hl">${truth.focus}</span>`; s.textContent=truth.calm;
+}
+function renderAttn(){
+  const list=$("#attn-list"); list.innerHTML="";
+  if(state!=="populated") return;
+  attention.forEach(a=>{
+    const row=el("div","attn-item");
+    row.innerHTML=`<span class="mark ${a.sev==='warn'?'warn':''}"></span><span class="txt">${a.text}</span>`;
+    const go=el("button","go",`Ver <span class="chev">›</span>`);
+    go.onclick=()=>{ switchTab(a.tab); const t=(tiles[a.tab]||[]).find(x=>x.id===a.module)||{label:a.module,id:a.module}; drill(a.tab,t); };
+    row.appendChild(go); list.appendChild(row);
+  });
+}
+
+// per-module view/edit drill content
+function tablePanel(p, title, cols, rows, actionLabel, rowEdit){
+  const head=el("div","panel-head");
+  head.innerHTML=`<h3>${title}</h3>`;
+  const act=el("div","act");
+  const add=el("button","btn-sm primary", actionLabel); add.onclick=()=>toast(actionLabel+" (demo)");
+  const x=el("button","x","×"); x.setAttribute("aria-label","Cerrar"); x.onclick=()=>p.remove();
+  act.appendChild(add); act.appendChild(x); head.appendChild(act); p.appendChild(head);
+  const tbl=el("table");
+  tbl.innerHTML=`<thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}<th></th></tr></thead><tbody>${
+    rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}<td style="text-align:right"><button class="row-edit">${rowEdit||'Editar'}</button></td></tr>`).join("")}</tbody>`;
+  tbl.querySelectorAll(".row-edit").forEach(b=>b.onclick=()=>toast("Editar (demo)"));
+  p.appendChild(tbl);
+}
+function drill(group, t){
+  const host=$("#drill-"+(group==="hoy"?"hoy":group)); if(!host) return;
+  const p=el("div","panel"); const id=t.id;
+  if(id==="ventas") tablePanel(p,"Ventas",["N°","Cliente","Estado","Total"],ventas.map(v=>[v.n,v.cliente,`<span class="badge ${v.estado==='pagada'?'ok':'pend'}">${v.estado}</span>`,v.total]),"Registrar venta","Ver");
+  else if(id==="proveedores") tablePanel(p,"Proveedores",["Proveedor","Contacto","Último check-in","Estado"],proveedores.map(s=>[s.nombre,s.contacto,s.checkin,`<span class="badge ${s.estado==='al día'?'ok':'pend'}">${s.estado}</span>`]),"Agregar proveedor");
+  else if(id==="produccion") tablePanel(p,"Producción",["Semana","Producto","Unidades","Objetivo"],produccion.map(r=>[r.semana,r.producto,r.unidades,r.objetivo]),"Agregar registro");
+  else if(id==="logistica") tablePanel(p,"Logística",["Ruta","Estado","ETA"],logistica.map(r=>[r.ruta,`<span class="badge ${r.estado==='en tránsito'?'ok':'pend'}">${r.estado}</span>`,r.eta]),"Agregar envío");
+  else if(id==="costos") tablePanel(p,"Costos",["Producto","Costo puesto","Estado"],costos.map(r=>[r.producto,r.landed,r.estado]),"Editar costeo");
+  else if(id==="productos") tablePanel(p,"Productos",["Producto","Costo","Precio","Estado"],productos.map(r=>[r.nombre,r.costo,r.precio,`<span class="badge ok">activo</span>`]),"Agregar producto");
+  else if(id==="stock") tablePanel(p,"Stock",["Producto","En mano","Estado"],stock.map(r=>[r.nombre,r.unidades,r.unidades==0?`<span class="badge pend">bajo</span>`:`<span class="badge ok">ok</span>`]),"Cargar movimiento");
+  else { // resultado/caja
+    const head=el("div","panel-head"); head.innerHTML=`<h3>${t.label}</h3>`;
+    const act=el("div","act"); const add=el("button","btn-sm primary","Agregar gasto"); add.onclick=()=>toast("Agregar gasto (demo)");
+    const x=el("button","x","×"); x.onclick=()=>p.remove(); act.appendChild(add); act.appendChild(x); head.appendChild(act); p.appendChild(head);
+    p.appendChild(el("p",null,`<span style="color:var(--muted)">Ingresos USD 5.2k, gastos USD 1.5k, ganancia USD 3.7k. Lista de gastos editable acá.</span>`));
+  }
+  host.innerHTML=""; host.appendChild(p); p.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+function toast(msg){ const t=el("div","toast",msg); document.body.appendChild(t); setTimeout(()=>t.remove(),1400); }
+
+// Timonel
+function addMsg(cls,html){ const m=el("div","msg "+cls,html); $("#thread").appendChild(m); $("#thread").scrollTop=1e9; return m; }
+function renderThread(){
+  const th=$("#thread"); th.innerHTML="";
+  if(state==="loading"){ th.appendChild(el("div","sk sk-line")); return; }
+  addMsg("tim", state==="empty"?"Hola. Todavía no hay movimientos hoy. ¿Arrancamos cargando algo?":greeting);
+  const ch=$("#chips"); ch.innerHTML=""; chips.forEach(c=>{const b=el("button","chip",c); b.onclick=()=>sendText(c); ch.appendChild(b);});
+}
+function sendText(text){
+  addMsg("me",text);
+  if(/registr.*venta/i.test(text)){
+    askConfirmSale();
+  } else if(/agot|stock|bajo/i.test(text)){
+    addMsg("tim","Están por agotarse: Termos Alumbrar (0 u), Termos Stanley (0 u), medias verdes (0 u). ¿Abro Stock o cargo una reposición?");
+  } else if(/proveedor/i.test(text)){
+    addMsg("tim","Tenés 3 proveedores. Maderas del Sur tiene el check-in vencido hace 21 días. Te abro Proveedores.");
+    const b=el("button","chip","Abrir Proveedores"); b.onclick=()=>{switchTab("costos"); drill("costos",{id:"proveedores",label:"Proveedores"});}; $("#thread").appendChild(b);
+  } else {
+    addMsg("tim","Eso todavía no lo puedo hacer yo. Te abro la sección para hacerlo a mano.");
+    const b=el("button","chip","Abrir Operación"); b.onclick=()=>switchTab("operacion"); $("#thread").appendChild(b);
+  }
+}
+function commitSale(){
+  const r=el("div","receipt");
+  r.innerHTML=`<p class="t">✓ ${scriptedSale.receipt.title}</p><p class="d">${scriptedSale.receipt.detail}</p>`;
+  const u=el("button","undo","Deshacer");
+  u.onclick=()=>{ r.innerHTML=`<p class="t" style="color:var(--muted)">Venta deshecha</p><p class="d">Revertí S-1005. Queda en el historial.</p>`; };
+  r.appendChild(u); $("#thread").appendChild(r); $("#thread").scrollTop=1e9;
+  scriptedSale.flashTiles.forEach(id=>document.querySelectorAll('.tile').forEach(t=>{ if(t.dataset.id===id){t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash');}}));
+}
+$("#tim-form").addEventListener("submit",e=>{e.preventDefault(); const v=$("#tim-text").value.trim(); if(!v)return; $("#tim-text").value=""; sendText(v);});
+
+// Timonel open/close (drawer on desktop, sheet on mobile)
+function openTim(){ $("#timonel").classList.add("open"); $("#tim-backdrop").classList.add("open"); }
+function closeTim(){ stopRec(); $("#timonel").classList.remove("open"); $("#tim-backdrop").classList.remove("open"); }
+function askConfirmSale(){
+  const c=el("div","confirm");
+  c.innerHTML=`<p class="q">${scriptedSale.confirm.q}</p><p class="detail">${scriptedSale.confirm.detail}</p>`;
+  const row=el("div","row"); const yes=el("button","btn primary","Sí, registrar"); const no=el("button","btn ghost","Cancelar");
+  no.onclick=()=>{c.remove(); addMsg("tim","Listo, no registré nada.");};
+  yes.onclick=()=>{c.remove(); commitSale();};
+  row.appendChild(yes); row.appendChild(no); c.appendChild(row); $("#thread").appendChild(c); $("#thread").scrollTop=1e9;
+}
+// audio recording (mockup: a visible recording state, then a voice note + transcription)
+const MIC='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+let recTimer=null, recSec=0;
+function startRec(){ openTim(); $("#rec-bar").classList.remove("hidden"); $("#tim-mic").classList.add("active"); recSec=0; $("#rec-time").textContent="0:00";
+  recTimer=setInterval(()=>{ recSec++; $("#rec-time").textContent="0:"+String(recSec).padStart(2,"0"); },1000); }
+function stopRec(){ if(!recTimer) return; clearInterval(recTimer); recTimer=null; $("#rec-bar").classList.add("hidden"); $("#tim-mic").classList.remove("active");
+  const dur="0:"+String(Math.max(recSec,1)).padStart(2,"0");
+  addMsg("me", `<span class="voice">${MIC} Audio ${dur}</span>`);
+  addMsg("tim", 'Entendí: "registrá una venta de 2 termos a 90.000 COP".');
+  askConfirmSale();
+}
+$("#tim-launcher").onclick=startRec;        // el micrófono abre Timonel y graba directo
+$("#tim-mic").onclick=()=>{ recTimer?stopRec():startRec(); };
+$("#rec-stop").onclick=stopRec;
+$("#tim-close").onclick=closeTim; $("#tim-backdrop").onclick=closeTim;
+
+// tabs
+function switchTab(t){ tab=t;
+  document.querySelectorAll(".tab").forEach(b=>b.setAttribute("aria-selected",String(b.dataset.tab===t)));
+  ["hoy","operacion","costos"].forEach(g=>$("#panel-"+g).classList.toggle("hidden",g!==t));
+}
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+document.querySelectorAll(".state-group button").forEach(b=>b.onclick=()=>{
+  state=b.dataset.state; document.querySelectorAll(".state-group button").forEach(x=>x.classList.toggle("sel",x===b));
+  $("#errbar").classList.toggle("hidden",state!=="error"); render();
+});
+$("#retry").onclick=()=>{ document.querySelector('.state-group button[data-state="loading"]').click(); setTimeout(()=>document.querySelector('.state-group button[data-state="populated"]').click(),900); };
+
+function render(){ renderHoyText(); renderAttn(); renderTiles(); renderThread(); document.querySelectorAll('[id^=drill-]').forEach(d=>d.innerHTML=""); }
+render();
+</script>
+</body>
+</html>

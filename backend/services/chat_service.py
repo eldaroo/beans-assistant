@@ -55,6 +55,34 @@ class ChatService:
         cls._last_seen_by_key[history_key] = now
 
     @classmethod
+    def get_history(cls, phone: str) -> list[dict[str, str]]:
+        """Return the server-side conversation thread for a phone as a plain
+        list of ``{role, content}`` turns (spec 006 T-009 / AC4 rehydration).
+
+        This is the read side of the same in-process memory the dispatcher
+        already keeps (spec 001): the chat widget rehydrates from it when the
+        browser's sessionStorage is empty (a fresh device or a cleared tab), so
+        a returning owner does not land on a blank Timonel after the context
+        was already established server-side. Empty ``content`` entries and the
+        lean ``metadata`` the router persists are dropped — the widget only
+        needs role + text to re-render the bubbles. Honors the same staleness
+        expiry as the write path, so a long-abandoned thread reads back empty
+        rather than resurrecting a stale conversation.
+        """
+        history_key = cls._history_key(phone)
+        cls._expire_if_stale(history_key)
+        history = cls._history_by_key.get(history_key)
+        if not history:
+            return []
+        turns: list[dict[str, str]] = []
+        for entry in history:
+            role = entry.get("role")
+            content = (entry.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                turns.append({"role": role, "content": content})
+        return turns
+
+    @classmethod
     def _build_message_with_context(cls, phone: str, message: str) -> str:
         history_key = cls._history_key(phone)
         cls._expire_if_stale(history_key)

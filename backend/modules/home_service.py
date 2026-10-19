@@ -50,7 +50,12 @@ SNAPSHOT_TIMEOUT_S = 10.0
 # module would queue behind the others and its result-wait would start burning
 # the SNAPSHOT_TIMEOUT_S budget, so grow this pool (and resolve the connection-
 # reuse debt eldaroo/beans-assistant#138) before registering a 9th module.
-_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cc-snapshot")
+# One worker slot per registered module (the registry holds 8 as of cohort B),
+# so no module queues behind another and total latency is the slowest module,
+# not the sum. A ninth module would queue and burn SNAPSHOT_TIMEOUT_S, so grow
+# this AND resolve the connection-reuse debt (#138) before registering a 9th.
+POOL_MAX_WORKERS = 8
+_POOL = ThreadPoolExecutor(max_workers=POOL_MAX_WORKERS, thread_name_prefix="cc-snapshot")
 
 
 @dataclass
@@ -99,6 +104,29 @@ def _tile_from(module: Module, snap: ModuleSnapshot | None) -> ModuleTile:
     )
 
 
+def tiles_by_tab(view: "HomeView", tabs: list) -> "dict[str, list[ModuleTile]]":
+    """Map each owner tab id to the tiles it shows, from the SINGLE fan-out that
+    built ``view`` (spec 006 AC6: tiles grouped by tab, no new query per tab).
+
+    Hoy (the overview tab) shows every tile; each module-group tab shows only its
+    own modules' tiles, in the tab's registry order. The shell renders all three
+    panels from this one map, so switching tabs is a client-side panel toggle and
+    never triggers another ``build_home`` fan-out. ``tabs`` is ``nav.owner_tabs()``;
+    passed in (rather than imported) so the grouping stays driven by the registry
+    and this module keeps owning no nav policy.
+    """
+    from backend.modules import nav
+
+    by_id = {t.module_id: t for t in view.tiles}
+    result: "dict[str, list[ModuleTile]]" = {}
+    for tab in tabs:
+        if tab.id == nav.HOY_ID:
+            result[tab.id] = list(view.tiles)
+        else:
+            result[tab.id] = [by_id[item.module_id] for item in tab.items if item.module_id in by_id]
+    return result
+
+
 def _rail_groups(tiles: "list[ModuleTile]") -> "list[RailGroup]":
     groups: dict[str, RailGroup] = {}
     order: list[str] = []
@@ -125,8 +153,9 @@ def build_home(phone: str, modules: "list[Module] | None" = None) -> HomeView:
     mods = list(modules) if modules is not None else registry.all_modules()
     mods = sorted(mods, key=lambda m: m.order)
 
+    started = time.monotonic()
     futures = [(m, _POOL.submit(m.snapshot, phone)) for m in mods]
-    deadline = time.monotonic() + SNAPSHOT_TIMEOUT_S
+    deadline = started + SNAPSHOT_TIMEOUT_S
     snaps: "list[tuple[Module, ModuleSnapshot | None]]" = []
     for m, fut in futures:
         remaining = max(0.0, deadline - time.monotonic())
@@ -138,6 +167,19 @@ def build_home(phone: str, modules: "list[Module] | None" = None) -> HomeView:
         except Exception:
             logger.exception("snapshot failed for module %s", m.id)
             snaps.append((m, None))
+
+    # Perf guard (spec 004 AC10 / T-013): one observable line per home build so
+    # the eighth-concurrent-snapshot budget is measurable at production latency
+    # without a profiler. `degraded` names the modules that timed out or raised;
+    # a non-empty set on a healthy tenant is the pool-saturation signal the AC
+    # says to file against eldaroo/beans-assistant#138 — never silenced by
+    # inflating a snapshot or raising SNAPSHOT_TIMEOUT_S.
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    degraded = [m.id for m, snap in snaps if snap is None]
+    logger.info(
+        "build_home modules=%d elapsed_ms=%.0f budget_ms=%.0f pool_workers=%d degraded=%s",
+        len(mods), elapsed_ms, SNAPSHOT_TIMEOUT_S * 1000.0, POOL_MAX_WORKERS, degraded or "none",
+    )
 
     tiles = [_tile_from(m, snap) for m, snap in snaps]
     attention = attention_service.aggregate(

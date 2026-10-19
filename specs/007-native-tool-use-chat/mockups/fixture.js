@@ -1,4 +1,4 @@
-// Beans & Co native-tool-use chat mockup (spec 006).
+// Beans & Co native-tool-use chat mockup (spec 007).
 // Realistic Beans fixtures plus a state-machine driver. No frameworks, no fetch.
 // Everything here is local mutation so Dario can click and see the surface breathe.
 
