@@ -38,13 +38,21 @@ A demonstrable vertical slice, not plumbing. Spike the headless MCP flags first;
 
 Port the remaining reads (revenue, profit, sales summary) and the eight module snapshots as read tools, add `business_status` reading the existing attention aggregation, and add the tool-selection prompt with a no-tool fallback for smalltalk. The operation-API bearer is read-scoped here, so there is no write risk while the read surface is proven. Rough effort: 2 to 3 days.
 
-### M3: Writes behind confirmation, reversible set (covers s-05, s-06)
+### M3: Writes with the provenance split, reversible set (covers s-05, s-06, s-11; D-040 through D-044)
 
-Build the two-phase write machinery: internal write-preview endpoints that stage an `op_token` and carry the salvaged `write_agent` guards, the server-authoritative single-use confirm token, the operator-clicked `/chat/confirm` commit endpoint, the preview tools for the reversible writes (REGISTER_SALE, REGISTER_EXPENSE, ADD_STOCK), and the confirm-card variant in the widget with the two visual species and digit read-back. Rough effort: 3 to 4 days.
+Build the two-phase write machinery AND the "reversible posts, irreversible asks" model on top of it:
+- Internal write-preview endpoints that stage an `op_token` and carry the salvaged `write_agent` guards; the server-authoritative single-use confirm token; the `/chat/confirm` commit endpoint. (Already present from M1 — reuse.)
+- The **server-computed `auto` verdict**: provenance (every load-bearing staged arg appears verbatim in the operator's utterance this turn — rebuild wal-ledger's `numberTokens`/no-number-left-behind in Python) plus resolution determinism (exactly one active product candidate from the existing lookup; amount and unit price verify against a numeral). Never a model field. A bare-confirmation turn yields `auto:false`.
+- The preview tools for the reversible set (REGISTER_SALE, REGISTER_EXPENSE, ADD_STOCK) and the **client auto-submit** path in `chat_widget.js` that posts `/chat/confirm` on the operator's behalf when `auto:true`, landing an instant receipt with a loud Undo toast.
+- **Prerequisite — clean reversible undo:** rework `cancel_sale`/`cancel_expense` from destructive DELETE to append-inverse voids (matching `cancel_stock_movement`); the Undo toast fires the compensator through a pre-authorized system path, not an operator CANCEL. Idempotent, audit-preserving, balance-restoring.
+- **Pessimistic post:** the receipt renders only on a 2xx commit (`register_sale`'s stock guard can reject after the fact).
+- The confirm-card variant for the `auto:false` fall-through, with the two visual species, settle-in-place on commit, and digit read-back.
 
-### M4: Irreversible and bulk writes, hardening (covers s-07, s-08)
+Rough effort: 4 to 5 days (the auto verdict and the undo rework are the new work over a plain confirm-everything build).
 
-Add the remaining write-preview tools (products, price, batch) and the cancel and deactivate tools, each showing the exact target and an irreversibility flag, stamped requires_human_review. Add rate limits (tighter on cancel and deactivate), the audit log, the egress firewall, the scorecard counters, and the injection-corpus test. Rough effort: 3 to 4 days.
+### M4: Irreversible and bulk writes, hardening (covers s-07, s-08; D-044)
+
+Add the remaining write-preview tools as **confirm-only** (D-044), never auto-post: products (REGISTER_PRODUCT, REGISTER_PRODUCT_WITH_STOCK), UPDATE_PRODUCT_PRICE (prior price not snapshotted → no clean undo), REGISTER_PRODUCTS_BATCH, and the cancel and deactivate tools — each showing the exact target (or an itemized set for the batch) and an irreversibility flag, stamped requires_human_review, the batch confirming once for the whole set. Add rate limits (tighter on cancel and deactivate) and the per-write/per-session caps the M3 auto verdict depends on, the audit log, the egress firewall, the scorecard counters, and the injection-corpus test (which now also asserts an injected write yields `auto:false` + a human-gated card, never a silent auto-post). Rough effort: 3 to 4 days.
 
 ### M5: Retire the old Timonel (covers s-09)
 
