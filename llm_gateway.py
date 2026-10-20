@@ -123,6 +123,44 @@ def call_gateway(
     return data
 
 
+def call_agent(
+    system: str,
+    prompt: str,
+    *,
+    url: Optional[str] = None,
+    secret: Optional[str] = None,
+    timeout: Optional[float] = None,
+) -> str:
+    """POST one turn to the gateway's ``/run-agent`` (native tool-use) and return the assistant text.
+
+    Unlike ``call_gateway`` (the tool-free classification path), this drives the agent loop: the
+    gateway spawns a tool-enabled child that reads and (later) writes real Beans data through the
+    beans MCP server. Returns the final text; raises ``GatewayError`` on transport failure or an
+    ``{ok: false}`` envelope so the caller can surface an honest error. The tenant is pinned on the
+    gateway side (out of band), so this sends only ``{system, prompt}``.
+    """
+    base = (url or gateway_url()).rstrip("/")
+    sec = secret if secret is not None else shared_secret()
+    if not sec:
+        raise GatewayError("no-secret", "BEANS_AI_SHARED_SECRET is not set")
+    body = json.dumps({"system": system or "", "prompt": prompt or ""}).encode("utf-8")
+    headers = {"content-type": "application/json", "authorization": "Bearer " + sec}
+    # Agent turns are multi-hop (model -> tool -> model); allow a longer default ceiling.
+    agent_timeout = timeout or max(gateway_timeout(), 90.0)
+    status, text = _http_post_json(base + "/run-agent", headers, body, agent_timeout)
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        raise GatewayError("bad-response", f"gateway returned non-JSON (status {status})")
+    if not isinstance(data, dict) or not data.get("ok"):
+        err = (data or {}).get("error") or {}
+        raise GatewayError(
+            str(err.get("code") or f"http-{status}"),
+            str(err.get("message") or text[:200]),
+        )
+    return str(data.get("text") or "")
+
+
 class ChatGateway(BaseChatModel):
     """A LangChain chat model backed by the beans-ai warm Claude-subscription gateway.
 

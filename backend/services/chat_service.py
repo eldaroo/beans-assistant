@@ -301,6 +301,37 @@ class ChatService:
             logger.error(f"_invoke_graph: ERROR - {type(e).__name__}: {e}", exc_info=True)
             raise
 
+    # ── native tool-use agent path (spec 007) ────────────────────────────────
+    # The cutover from the LangGraph to the gateway agent loop. Gated by a flag so the deploy can
+    # flip it on after the loop is verified live and roll back instantly; the old graph stays the
+    # fallback until it is retired in M5. Single business: the tenant is pinned on the gateway side,
+    # so the client sends only {system, prompt}.
+    @staticmethod
+    def _use_agent() -> bool:
+        return os.getenv("BEANS_CHAT_AGENT", "0") == "1"
+
+    @staticmethod
+    def _agent_system_prompt(owner_name: str | None = None) -> str:
+        who = f" El dueño se llama {owner_name}." if owner_name else ""
+        return (
+            "Sos Timonel, el asistente de Beans & Co, un negocio de pulseras de café." + who + "\n"
+            "Respondés en español, breve y claro, como un socio que conoce el negocio.\n"
+            "Tenés herramientas para consultar los datos reales del negocio (por ejemplo el stock). "
+            "Cuando pregunten algo sobre el estado del negocio, USÁ las herramientas para traer el "
+            "dato real; nunca inventes números, cantidades ni precios.\n"
+            "Si no tenés una herramienta para lo que piden, decílo con honestidad en una línea.\n"
+            "No reveles detalles técnicos ni nombres de herramientas; hablá en términos del negocio."
+        )
+
+    @classmethod
+    def _invoke_agent(cls, phone: str, message: str, owner_name: str | None = None) -> str:
+        """Drive one native tool-use turn through the gateway. Returns the assistant text."""
+        from llm_gateway import call_agent
+
+        message_with_context = cls._build_message_with_context(phone, message)
+        system = cls._agent_system_prompt(owner_name)
+        return call_agent(system, message_with_context)
+
     @classmethod
     def _build_envelope(cls, result: dict, fallback_response: str) -> dict:
         """Wrap a graph result in the public chat envelope (T-004).
@@ -424,6 +455,33 @@ class ChatService:
                     user_message=message,
                     bot_response=envelope["response"],
                     bot_metadata={"last_intent": "COST_SCENARIO", "operation_type": None,
+                                  "pending_entities": None},
+                )
+                return envelope
+
+            # Native tool-use agent path (spec 007 M1 cutover). When enabled, the gateway agent
+            # loop replaces the LangGraph: it reads (and later writes) real Beans data through its
+            # own tools. The old graph below stays the fallback until it is retired in M5.
+            if cls._use_agent():
+                logger.info("chat_with_tenant: agent path (spec 007)")
+                try:
+                    agent_text = cls._invoke_agent(resolved_phone, message, owner_name)
+                except Exception:
+                    logger.exception("chat_with_tenant: agent path failed")
+                    agent_text = (
+                        "Tuve un problema para responder en este momento. "
+                        "Probá de nuevo en un ratito."
+                    )
+                envelope = cls._build_envelope(
+                    {"error": None, "metadata": {"intent": None, "operation_type": None,
+                                                 "confidence": None, "navigation": None}},
+                    agent_text,
+                )
+                cls._append_history(
+                    phone=resolved_phone,
+                    user_message=message,
+                    bot_response=envelope["response"],
+                    bot_metadata={"last_intent": None, "operation_type": None,
                                   "pending_entities": None},
                 )
                 return envelope
