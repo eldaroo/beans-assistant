@@ -37,6 +37,7 @@ import {
   TokenPool,
   childSpawnEnv,
 } from './token-pool.mjs';
+import { verifyToolPosture } from './tool-posture.mjs';
 
 const DEFAULTS = {
   poolTarget: 2, // warm children kept idle and ready
@@ -57,6 +58,119 @@ const DISALLOWED_TOOLS = [
 
 // Common args for a safe, tool-free Claude turn. Appended to the per-mode argv.
 const SAFE_ARGS = ['--disallowedTools', ...DISALLOWED_TOOLS];
+
+// ── native tool-use mode (spec 007) ──────────────────────────────────────────
+// The agent turn runs ONE fresh child per request with the narrow beans MCP tools allowlisted and
+// every other tool disallowed. --allowedTools is an auto-APPROVE grant, not an exclusive allowlist
+// (spike 2026-10-19), so the real guard is the boot posture self-check (verifyToolMode) that probes
+// the actual callable set and refuses to serve unless it is exactly mcp__beans__*. This denylist is
+// defense-in-depth; the self-check catches anything a new claude version adds that it misses.
+const TOOL_MODE_DISALLOWED = Array.from(new Set([
+  ...DISALLOWED_TOOLS,
+  'TodoWrite', 'Monitor', 'Workflow', 'SendMessage', 'RemoteTrigger',
+  'CronCreate', 'CronDelete', 'CronList', 'DesignSync', 'EnterWorktree', 'ExitWorktree',
+  'ListAgents', 'PushNotification', 'ScheduleWakeup', 'ReportFindings', 'ToolSearch',
+  'Skill', 'EndConversation', 'ReadMcpResourceTool', 'ListMcpResourcesTool',
+]));
+
+const BEANS_MCP_CONFIG = process.env.BEANS_MCP_CONFIG || '/local/mcp-beans.json';
+const AGENT_MAX_TURNS = Number(process.env.BEANS_AGENT_MAX_TURNS) || 6;
+
+// The tool-mode flags, shared by the real turn and the boot self-check so they probe what runs.
+function agentFlags(mcpConfig = BEANS_MCP_CONFIG) {
+  return [
+    '--allowedTools', 'mcp__beans__*',
+    '--disallowedTools', ...TOOL_MODE_DISALLOWED,
+    '--mcp-config', mcpConfig,
+    '--strict-mcp-config',
+  ];
+}
+
+// Boot posture self-check: probe the real claude with the production tool-mode flags and confirm
+// the callable set is exactly the beans MCP tools. Fail closed (the entrypoint exits non-zero).
+export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CONFIG, timeoutMs } = {}) {
+  return verifyToolPosture({
+    claudeBin,
+    cwd,
+    mcpConfig,
+    allowedTools: ['mcp__beans__*'],
+    disallowedTools: TOOL_MODE_DISALLOWED,
+    timeoutMs,
+  });
+}
+
+// Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
+// with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
+function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let out = '';
+    const args = [
+      '-p',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--max-turns', String(maxTurns),
+      ...agentFlags(mcpConfig),
+    ];
+    let child;
+    try {
+      child = spawnChild
+        ? spawnChild(args, token)
+        : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
+            cwd: cwd || '/alloc/data',
+            stdio: ['pipe', 'pipe', 'ignore'],
+            env: childSpawnEnv(process.env, token || null),
+          });
+    } catch (e) {
+      return reject(e);
+    }
+    const dispose = () => { try { child.kill('SIGKILL'); } catch {} };
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); dispose(); fn(arg); };
+    const timer = setTimeout(() => finish(reject, new Error('agent-turn-timeout')), timeoutMs);
+    if (!child || !child.stdin) return finish(reject, new Error('child-unavailable'));
+    child.stdout.on('data', (d) => { out += d; });
+    child.stdout.on('end', () => {
+      const events = [];
+      for (const line of out.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        try { events.push(JSON.parse(t)); } catch {}
+      }
+      const text = extractResult(events);
+      if (!text) return finish(reject, new Error('empty-result'));
+      finish(resolve, text);
+    });
+    child.on('error', (e) => finish(reject, e));
+    child.on('close', (code) => { if (!settled) finish(reject, new Error('child-close-' + code)); });
+    try {
+      child.stdin.write(userTurnLine(combined));
+      child.stdin.end();
+    } catch (e) {
+      finish(reject, e);
+    }
+  });
+}
+
+// Resolve one /run-agent with token rotation: on a usage-limit turn, bench + rotate + retry.
+async function resolveAgent(combined, opts = {}) {
+  const tokenPool = opts.tokenPool;
+  const attempts = tokenPool && tokenPool.size > 1 ? tokenPool.size : 1;
+  for (let i = 0; i < attempts; i++) {
+    const current = tokenPool ? tokenPool.active() : undefined;
+    if (tokenPool && tokenPool.size > 1 && !current) break;
+    const text = await (opts.agentFn || runAgentTurn)(combined, { ...opts, token: current });
+    if (tokenPool && tokenPool.size > 1) {
+      const ex = detectExhaustion(text);
+      if (ex.exhausted) {
+        tokenPool.bench(current, ex.resetAt || cooldownReset());
+        continue;
+      }
+    }
+    return { text, path: 'agent' };
+  }
+  throw new Error(allExhaustedMessage(tokenPool ? tokenPool.earliestReset() : null));
+}
 
 // Constant-time bearer comparison (council, Tamir LOW): avoid a byte-wise timing side-channel.
 function bearerOk(header, secret) {
@@ -431,6 +545,57 @@ function makeHandler(pool, secret, runOpts = {}) {
       });
       return;
     }
+    if (req.method === 'POST' && req.url === '/run-agent') {
+      if (!bearerOk(req.headers['authorization'], secret)) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(errorBody('unauthorized', 'missing or bad bearer token'));
+        return;
+      }
+      let body = '';
+      let tooBig = false;
+      req.on('data', (d) => {
+        body += d;
+        if (Buffer.byteLength(body) > DEFAULTS.maxPromptBytes && !tooBig) {
+          tooBig = true;
+          res.writeHead(413, { 'content-type': 'application/json' });
+          res.end(errorBody('too-large', 'request body exceeds limit'));
+          req.destroy();
+        }
+      });
+      req.on('end', async () => {
+        if (tooBig) return;
+        let payload;
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(errorBody('bad-json', 'request body is not valid JSON'));
+          return;
+        }
+        const prompt = (payload.prompt ?? '').toString();
+        const system = (payload.system ?? '').toString();
+        if (!prompt.trim()) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(errorBody('empty-prompt', 'prompt is required'));
+          return;
+        }
+        const combined = (system ? system + '\n\n' : '') + prompt;
+        try {
+          const { text, path } = await resolveAgent(combined, {
+            tokenPool: runOpts.tokenPool,
+            claudeBin: pool.claudeBin,
+            cwd: pool.cwd,
+            agentFn: runOpts.agentFn,
+          });
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, path, text }));
+        } catch (e) {
+          res.writeHead(502, { 'content-type': 'application/json' });
+          res.end(errorBody('model-error', (e && e.message) || e));
+        }
+      });
+      return;
+    }
     res.writeHead(404, { 'content-type': 'application/json' });
     res.end(errorBody('not-found', req.url));
   };
@@ -448,7 +613,7 @@ export function createGateway(opts = {}) {
   const pool = new ChildPool({ ...opts, tokenFn: () => tokenPool.active() });
   pool.refill();
   const server = http.createServer(
-    makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool })
+    makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool, agentFn: opts.agentFn })
   );
   const origClose = server.close.bind(server);
   server.close = (cb) => {
@@ -461,7 +626,7 @@ export function createGateway(opts = {}) {
 }
 
 // Exported internals for unit tests.
-export { ChildPool, runWarmTurn, runOneShot, resolveRun, extractResult, carveJson, userTurnLine, makeHandler };
+export { ChildPool, runWarmTurn, runOneShot, resolveRun, resolveAgent, runAgentTurn, extractResult, carveJson, userTurnLine, makeHandler };
 
 // Start when run directly (the Nomad entrypoint does `node /local/gateway.mjs`).
 const isMain = (() => {
@@ -473,7 +638,25 @@ const isMain = (() => {
 })();
 
 if (isMain) {
-  const port = process.env.NOMAD_PORT_http || process.env.PORT || 8080;
-  const server = createGateway({ cwd: process.env.ALLOC_DATA || '/alloc/data' });
-  server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
+  (async () => {
+    const port = process.env.NOMAD_PORT_http || process.env.PORT || 8080;
+    const cwd = process.env.ALLOC_DATA || '/alloc/data';
+    // Boot tool-posture self-check (D-035): refuse to serve the agent path unless the real claude's
+    // callable set is exactly mcp__beans__*. Skippable with BEANS_TOOL_MODE=0 for a tool-free box.
+    if (process.env.BEANS_TOOL_MODE !== '0') {
+      try {
+        const posture = await verifyToolMode({ cwd });
+        if (!posture.ok) {
+          console.error('[beans-ai] FATAL tool-posture self-check failed; offending=' + JSON.stringify(posture.offending) + ' callable=' + JSON.stringify(posture.callable));
+          process.exit(1);
+        }
+        console.log('[beans-ai] tool-posture OK: callable=' + JSON.stringify(posture.callable));
+      } catch (e) {
+        console.error('[beans-ai] FATAL tool-posture probe error: ' + (e && e.message));
+        process.exit(1);
+      }
+    }
+    const server = createGateway({ cwd });
+    server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
+  })();
 }

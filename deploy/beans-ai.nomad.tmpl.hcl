@@ -107,6 +107,9 @@ job "beans-ai" {
           CLAUDE_CODE_OAUTH_TOKEN={{ .CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKENS={{ .CLAUDE_CODE_OAUTH_TOKENS }}
           BEANS_AI_SHARED_SECRET={{ .BEANS_AI_SHARED_SECRET }}
+          INTERNAL_SERVICE_TOKEN={{ .INTERNAL_SERVICE_TOKEN }}
+          BEANS_OPS_URL={{ .BEANS_OPS_URL }}
+          BEANS_TENANT_PHONE={{ .BEANS_TENANT_PHONE }}
           {{- end -}}
         EOH
       }
@@ -134,7 +137,7 @@ job "beans-ai" {
             echo "$${LEAK}" | sed 's/=.*/=<redacted>/' >&2
             exit 1
           fi
-          log "isolation OK: env carries only the model token and the bearer"
+          log "isolation OK: no org-keyring value; env carries the model token(s), the bearer, and the beans internal-op wiring"
           log "toolchain: node $(node --version) · $(claude --version 2>/dev/null | head -1)"
           log "starting warm gateway on :$${NOMAD_PORT_http}"
           exec node /local/gateway.mjs
@@ -159,6 +162,36 @@ job "beans-ai" {
         data        = <<-EOJS
 @@TOKEN_POOL_MJS@@
         EOJS
+      }
+
+      # Boot tool-posture self-check, imported by gateway.mjs (spec 007 D-035). Embedded by build-hcl.mjs.
+      template {
+        destination = "local/tool-posture.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+@@TOOL_POSTURE_MJS@@
+        EOJS
+      }
+
+      # The beans MCP tool server the agent child loads. Holds no DB credentials; calls the internal
+      # operation API with the internal token and the pinned tenant from env. Embedded by build-hcl.mjs.
+      template {
+        destination = "local/beans-mcp.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+@@BEANS_MCP_MJS@@
+        EOJS
+      }
+
+      # Static MCP config the agent child runs with: launches /local/beans-mcp.mjs as server "beans".
+      # The MCP server inherits BEANS_OPS_URL / INTERNAL_SERVICE_TOKEN / BEANS_TENANT_PHONE from the
+      # gateway env (single business: the tenant is a fixed, out-of-band value, never a model param).
+      template {
+        destination = "local/mcp-beans.json"
+        perms       = "0644"
+        data        = <<-EOJSON
+          {"mcpServers":{"beans":{"command":"node","args":["/local/beans-mcp.mjs"]}}}
+        EOJSON
       }
 
       service {

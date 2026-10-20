@@ -19,6 +19,8 @@ const INDENT = '          '; // 10 spaces; the <<-EOJS closing marker sits at 8,
 const EMBEDS = {
   '@@GATEWAY_MJS@@': 'gateway.mjs',
   '@@TOKEN_POOL_MJS@@': 'token-pool.mjs',
+  '@@TOOL_POSTURE_MJS@@': 'tool-posture.mjs',
+  '@@BEANS_MCP_MJS@@': 'beans-mcp.mjs',
 };
 
 export function render() {

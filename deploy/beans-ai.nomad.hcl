@@ -107,6 +107,9 @@ job "beans-ai" {
           CLAUDE_CODE_OAUTH_TOKEN={{ .CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKENS={{ .CLAUDE_CODE_OAUTH_TOKENS }}
           BEANS_AI_SHARED_SECRET={{ .BEANS_AI_SHARED_SECRET }}
+          INTERNAL_SERVICE_TOKEN={{ .INTERNAL_SERVICE_TOKEN }}
+          BEANS_OPS_URL={{ .BEANS_OPS_URL }}
+          BEANS_TENANT_PHONE={{ .BEANS_TENANT_PHONE }}
           {{- end -}}
         EOH
       }
@@ -134,7 +137,7 @@ job "beans-ai" {
             echo "$${LEAK}" | sed 's/=.*/=<redacted>/' >&2
             exit 1
           fi
-          log "isolation OK: env carries only the model token and the bearer"
+          log "isolation OK: no org-keyring value; env carries the model token(s), the bearer, and the beans internal-op wiring"
           log "toolchain: node $(node --version) · $(claude --version 2>/dev/null | head -1)"
           log "starting warm gateway on :$${NOMAD_PORT_http}"
           exec node /local/gateway.mjs
@@ -186,6 +189,7 @@ job "beans-ai" {
             TokenPool,
             childSpawnEnv,
           } from './token-pool.mjs';
+          import { verifyToolPosture } from './tool-posture.mjs';
           
           const DEFAULTS = {
             poolTarget: 2, // warm children kept idle and ready
@@ -206,6 +210,119 @@ job "beans-ai" {
           
           // Common args for a safe, tool-free Claude turn. Appended to the per-mode argv.
           const SAFE_ARGS = ['--disallowedTools', ...DISALLOWED_TOOLS];
+          
+          // ── native tool-use mode (spec 007) ──────────────────────────────────────────
+          // The agent turn runs ONE fresh child per request with the narrow beans MCP tools allowlisted and
+          // every other tool disallowed. --allowedTools is an auto-APPROVE grant, not an exclusive allowlist
+          // (spike 2026-10-19), so the real guard is the boot posture self-check (verifyToolMode) that probes
+          // the actual callable set and refuses to serve unless it is exactly mcp__beans__*. This denylist is
+          // defense-in-depth; the self-check catches anything a new claude version adds that it misses.
+          const TOOL_MODE_DISALLOWED = Array.from(new Set([
+            ...DISALLOWED_TOOLS,
+            'TodoWrite', 'Monitor', 'Workflow', 'SendMessage', 'RemoteTrigger',
+            'CronCreate', 'CronDelete', 'CronList', 'DesignSync', 'EnterWorktree', 'ExitWorktree',
+            'ListAgents', 'PushNotification', 'ScheduleWakeup', 'ReportFindings', 'ToolSearch',
+            'Skill', 'EndConversation', 'ReadMcpResourceTool', 'ListMcpResourcesTool',
+          ]));
+          
+          const BEANS_MCP_CONFIG = process.env.BEANS_MCP_CONFIG || '/local/mcp-beans.json';
+          const AGENT_MAX_TURNS = Number(process.env.BEANS_AGENT_MAX_TURNS) || 6;
+          
+          // The tool-mode flags, shared by the real turn and the boot self-check so they probe what runs.
+          function agentFlags(mcpConfig = BEANS_MCP_CONFIG) {
+            return [
+              '--allowedTools', 'mcp__beans__*',
+              '--disallowedTools', ...TOOL_MODE_DISALLOWED,
+              '--mcp-config', mcpConfig,
+              '--strict-mcp-config',
+            ];
+          }
+          
+          // Boot posture self-check: probe the real claude with the production tool-mode flags and confirm
+          // the callable set is exactly the beans MCP tools. Fail closed (the entrypoint exits non-zero).
+          export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CONFIG, timeoutMs } = {}) {
+            return verifyToolPosture({
+              claudeBin,
+              cwd,
+              mcpConfig,
+              allowedTools: ['mcp__beans__*'],
+              disallowedTools: TOOL_MODE_DISALLOWED,
+              timeoutMs,
+            });
+          }
+          
+          // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
+          // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
+          function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
+            return new Promise((resolve, reject) => {
+              let settled = false;
+              let out = '';
+              const args = [
+                '-p',
+                '--input-format', 'stream-json',
+                '--output-format', 'stream-json',
+                '--verbose',
+                '--max-turns', String(maxTurns),
+                ...agentFlags(mcpConfig),
+              ];
+              let child;
+              try {
+                child = spawnChild
+                  ? spawnChild(args, token)
+                  : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
+                      cwd: cwd || '/alloc/data',
+                      stdio: ['pipe', 'pipe', 'ignore'],
+                      env: childSpawnEnv(process.env, token || null),
+                    });
+              } catch (e) {
+                return reject(e);
+              }
+              const dispose = () => { try { child.kill('SIGKILL'); } catch {} };
+              const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); dispose(); fn(arg); };
+              const timer = setTimeout(() => finish(reject, new Error('agent-turn-timeout')), timeoutMs);
+              if (!child || !child.stdin) return finish(reject, new Error('child-unavailable'));
+              child.stdout.on('data', (d) => { out += d; });
+              child.stdout.on('end', () => {
+                const events = [];
+                for (const line of out.split('\n')) {
+                  const t = line.trim();
+                  if (!t) continue;
+                  try { events.push(JSON.parse(t)); } catch {}
+                }
+                const text = extractResult(events);
+                if (!text) return finish(reject, new Error('empty-result'));
+                finish(resolve, text);
+              });
+              child.on('error', (e) => finish(reject, e));
+              child.on('close', (code) => { if (!settled) finish(reject, new Error('child-close-' + code)); });
+              try {
+                child.stdin.write(userTurnLine(combined));
+                child.stdin.end();
+              } catch (e) {
+                finish(reject, e);
+              }
+            });
+          }
+          
+          // Resolve one /run-agent with token rotation: on a usage-limit turn, bench + rotate + retry.
+          async function resolveAgent(combined, opts = {}) {
+            const tokenPool = opts.tokenPool;
+            const attempts = tokenPool && tokenPool.size > 1 ? tokenPool.size : 1;
+            for (let i = 0; i < attempts; i++) {
+              const current = tokenPool ? tokenPool.active() : undefined;
+              if (tokenPool && tokenPool.size > 1 && !current) break;
+              const text = await (opts.agentFn || runAgentTurn)(combined, { ...opts, token: current });
+              if (tokenPool && tokenPool.size > 1) {
+                const ex = detectExhaustion(text);
+                if (ex.exhausted) {
+                  tokenPool.bench(current, ex.resetAt || cooldownReset());
+                  continue;
+                }
+              }
+              return { text, path: 'agent' };
+            }
+            throw new Error(allExhaustedMessage(tokenPool ? tokenPool.earliestReset() : null));
+          }
           
           // Constant-time bearer comparison (council, Tamir LOW): avoid a byte-wise timing side-channel.
           function bearerOk(header, secret) {
@@ -580,6 +697,57 @@ job "beans-ai" {
                 });
                 return;
               }
+              if (req.method === 'POST' && req.url === '/run-agent') {
+                if (!bearerOk(req.headers['authorization'], secret)) {
+                  res.writeHead(401, { 'content-type': 'application/json' });
+                  res.end(errorBody('unauthorized', 'missing or bad bearer token'));
+                  return;
+                }
+                let body = '';
+                let tooBig = false;
+                req.on('data', (d) => {
+                  body += d;
+                  if (Buffer.byteLength(body) > DEFAULTS.maxPromptBytes && !tooBig) {
+                    tooBig = true;
+                    res.writeHead(413, { 'content-type': 'application/json' });
+                    res.end(errorBody('too-large', 'request body exceeds limit'));
+                    req.destroy();
+                  }
+                });
+                req.on('end', async () => {
+                  if (tooBig) return;
+                  let payload;
+                  try {
+                    payload = JSON.parse(body || '{}');
+                  } catch {
+                    res.writeHead(400, { 'content-type': 'application/json' });
+                    res.end(errorBody('bad-json', 'request body is not valid JSON'));
+                    return;
+                  }
+                  const prompt = (payload.prompt ?? '').toString();
+                  const system = (payload.system ?? '').toString();
+                  if (!prompt.trim()) {
+                    res.writeHead(400, { 'content-type': 'application/json' });
+                    res.end(errorBody('empty-prompt', 'prompt is required'));
+                    return;
+                  }
+                  const combined = (system ? system + '\n\n' : '') + prompt;
+                  try {
+                    const { text, path } = await resolveAgent(combined, {
+                      tokenPool: runOpts.tokenPool,
+                      claudeBin: pool.claudeBin,
+                      cwd: pool.cwd,
+                      agentFn: runOpts.agentFn,
+                    });
+                    res.writeHead(200, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ ok: true, path, text }));
+                  } catch (e) {
+                    res.writeHead(502, { 'content-type': 'application/json' });
+                    res.end(errorBody('model-error', (e && e.message) || e));
+                  }
+                });
+                return;
+              }
               res.writeHead(404, { 'content-type': 'application/json' });
               res.end(errorBody('not-found', req.url));
             };
@@ -597,7 +765,7 @@ job "beans-ai" {
             const pool = new ChildPool({ ...opts, tokenFn: () => tokenPool.active() });
             pool.refill();
             const server = http.createServer(
-              makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool })
+              makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool, agentFn: opts.agentFn })
             );
             const origClose = server.close.bind(server);
             server.close = (cb) => {
@@ -610,7 +778,7 @@ job "beans-ai" {
           }
           
           // Exported internals for unit tests.
-          export { ChildPool, runWarmTurn, runOneShot, resolveRun, extractResult, carveJson, userTurnLine, makeHandler };
+          export { ChildPool, runWarmTurn, runOneShot, resolveRun, resolveAgent, runAgentTurn, extractResult, carveJson, userTurnLine, makeHandler };
           
           // Start when run directly (the Nomad entrypoint does `node /local/gateway.mjs`).
           const isMain = (() => {
@@ -622,9 +790,27 @@ job "beans-ai" {
           })();
           
           if (isMain) {
-            const port = process.env.NOMAD_PORT_http || process.env.PORT || 8080;
-            const server = createGateway({ cwd: process.env.ALLOC_DATA || '/alloc/data' });
-            server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
+            (async () => {
+              const port = process.env.NOMAD_PORT_http || process.env.PORT || 8080;
+              const cwd = process.env.ALLOC_DATA || '/alloc/data';
+              // Boot tool-posture self-check (D-035): refuse to serve the agent path unless the real claude's
+              // callable set is exactly mcp__beans__*. Skippable with BEANS_TOOL_MODE=0 for a tool-free box.
+              if (process.env.BEANS_TOOL_MODE !== '0') {
+                try {
+                  const posture = await verifyToolMode({ cwd });
+                  if (!posture.ok) {
+                    console.error('[beans-ai] FATAL tool-posture self-check failed; offending=' + JSON.stringify(posture.offending) + ' callable=' + JSON.stringify(posture.callable));
+                    process.exit(1);
+                  }
+                  console.log('[beans-ai] tool-posture OK: callable=' + JSON.stringify(posture.callable));
+                } catch (e) {
+                  console.error('[beans-ai] FATAL tool-posture probe error: ' + (e && e.message));
+                  process.exit(1);
+                }
+              }
+              const server = createGateway({ cwd });
+              server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
+            })();
           }
         EOJS
       }
@@ -770,6 +956,268 @@ job "beans-ai" {
             return { ...baseEnv, CLAUDE_CODE_OAUTH_TOKEN: activeToken };
           }
         EOJS
+      }
+
+      # Boot tool-posture self-check, imported by gateway.mjs (spec 007 D-035). Embedded by build-hcl.mjs.
+      template {
+        destination = "local/tool-posture.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+          // Boot tool-posture self-check for the native-tool-use gateway (spec 007, D-035 corrected).
+          //
+          // WHY THIS EXISTS (spike finding, 2026-10-19): `--allowedTools mcp__beans__*` is an
+          // auto-APPROVE grant, NOT an exclusive allowlist. In headless `-p` with no TTY, an MCP
+          // tool on the allowlist auto-approves and runs WITHOUT --dangerously-skip-permissions
+          // (good, the approach works), but every OTHER tool Claude Code loads stays callable unless
+          // it is on `--disallowedTools`. The spike proved a model could reach `Monitor` (a
+          // shell-capable built-in) that a hand-maintained denylist had missed. A static denylist is
+          // fragile: a future claude version adds a tool and the list silently misses it.
+          //
+          // The robust control is a POSITIVE-IDENTITY check on the actually-callable tool set: at boot,
+          // probe the real `claude` with the intended argv, read the INIT `tools` array it reports, and
+          // refuse to serve unless that set is exactly the beans MCP tools and nothing else. Fail closed.
+          import { spawn } from 'node:child_process';
+
+          // Tools the gateway intends to expose. Only names matching this prefix may be callable.
+          export const ALLOWED_MCP_PREFIX = 'mcp__beans__';
+
+          // Probe the real claude binary with the gateway's intended argv and return the INIT tool set.
+          // We only need the first `{"type":"system","subtype":"init","tools":[...]}` line, so we read
+          // stdout until that event arrives, then kill the child. No model turn is spent.
+          export function probeCallableTools({
+            claudeBin = process.env.CLAUDE_BIN || 'claude',
+            mcpConfig,
+            allowedTools = [ALLOWED_MCP_PREFIX + '*'],
+            disallowedTools = [],
+            cwd,
+            timeoutMs = 20000,
+          } = {}) {
+            return new Promise((resolve, reject) => {
+              const args = [
+                '-p', 'ok',
+                '--output-format', 'stream-json',
+                '--verbose',
+                '--max-turns', '1',
+                '--allowedTools', ...allowedTools,
+              ];
+              if (disallowedTools.length) args.push('--disallowedTools', ...disallowedTools);
+              if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+
+              let child;
+              try {
+                child = spawn(claudeBin, args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+              } catch (e) {
+                reject(new Error('probe spawn failed: ' + e.message));
+                return;
+              }
+
+              let buf = '';
+              let settled = false;
+              const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill(); } catch {} fn(v); };
+              const timer = setTimeout(() => done(reject, new Error('probe timeout: no init event in ' + timeoutMs + 'ms')), timeoutMs);
+
+              child.on('error', (e) => done(reject, new Error('probe error: ' + e.message)));
+              child.stdout.setEncoding('utf8');
+              child.stdout.on('data', (chunk) => {
+                buf += chunk;
+                let idx;
+                while ((idx = buf.indexOf('\n')) >= 0) {
+                  const line = buf.slice(0, idx).trim();
+                  buf = buf.slice(idx + 1);
+                  if (!line) continue;
+                  let e;
+                  try { e = JSON.parse(line); } catch { continue; }
+                  if (e && e.type === 'system' && e.subtype === 'init' && Array.isArray(e.tools)) {
+                    done(resolve, e.tools.slice());
+                    return;
+                  }
+                }
+              });
+              child.on('exit', () => {
+                if (!settled) done(reject, new Error('probe exited before init event'));
+              });
+            });
+          }
+
+          // Decide pass/fail from a callable tool set. Pass iff every callable tool matches the allowed
+          // MCP prefix (so the only reachable capability is beans tools) and at least one such tool exists.
+          export function judgeToolPosture(callable, { allowedPrefix = ALLOWED_MCP_PREFIX } = {}) {
+            const offending = callable.filter((t) => !String(t).startsWith(allowedPrefix));
+            const beansTools = callable.filter((t) => String(t).startsWith(allowedPrefix));
+            return {
+              ok: offending.length === 0 && beansTools.length > 0,
+              callable,
+              beansTools,
+              offending,
+            };
+          }
+
+          // Full self-check: probe the real claude and judge. Resolves {ok, callable, beansTools, offending}.
+          export async function verifyToolPosture(opts = {}) {
+            const callable = await probeCallableTools(opts);
+            return judgeToolPosture(callable, opts);
+          }
+
+          // CLI entry: node tool-posture.mjs --mcp-config <path> [--disallow a b c]. Exit 0 on pass,
+          // 1 on a leak (fail closed), 2 on a probe error. The gateway entrypoint calls this at boot.
+          async function main(argv) {
+            const get = (flag) => {
+              const i = argv.indexOf(flag);
+              if (i < 0) return undefined;
+              const out = [];
+              for (let j = i + 1; j < argv.length && !argv[j].startsWith('--'); j++) out.push(argv[j]);
+              return out;
+            };
+            const mcpConfig = (get('--mcp-config') || [])[0];
+            const disallowedTools = get('--disallow') || [];
+            const allowedTools = get('--allow') || [ALLOWED_MCP_PREFIX + '*'];
+            try {
+              const r = await verifyToolPosture({ mcpConfig, disallowedTools, allowedTools });
+              if (r.ok) {
+                console.log('TOOL-POSTURE-OK callable=' + JSON.stringify(r.callable));
+                process.exit(0);
+              }
+              console.error('TOOL-POSTURE-FAIL offending=' + JSON.stringify(r.offending) + ' callable=' + JSON.stringify(r.callable));
+              process.exit(1);
+            } catch (e) {
+              console.error('TOOL-POSTURE-PROBE-ERROR ' + e.message);
+              process.exit(2);
+            }
+          }
+
+          // Run main only when invoked directly, not when imported.
+          import { fileURLToPath } from 'node:url';
+          if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+            main(process.argv.slice(2));
+          }
+        EOJS
+      }
+
+      # The beans MCP tool server the agent child loads. Holds no DB credentials; calls the internal
+      # operation API with the internal token and the pinned tenant from env. Embedded by build-hcl.mjs.
+      template {
+        destination = "local/beans-mcp.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+          // Beans MCP server (spec 007, the tool layer). Line-delimited JSON-RPC 2.0 over stdio.
+          //
+          // These tools hold NO database credentials (D-036). Each calls the FastAPI internal
+          // operation API with the internal service token and the tenant pinned OUT OF BAND:
+          // the gateway injects BEANS_TENANT_PHONE per request, the tool sends it as the
+          // x-beans-tenant header, and the model never sees or sets it (D-037). There is no
+          // commit tool and never will be; writes are two-phase previews that land in M3+ (D-038).
+          //
+          // M1 ships one read tool, read_stock, so the model -> MCP -> internal API -> DB path is
+          // real. The HTTP call and the message dispatch are exported so they unit-test with an
+          // injected fetch, no network and no spawned child.
+          import process from 'node:process';
+
+          export const TOOLS = [
+            {
+              name: 'read_stock',
+              description:
+                'Read the current stock (units on hand per product) for the business. Takes no arguments; ' +
+                'the business is fixed for this session. Use it when the owner asks how much of something is left.',
+              inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            },
+          ];
+
+          // Call the internal read_stock endpoint. Returns an MCP tool-result content object.
+          // Never throws for an operational failure: it returns an is_error content so the model
+          // can tell the owner something went wrong instead of the loop crashing.
+          export async function readStock({ opsUrl, token, phone, fetchImpl = fetch } = {}) {
+            if (!opsUrl || !token || !phone) {
+              return { content: [{ type: 'text', text: 'read_stock not configured (missing ops url, token, or tenant).' }], isError: true };
+            }
+            let res;
+            try {
+              res = await fetchImpl(opsUrl.replace(/\/$/, '') + '/internal/ops/read_stock', {
+                method: 'POST',
+                headers: {
+                  'content-type': 'application/json',
+                  'x-internal-token': token,
+                  'x-beans-tenant': phone,
+                },
+                body: '{}',
+              });
+            } catch (e) {
+              return { content: [{ type: 'text', text: 'read_stock could not reach the operation API: ' + e.message }], isError: true };
+            }
+            let body;
+            try { body = await res.json(); } catch { body = null; }
+            if (!res.ok || !body || body.ok !== true) {
+              const msg = (body && body.error && body.error.message) || ('read_stock failed (HTTP ' + res.status + ')');
+              return { content: [{ type: 'text', text: msg }], isError: true };
+            }
+            return { content: [{ type: 'text', text: JSON.stringify({ stock: body.stock }) }] };
+          }
+
+          // Build a JSON-RPC dispatcher. `readStockImpl` is injectable for tests.
+          export function makeDispatcher({ readStockImpl = readStock, config = {} } = {}) {
+            return async function dispatch(msg) {
+              const { id, method, params } = msg || {};
+              if (method === 'initialize') {
+                const pv = (params && params.protocolVersion) || '2024-11-05';
+                return { jsonrpc: '2.0', id, result: { protocolVersion: pv, capabilities: { tools: {} }, serverInfo: { name: 'beans', version: '0.1.0' } } };
+              }
+              if (method && method.startsWith('notifications/')) return null; // notifications get no response
+              if (method === 'tools/list') {
+                return { jsonrpc: '2.0', id, result: { tools: TOOLS } };
+              }
+              if (method === 'tools/call') {
+                const name = params && params.name;
+                if (name === 'read_stock') {
+                  const r = await readStockImpl({ opsUrl: config.opsUrl, token: config.token, phone: config.phone });
+                  return { jsonrpc: '2.0', id, result: r };
+                }
+                return { jsonrpc: '2.0', id, error: { code: -32601, message: 'unknown tool ' + name } };
+              }
+              if (id !== undefined && id !== null) return { jsonrpc: '2.0', id, result: {} };
+              return null;
+            };
+          }
+
+          // stdio main loop: read line-delimited JSON-RPC, dispatch, write responses.
+          function main() {
+            const config = {
+              opsUrl: process.env.BEANS_OPS_URL,
+              token: process.env.INTERNAL_SERVICE_TOKEN,
+              phone: process.env.BEANS_TENANT_PHONE,
+            };
+            const dispatch = makeDispatcher({ config });
+            const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
+            let buf = '';
+            process.stdin.setEncoding('utf8');
+            process.stdin.on('data', (chunk) => {
+              buf += chunk;
+              let idx;
+              while ((idx = buf.indexOf('\n')) >= 0) {
+                const line = buf.slice(0, idx).trim();
+                buf = buf.slice(idx + 1);
+                if (!line) continue;
+                let msg;
+                try { msg = JSON.parse(line); } catch { continue; }
+                Promise.resolve(dispatch(msg)).then((resp) => { if (resp) send(resp); });
+              }
+            });
+          }
+
+          import { fileURLToPath } from 'node:url';
+          if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+            main();
+          }
+        EOJS
+      }
+
+      # Static MCP config the agent child runs with: launches /local/beans-mcp.mjs as server "beans".
+      # The MCP server inherits BEANS_OPS_URL / INTERNAL_SERVICE_TOKEN / BEANS_TENANT_PHONE from the
+      # gateway env (single business: the tenant is a fixed, out-of-band value, never a model param).
+      template {
+        destination = "local/mcp-beans.json"
+        perms       = "0644"
+        data        = <<-EOJSON
+          {"mcpServers":{"beans":{"command":"node","args":["/local/beans-mcp.mjs"]}}}
+        EOJSON
       }
 
       service {
