@@ -55,6 +55,8 @@ jobs:
             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
             GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
             SESSION_SECRET=${{ secrets.SESSION_SECRET }}
+            INTERNAL_SERVICE_TOKEN=${{ secrets.INTERNAL_SERVICE_TOKEN }}
+            BEANS_AI_SHARED_SECRET=${{ secrets.BEANS_AI_SHARED_SECRET }}
           deploy_meta: ${{ steps.meta.outputs.value }}
 
   deploy-backend-tenants:
