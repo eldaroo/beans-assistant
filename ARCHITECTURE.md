@@ -529,6 +529,7 @@ Mode: UPDATE. Scope: only the decisions that swap the chat brain to a native Cla
 - **Why the alternatives lost.** (a) A commit tool lets an injected confirmation fire it. (b) Direct commit has no human gate at all.
 - **Implications.** The confirm card is a new `metadata` variant on the unchanged envelope, rendered by `chat_widget.js`, reusing D-009. The confirm token is app-minted, args-bound, single-use, and short-TTL. The Spec 006 Simplify A-Q16 (does a money write require a visible confirmation card) is answered yes here and made structural.
 - **Panel source.** Winston, with Edut on consent and Tamir on the write boundary.
+- **Amended 2026-10-20 by D-040 through D-044.** The two-phase spine and the "commit is never a model tool" invariant are UNCHANGED. What changes: the operator's click is no longer demanded on *every* write. It is auto-satisfied by the client for the reversible, operator-grounded, in-cap set (D-040), while the visible confirm card is reserved for the irreversible, ambiguous, or un-grounded set (D-044). This refinement came from the 2026-10-20 write-behavior panel (Winston, Tamir, Kaze, Sally, Edut, Amelia) convened because confirm-on-every-write did not replicate the wal-ledger agent Dario asked to model and trained reflex-clicking that hollowed the very consent the gate exists for.
 
 ### D-039: Single business resolves the phone from the session; the brain ignores any client-supplied phone
 
@@ -538,12 +539,55 @@ Mode: UPDATE. Scope: only the decisions that swap the chat brain to a native Cla
 - **Why the alternatives lost.** (a) The URL value is client-controlled. (b) Dropping it now needlessly breaks a live widget.
 - **Panel source.** Winston.
 
+### D-040: Reversible, operator-grounded writes auto-post with Undo; the commit stays out of the model
+
+- **Chosen.** A write is two-phase as in D-038, but the operator's click is auto-satisfied by the **client** — it posts the same session-authenticated `/chat/confirm` on the operator's behalf, immediately, with a loud Undo toast — when and only when the server has proven the write is (1) in the reversible set (D-043), (2) within per-write and per-session caps, and (3) grounded in the operator's own utterance this turn (D-041). Otherwise the write surfaces as a visible confirm card and waits for a real click (D-044).
+- **Alternatives.** (a) Confirm-on-every-write (D-038 as originally written). (b) Let the model decide when to auto-commit. (c) Give the model a commit tool for the "obvious" case.
+- **Why this won.** It replicates the wal-ledger agent Dario asked to model — the obvious reversible entry posts instantly with Undo as the remedy, friction reserved for what cannot be undone — without ever handing commit to the model. Commit authority is unchanged: the client auto-submit uses the same non-model endpoint, so injected tool-result text can never earn an auto-post (it fails the D-041 grounding check) and a hijacked model still cannot commit.
+- **Why the alternatives lost.** (a) Confirm-everywhere trains reflex-clicking that rubber-stamps the one dangerous write (Sally, Kaze, Edut); it is the *less* honest design (Edut: "the corpse of consent wearing its clothes"). (b)/(c) Any auto-commit the model controls reopens the injection-to-write surface spec 005 closed.
+- **Implications.** `chat_widget.js` gains an auto-submit path and an Undo toast (≥44px target, ≥6s, "Anotado <amount> · Deshacer"); Undo visibility is a tested invariant (D-043). The `metadata` envelope gains an `auto: true|false` flag the *server* sets, never the model. The receipt is pessimistic: it renders only on commit success (D-043).
+- **Panel source.** 2026-10-20 write-behavior panel; Winston on commit authority, Sally and Kaze on the instant-post feel, Edut on Undo-as-consent.
+
+### D-041: Provenance is computed by the server, never claimed by the model
+
+- **Chosen.** Whether a staged write is "operator-grounded" is decided by the app, by diffing the operator's **literal utterance this turn** against every load-bearing staged argument: the amount numeral (ported from wal-ledger's `numberTokens` / no-number-left-behind), the product SKU or name, and the counterparty. Every such field must appear verbatim in what the operator typed this turn, or the write is not auto-eligible. Any provenance signal emitted by the model is ignored.
+- **Alternatives.** (a) A model-emitted `operator_originated` flag. (b) Trust that a write staged right after an operator message is operator-originated.
+- **Why this won.** Once operator text and tool-result text share one context window, nothing *inside* the model distinguishes them; a hijacked model controls its own label (Tamir: *provenance laundering*). Only a check *outside* the model is sound.
+- **Why the alternatives lost.** (a) The flag is model output an injection controls. (b) A tool result from turn 1 can drive a write that lands in turn 3 after a bare "ok"; timing is not provenance.
+- **Implications.** A bare confirmation ("dale", "ok", "sí") carries no load-bearing argument of its own and therefore can NEVER trigger an auto-post — it always routes to the confirm card. Provenance is per-turn and argument-bearing.
+- **Panel source.** 2026-10-20 panel; Tamir (threat model), grounding wal-ledger's `alignAmount` discipline re-aimed at an adversary wal never had.
+
+### D-042: "Obvious vs ask" is server-side resolution determinism, not model confidence
+
+- **Chosen.** Native tool-use emits no per-field confidence (unlike wal-ledger's structured `directionConfidence`/`bookConfidence`). The auto-eligibility signal is therefore computed server-side from resolution determinism: a write is "obvious" iff its op is in the reversible set (D-043), the product lookup returns **exactly one active candidate**, and the amount (and, for a sale, the unit price) verifies against a numeral in the utterance (D-041). Anything else — multiple candidate products, a NULL price, an unresolved direction, an amount with no matching numeral — is "ambiguous" and routes to the confirm card.
+- **Alternatives.** (a) Ask the model for a confidence score. (b) Always auto-post the three reversible ops.
+- **Why this won.** Determinism is checkable and cannot be fabricated by injection. The product lookup already resolves candidates today (`database_pg.py`) and silently takes an arbitrary match — this decision stops discarding that ambiguity signal and uses it as the gate.
+- **Why the alternatives lost.** (a) A model confidence score is injectable and uncalibrated. (b) Auto-posting an ambiguous product or a NULL price is exactly the silent-wrong-write that spends the founder's trust.
+- **Panel source.** 2026-10-20 panel; Amelia, from reading the Beans write layer end to end.
+
+### D-043: The reversible set gets a clean append-inverse undo; the destructive cancels are reworked; posts are pessimistic
+
+- **Chosen.** The reversible (auto-post-eligible) set is REGISTER_SALE, REGISTER_EXPENSE, ADD_STOCK. ADD_STOCK already reverses cleanly (`cancel_stock_movement` appends an inverse adjustment). `cancel_sale` and `cancel_expense` today DELETE rows (destructive, lose the audit row, redo mints a new `sale_number`); they are **reworked as append-inverse voids** so that an auto-posted sale or expense has a true, auditable, idempotent reversal — this is a prerequisite task, not a follow-up. The Undo toast invokes the compensator through a **pre-authorized system path**, not an operator-initiated CANCEL (which is itself confirm-only, D-044), so a reversible write never becomes un-undoable. Auto-post is **pessimistic**: because `register_sale` can be rejected after the fact by the stock-availability guard, the receipt renders only on commit success — never "anotado" followed by a silent failure.
+- **Alternatives.** (a) Keep the destructive deletes and call them undo. (b) Leave sale/expense confirm-only until a later undo rework.
+- **Why this won.** Edut's invariant: Undo *is* the consent remedy for an auto-post, so it must be a true reversal, as loud and durable as the post was silent. A destructive delete is not that.
+- **Why the alternatives lost.** (a) A delete-based "undo" loses history and is not idempotent. (b) Sales are the most common write; leaving them confirm-only fails to replicate the wal-ledger feel in exactly the place it matters most (Dario's fork call, 2026-10-20: rebuild the clean undo).
+- **Panel source.** 2026-10-20 panel; Amelia (reversal primitives), Winston (compensator deadlock, pessimistic post), Edut (Undo-as-consent).
+
+### D-044: The confirm card is reserved for the irreversible, bulk, ambiguous, or un-grounded write
+
+- **Chosen.** A visible, operator-clicked confirm card is kept for: every CANCEL_SALE, CANCEL_EXPENSE, CANCEL_STOCK, CANCEL_LAST_OPERATION, DEACTIVATE_PRODUCT; UPDATE_PRODUCT_PRICE (prior price is not snapshotted, so no clean undo); REGISTER_PRODUCTS_BATCH and REGISTER_PRODUCT / REGISTER_PRODUCT_WITH_STOCK (no single-row compensator); and any otherwise-reversible write that fails D-041 grounding or D-042 determinism (multi-candidate product, NULL price, unresolved direction, un-grounded argument, or a bare-confirmation turn).
+- **Alternatives.** (a) Confirm nothing (auto-post everything). (b) Confirm everything (D-038 as written).
+- **Why this won.** Friction matched to consequence: the irreversible act earns a deliberate click (Kaze's WEIGHT), the reversible obvious act does not. Edut vetoed both poles.
+- **Why the alternatives lost.** (a) Auto-posting an irreversible act with only an Undo that cannot truly reverse it breaks consent. (b) Confirm-everywhere is the reflex-click trap.
+- **Implications.** AC11's `requires_human_review` set is unchanged; this decision adds UPDATE_PRODUCT_PRICE and the product-registration ops to the confirm-only bucket and makes the ambiguous-reversible case fall through to the same card. The two card species (D-038/Kaze) still apply, and the provisional card **settles in place** on commit rather than teleporting to a receipt.
+- **Panel source.** 2026-10-20 panel; Edut (the dividing line is irreversibility), Kaze (settle-in-place), Sally (two species must be visibly distinct and the safe path must skip the card entirely).
+
 ### Conventions (spec 007)
 
 - **Tool naming.** `mcp__beans__<verb>_<noun>`: reads `read_*`, write previews `preview_*`. There is no `commit_*` tool and never will be; commit is not a model capability (D-038).
 - **Internal API shape.** `POST /internal/ops/{op}` under internal-token auth, 1:1 with the `database_config.py` functions, tenant taken from the pinned scope and never from the body. Previews return `{op_token, preview, missing_fields}`; reads return the module snapshot shapes.
 - **Boot tool-posture self-check.** The gateway entrypoint asserts at boot that the running `claude` allows only `mcp__beans__*` and exits non-zero otherwise, symmetric with the existing secret-shape grep. The secret grep guards leakage; this guards tool execution, the leg native tool-use removes.
-- **How writes confirm.** Preview stages, the human clicks, and `/chat/confirm` consumes the single-use token under `tenant_context`. That is the only place a row commits and the cache invalidates. No confirm gate may be auto-satisfied by model output.
+- **How writes confirm.** Preview stages, and `/chat/confirm` consumes the single-use token under `tenant_context` — the only place a row commits and the cache invalidates. The click is auto-satisfied by the *client* (not the model) for the reversible, operator-grounded, in-cap set (D-040), with a loud Undo; otherwise a visible confirm card waits for a real operator click (D-044). No confirm gate may ever be auto-satisfied by **model output** — the `auto` verdict is computed server-side (D-041, D-042).
 - **One writer per fact.** The internal API owns committed rows, the pending store owns staged intent, and the acknowledgement is built from returned rows, never from the model's memory of the proposal.
 - **Honesty of acknowledgement.** A post-write message names the SKU or target, the amount in digits, and the resulting balance, read back from the commit response.
 
