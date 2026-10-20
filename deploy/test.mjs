@@ -5,6 +5,7 @@
 import './gateway.test.mjs';
 import './tool-posture.test.mjs';
 import './beans-mcp.test.mjs';
+import './token-pool.test.mjs';
 
 process.on('exit', (code) => {
   if (!process.exitCode && !code) console.log('all checks passed.');

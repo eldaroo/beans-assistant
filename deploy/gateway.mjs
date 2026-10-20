@@ -29,6 +29,14 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
+import {
+  detectExhaustion,
+  cooldownReset,
+  allExhaustedMessage,
+  parseTokens,
+  TokenPool,
+  childSpawnEnv,
+} from './token-pool.mjs';
 
 const DEFAULTS = {
   poolTarget: 2, // warm children kept idle and ready
@@ -109,6 +117,9 @@ class ChildPool {
     this.cwd = opts.cwd || '/alloc/data';
     this.target = opts.poolTarget ?? DEFAULTS.poolTarget;
     this.spawnChild = opts.spawnChild || this._defaultSpawn.bind(this);
+    // Returns the active subscription token so each spawned child carries it; rotation takes
+    // effect on the next spawn (and on rekey below). Null when no pool is wired (ambient token).
+    this.tokenFn = opts.tokenFn || null;
     this.idle = [];
     this.closed = false;
   }
@@ -131,7 +142,8 @@ class ChildPool {
       ],
       // stderr is ignored (not piped): --verbose can exceed the OS pipe buffer and, undrained,
       // would block the child before it flushes the stdout result (council, Binyan).
-      { cwd: this.cwd, stdio: ['pipe', 'pipe', 'ignore'] }
+      // env carries the active subscription token so a rotation reaches the next-spawned child.
+      { cwd: this.cwd, stdio: ['pipe', 'pipe', 'ignore'], env: childSpawnEnv(process.env, this.tokenFn ? this.tokenFn() : null) }
     );
     child.on('error', () => {}); // surfaced by the lease, never crash the server
     // Evict a child that dies WHILE IDLE so the pool never reports a corpse as ready and never
@@ -170,6 +182,18 @@ class ChildPool {
 
   get ready() {
     return this.idle.length;
+  }
+
+  // Dispose every idle child and refill. Called after a token rotation so warm children baked
+  // with the benched token are replaced by ones carrying the new active token.
+  rekey() {
+    if (this.closed) return;
+    for (const c of this.idle.splice(0)) {
+      try {
+        c.kill('SIGKILL');
+      } catch {}
+    }
+    this.refill();
   }
 
   close() {
@@ -241,14 +265,14 @@ function runWarmTurn(child, text, { timeoutMs = DEFAULTS.runTimeoutMs } = {}) {
 }
 
 // One-shot fallback: the wal-parse path. Cold (~6-8s) but reliable when the pool is unavailable.
-function runOneShot(text, { claudeBin, cwd, timeoutMs = DEFAULTS.oneShotTimeoutMs } = {}) {
+function runOneShot(text, { claudeBin, cwd, token, timeoutMs = DEFAULTS.oneShotTimeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';
     const child = spawn(
       claudeBin || process.env.CLAUDE_BIN || 'claude',
       ['-p', text, '--output-format', 'json', '--max-turns', '1', ...SAFE_ARGS],
-      { cwd: cwd || '/alloc/data', stdio: ['ignore', 'pipe', 'ignore'] }
+      { cwd: cwd || '/alloc/data', stdio: ['ignore', 'pipe', 'ignore'], env: childSpawnEnv(process.env, token || null) }
     );
     const timer = setTimeout(() => {
       if (settled) return;
@@ -287,10 +311,9 @@ function errorBody(code, message) {
   return JSON.stringify({ ok: false, error: { code, message: String(message).slice(0, 300) } });
 }
 
-// Resolve one /run: lease a warm child, fall back to one-shot. `combine` makes the single user
-// turn text. Returns the assistant text; the HTTP layer shapes {ok, text|json}.
-async function resolveRun(pool, { system, prompt }, opts = {}) {
-  const combined = (system ? system + '\n\n' : '') + prompt;
+// One attempt: lease a warm child, fall back to one-shot (carrying the active token). Returns the
+// assistant text; the HTTP layer shapes {ok, text|json}.
+async function runOnce(pool, combined, opts = {}) {
   const oneShotFn = opts.oneShotFn || runOneShot;
   const child = pool.lease();
   if (child) {
@@ -301,24 +324,50 @@ async function resolveRun(pool, { system, prompt }, opts = {}) {
       // fall through to one-shot
     }
   }
+  const token = opts.tokenPool ? opts.tokenPool.active() : undefined;
   const text = await oneShotFn(combined, {
     claudeBin: pool.claudeBin,
     cwd: pool.cwd,
+    token,
     ...(opts.oneShot || {}),
   });
   return { text, path: 'one-shot' };
+}
+
+// Resolve one /run with subscription-token rotation. On a "usage limit reached" turn, bench the
+// current account, re-key the warm pool, and retry on the next healthy token. When every token is
+// at its limit, throw the honest all-exhausted message (the HTTP layer returns it as model-error).
+// With no pool, or a single token, it is one plain attempt (unchanged behavior).
+async function resolveRun(pool, { system, prompt }, opts = {}) {
+  const combined = (system ? system + '\n\n' : '') + prompt;
+  const tokenPool = opts.tokenPool;
+  if (!tokenPool || tokenPool.size <= 1) {
+    return runOnce(pool, combined, opts);
+  }
+  for (let i = 0; i < tokenPool.size; i++) {
+    const current = tokenPool.active();
+    if (!current) break; // all benched
+    const { text, path } = await runOnce(pool, combined, opts);
+    const ex = detectExhaustion(text);
+    if (!ex.exhausted) return { text, path };
+    tokenPool.bench(current, ex.resetAt || cooldownReset());
+    pool.rekey();
+  }
+  throw new Error(allExhaustedMessage(tokenPool.earliestReset()));
 }
 
 function makeHandler(pool, secret, runOpts = {}) {
   return function handler(req, res) {
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
+      const tp = runOpts.tokenPool;
       res.end(
         JSON.stringify({
           ok: true,
           svc: 'beans-ai',
           pool: { ready: pool.ready, target: pool.target },
           backend: 'claude-subscription',
+          tokens: tp ? { count: tp.size, allBenched: tp.allBenched(), accounts: tp.statuses() } : null,
         })
       );
       return;
@@ -392,10 +441,14 @@ function makeHandler(pool, secret, runOpts = {}) {
 export function createGateway(opts = {}) {
   const secret = opts.secret ?? process.env.BEANS_AI_SHARED_SECRET;
   if (!secret) throw new Error('BEANS_AI_SHARED_SECRET required');
-  const pool = new ChildPool(opts);
+  // Subscription-token pool: injected tokens (tests) or parsed from env (the Nomad Variable
+  // carries one primary plus optional backups). The ChildPool spawns each child with the active
+  // token; resolveRun rotates on a usage-limit turn.
+  const tokenPool = opts.tokenPool || new TokenPool(opts.tokens || parseTokens());
+  const pool = new ChildPool({ ...opts, tokenFn: () => tokenPool.active() });
   pool.refill();
   const server = http.createServer(
-    makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot })
+    makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool })
   );
   const origClose = server.close.bind(server);
   server.close = (cb) => {
@@ -403,6 +456,7 @@ export function createGateway(opts = {}) {
     return origClose(cb);
   };
   server._pool = pool; // test hook
+  server._tokenPool = tokenPool; // test hook
   return server;
 }
 

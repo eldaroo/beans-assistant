@@ -11,22 +11,31 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MARKER = '@@GATEWAY_MJS@@';
 const INDENT = '          '; // 10 spaces; the <<-EOJS closing marker sits at 8, leaving 2 after strip
 
+// Each marker is replaced by the indented contents of its source module. gateway.mjs imports its
+// siblings, so every file gateway.mjs needs at runtime ships as its own /local/*.mjs via the
+// template stanzas in beans-ai.nomad.tmpl.hcl.
+const EMBEDS = {
+  '@@GATEWAY_MJS@@': 'gateway.mjs',
+  '@@TOKEN_POOL_MJS@@': 'token-pool.mjs',
+};
+
 export function render() {
-  const tmpl = readFileSync(join(HERE, 'beans-ai.nomad.tmpl.hcl'), 'utf8');
-  const gateway = readFileSync(join(HERE, 'gateway.mjs'), 'utf8');
-  if (!tmpl.includes(MARKER)) throw new Error('template missing ' + MARKER);
-  const embedded = gateway
-    .replace(/\n+$/, '') // drop trailing blank lines so the heredoc is tight
-    .split('\n')
-    .map((line) => (line.length ? INDENT + line : ''))
-    .join('\n');
-  // Replace the marker line (the marker must be alone on its line, ignoring surrounding space).
-  const markerLine = new RegExp('^[ \\t]*' + MARKER + '[ \\t]*$', 'm');
-  if (!markerLine.test(tmpl)) throw new Error('no standalone ' + MARKER + ' line in template');
-  return tmpl.replace(markerLine, embedded);
+  let out = readFileSync(join(HERE, 'beans-ai.nomad.tmpl.hcl'), 'utf8');
+  for (const [marker, file] of Object.entries(EMBEDS)) {
+    if (!out.includes(marker)) throw new Error('template missing ' + marker);
+    const src = readFileSync(join(HERE, file), 'utf8');
+    const embedded = src
+      .replace(/\n+$/, '') // drop trailing blank lines so the heredoc is tight
+      .split('\n')
+      .map((line) => (line.length ? INDENT + line : ''))
+      .join('\n');
+    const markerLine = new RegExp('^[ \\t]*' + marker + '[ \\t]*$', 'm');
+    if (!markerLine.test(out)) throw new Error('no standalone ' + marker + ' line in template');
+    out = out.replace(markerLine, embedded);
+  }
+  return out;
 }
 
 const isMain = (process.argv[1] || '').endsWith('build-hcl.mjs');

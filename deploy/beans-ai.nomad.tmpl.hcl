@@ -105,6 +105,7 @@ job "beans-ai" {
         data        = <<-EOH
           {{- with nomadVar "nomad/jobs/beans-ai" -}}
           CLAUDE_CODE_OAUTH_TOKEN={{ .CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKENS={{ .CLAUDE_CODE_OAUTH_TOKENS }}
           BEANS_AI_SHARED_SECRET={{ .BEANS_AI_SHARED_SECRET }}
           {{- end -}}
         EOH
@@ -119,7 +120,9 @@ job "beans-ai" {
           ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
           log() { echo "[beans-ai $(ts)] $*"; }
 
-          : "$${CLAUDE_CODE_OAUTH_TOKEN:?CLAUDE_CODE_OAUTH_TOKEN required}"
+          if [ -z "$${CLAUDE_CODE_OAUTH_TOKENS:-}" ] && [ -z "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            log "FATAL: no CLAUDE_CODE_OAUTH_TOKENS or CLAUDE_CODE_OAUTH_TOKEN present"; exit 1
+          fi
           : "$${BEANS_AI_SHARED_SECRET:?BEANS_AI_SHARED_SECRET required}"
           : "$${NOMAD_PORT_http:?http port required}"
 
@@ -145,6 +148,16 @@ job "beans-ai" {
         perms       = "0644"
         data        = <<-EOJS
 @@GATEWAY_MJS@@
+        EOJS
+      }
+
+      # Sibling module imported by gateway.mjs (subscription-token rotation). Shipped next to
+      # gateway.mjs so `import './token-pool.mjs'` resolves on the box. Embedded by build-hcl.mjs.
+      template {
+        destination = "local/token-pool.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+@@TOKEN_POOL_MJS@@
         EOJS
       }
 

@@ -105,6 +105,7 @@ job "beans-ai" {
         data        = <<-EOH
           {{- with nomadVar "nomad/jobs/beans-ai" -}}
           CLAUDE_CODE_OAUTH_TOKEN={{ .CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKENS={{ .CLAUDE_CODE_OAUTH_TOKENS }}
           BEANS_AI_SHARED_SECRET={{ .BEANS_AI_SHARED_SECRET }}
           {{- end -}}
         EOH
@@ -119,7 +120,9 @@ job "beans-ai" {
           ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
           log() { echo "[beans-ai $(ts)] $*"; }
 
-          : "$${CLAUDE_CODE_OAUTH_TOKEN:?CLAUDE_CODE_OAUTH_TOKEN required}"
+          if [ -z "$${CLAUDE_CODE_OAUTH_TOKENS:-}" ] && [ -z "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            log "FATAL: no CLAUDE_CODE_OAUTH_TOKENS or CLAUDE_CODE_OAUTH_TOKEN present"; exit 1
+          fi
           : "$${BEANS_AI_SHARED_SECRET:?BEANS_AI_SHARED_SECRET required}"
           : "$${NOMAD_PORT_http:?http port required}"
 
@@ -171,18 +174,26 @@ job "beans-ai" {
           // Testable offline: CLAUDE_BIN overrides the binary; gateway.test.mjs drives it with a stub
           // `claude` that speaks the stream-json protocol, so the full request path is exercised with no
           // subscription token and no network.
-
+          
           import http from 'node:http';
           import { spawn } from 'node:child_process';
           import { timingSafeEqual } from 'node:crypto';
-
+          import {
+            detectExhaustion,
+            cooldownReset,
+            allExhaustedMessage,
+            parseTokens,
+            TokenPool,
+            childSpawnEnv,
+          } from './token-pool.mjs';
+          
           const DEFAULTS = {
             poolTarget: 2, // warm children kept idle and ready
             runTimeoutMs: 55000, // hard cap on a single warm turn before falling back to one-shot
             oneShotTimeoutMs: 58000,
             maxPromptBytes: 200000,
           };
-
+          
           // SECURITY (council, Tamir): Timonel needs PURE TEXT generation, nothing else. The gateway feeds
           // tenant-controlled text to the model, so a prompt-injection must never be able to make the model
           // act on the box. We therefore (a) do NOT pass --dangerously-skip-permissions, so in headless -p
@@ -192,10 +203,10 @@ job "beans-ai" {
             'Bash', 'BashOutput', 'KillShell', 'Edit', 'Write', 'Read', 'NotebookEdit',
             'WebFetch', 'WebSearch', 'Task', 'Glob', 'Grep',
           ];
-
+          
           // Common args for a safe, tool-free Claude turn. Appended to the per-mode argv.
           const SAFE_ARGS = ['--disallowedTools', ...DISALLOWED_TOOLS];
-
+          
           // Constant-time bearer comparison (council, Tamir LOW): avoid a byte-wise timing side-channel.
           function bearerOk(header, secret) {
             const expected = 'Bearer ' + secret;
@@ -208,9 +219,9 @@ job "beans-ai" {
               return false;
             }
           }
-
+          
           // ── stream-json helpers ────────────────────────────────────────────────────
-
+          
           // One user turn in `--input-format stream-json`: a single JSONL line.
           function userTurnLine(text) {
             return (
@@ -220,7 +231,7 @@ job "beans-ai" {
               }) + '\n'
             );
           }
-
+          
           // Pull the assistant's final text out of a stream-json event stream. The CLI emits a trailing
           // `{"type":"result","result":"..."}`; prefer it, else fall back to concatenated assistant text.
           function extractResult(events) {
@@ -238,7 +249,7 @@ job "beans-ai" {
             }
             return acc;
           }
-
+          
           // Carve the first balanced JSON object out of a model reply (same contract as wal-parse). The
           // Python client re-validates against its Pydantic schema, so a loose field here never commits.
           function carveJson(text) {
@@ -246,19 +257,22 @@ job "beans-ai" {
             if (!m) throw new Error('no json object in model output');
             return JSON.parse(m[0]);
           }
-
+          
           // ── the warm child pool ─────────────────────────────────────────────────────
-
+          
           class ChildPool {
             constructor(opts = {}) {
               this.claudeBin = opts.claudeBin || process.env.CLAUDE_BIN || 'claude';
               this.cwd = opts.cwd || '/alloc/data';
               this.target = opts.poolTarget ?? DEFAULTS.poolTarget;
               this.spawnChild = opts.spawnChild || this._defaultSpawn.bind(this);
+              // Returns the active subscription token so each spawned child carries it; rotation takes
+              // effect on the next spawn (and on rekey below). Null when no pool is wired (ambient token).
+              this.tokenFn = opts.tokenFn || null;
               this.idle = [];
               this.closed = false;
             }
-
+          
             _defaultSpawn() {
               // A warm child: print mode, stream-json in and out, permissions pre-granted. It sits idle
               // reading stdin until we hand it one user turn, then ends its own run.
@@ -277,7 +291,8 @@ job "beans-ai" {
                 ],
                 // stderr is ignored (not piped): --verbose can exceed the OS pipe buffer and, undrained,
                 // would block the child before it flushes the stdout result (council, Binyan).
-                { cwd: this.cwd, stdio: ['pipe', 'pipe', 'ignore'] }
+                // env carries the active subscription token so a rotation reaches the next-spawned child.
+                { cwd: this.cwd, stdio: ['pipe', 'pipe', 'ignore'], env: childSpawnEnv(process.env, this.tokenFn ? this.tokenFn() : null) }
               );
               child.on('error', () => {}); // surfaced by the lease, never crash the server
               // Evict a child that dies WHILE IDLE so the pool never reports a corpse as ready and never
@@ -291,7 +306,7 @@ job "beans-ai" {
               });
               return child;
             }
-
+          
             // Keep `target` children warm and ready. Called at boot and after every lease.
             refill() {
               if (this.closed) return;
@@ -306,18 +321,30 @@ job "beans-ai" {
                 this.idle.push(child);
               }
             }
-
+          
             lease() {
               const child = this.idle.shift() || null;
               // Replace what we took (or discovered dead) so the pool stays warm for the next caller.
               setImmediate(() => this.refill());
               return child;
             }
-
+          
             get ready() {
               return this.idle.length;
             }
-
+          
+            // Dispose every idle child and refill. Called after a token rotation so warm children baked
+            // with the benched token are replaced by ones carrying the new active token.
+            rekey() {
+              if (this.closed) return;
+              for (const c of this.idle.splice(0)) {
+                try {
+                  c.kill('SIGKILL');
+                } catch {}
+              }
+              this.refill();
+            }
+          
             close() {
               this.closed = true;
               for (const c of this.idle.splice(0)) {
@@ -327,7 +354,7 @@ job "beans-ai" {
               }
             }
           }
-
+          
           // Run one warm turn on a leased child. Resolves with the assistant text; rejects on timeout or
           // a dead child so the caller can fall back to one-shot.
           function runWarmTurn(child, text, { timeoutMs = DEFAULTS.runTimeoutMs } = {}) {
@@ -347,7 +374,7 @@ job "beans-ai" {
                 fn(arg);
               };
               const timer = setTimeout(() => finish(reject, new Error('warm-turn-timeout')), timeoutMs);
-
+          
               if (!child || !child.stdin || child.stdin.destroyed) {
                 return finish(reject, new Error('child-unavailable'));
               }
@@ -385,16 +412,16 @@ job "beans-ai" {
               }
             });
           }
-
+          
           // One-shot fallback: the wal-parse path. Cold (~6-8s) but reliable when the pool is unavailable.
-          function runOneShot(text, { claudeBin, cwd, timeoutMs = DEFAULTS.oneShotTimeoutMs } = {}) {
+          function runOneShot(text, { claudeBin, cwd, token, timeoutMs = DEFAULTS.oneShotTimeoutMs } = {}) {
             return new Promise((resolve, reject) => {
               let settled = false;
               let out = '';
               const child = spawn(
                 claudeBin || process.env.CLAUDE_BIN || 'claude',
                 ['-p', text, '--output-format', 'json', '--max-turns', '1', ...SAFE_ARGS],
-                { cwd: cwd || '/alloc/data', stdio: ['ignore', 'pipe', 'ignore'] }
+                { cwd: cwd || '/alloc/data', stdio: ['ignore', 'pipe', 'ignore'], env: childSpawnEnv(process.env, token || null) }
               );
               const timer = setTimeout(() => {
                 if (settled) return;
@@ -426,17 +453,16 @@ job "beans-ai" {
               });
             });
           }
-
+          
           // ── the request core (exported for the test) ────────────────────────────────
-
+          
           function errorBody(code, message) {
             return JSON.stringify({ ok: false, error: { code, message: String(message).slice(0, 300) } });
           }
-
-          // Resolve one /run: lease a warm child, fall back to one-shot. `combine` makes the single user
-          // turn text. Returns the assistant text; the HTTP layer shapes {ok, text|json}.
-          async function resolveRun(pool, { system, prompt }, opts = {}) {
-            const combined = (system ? system + '\n\n' : '') + prompt;
+          
+          // One attempt: lease a warm child, fall back to one-shot (carrying the active token). Returns the
+          // assistant text; the HTTP layer shapes {ok, text|json}.
+          async function runOnce(pool, combined, opts = {}) {
             const oneShotFn = opts.oneShotFn || runOneShot;
             const child = pool.lease();
             if (child) {
@@ -447,24 +473,50 @@ job "beans-ai" {
                 // fall through to one-shot
               }
             }
+            const token = opts.tokenPool ? opts.tokenPool.active() : undefined;
             const text = await oneShotFn(combined, {
               claudeBin: pool.claudeBin,
               cwd: pool.cwd,
+              token,
               ...(opts.oneShot || {}),
             });
             return { text, path: 'one-shot' };
           }
-
+          
+          // Resolve one /run with subscription-token rotation. On a "usage limit reached" turn, bench the
+          // current account, re-key the warm pool, and retry on the next healthy token. When every token is
+          // at its limit, throw the honest all-exhausted message (the HTTP layer returns it as model-error).
+          // With no pool, or a single token, it is one plain attempt (unchanged behavior).
+          async function resolveRun(pool, { system, prompt }, opts = {}) {
+            const combined = (system ? system + '\n\n' : '') + prompt;
+            const tokenPool = opts.tokenPool;
+            if (!tokenPool || tokenPool.size <= 1) {
+              return runOnce(pool, combined, opts);
+            }
+            for (let i = 0; i < tokenPool.size; i++) {
+              const current = tokenPool.active();
+              if (!current) break; // all benched
+              const { text, path } = await runOnce(pool, combined, opts);
+              const ex = detectExhaustion(text);
+              if (!ex.exhausted) return { text, path };
+              tokenPool.bench(current, ex.resetAt || cooldownReset());
+              pool.rekey();
+            }
+            throw new Error(allExhaustedMessage(tokenPool.earliestReset()));
+          }
+          
           function makeHandler(pool, secret, runOpts = {}) {
             return function handler(req, res) {
               if (req.method === 'GET' && req.url === '/health') {
                 res.writeHead(200, { 'content-type': 'application/json' });
+                const tp = runOpts.tokenPool;
                 res.end(
                   JSON.stringify({
                     ok: true,
                     svc: 'beans-ai',
                     pool: { ready: pool.ready, target: pool.target },
                     backend: 'claude-subscription',
+                    tokens: tp ? { count: tp.size, allBenched: tp.allBenched(), accounts: tp.statuses() } : null,
                   })
                 );
                 return;
@@ -532,16 +584,20 @@ job "beans-ai" {
               res.end(errorBody('not-found', req.url));
             };
           }
-
+          
           // ── server factory ──────────────────────────────────────────────────────────
-
+          
           export function createGateway(opts = {}) {
             const secret = opts.secret ?? process.env.BEANS_AI_SHARED_SECRET;
             if (!secret) throw new Error('BEANS_AI_SHARED_SECRET required');
-            const pool = new ChildPool(opts);
+            // Subscription-token pool: injected tokens (tests) or parsed from env (the Nomad Variable
+            // carries one primary plus optional backups). The ChildPool spawns each child with the active
+            // token; resolveRun rotates on a usage-limit turn.
+            const tokenPool = opts.tokenPool || new TokenPool(opts.tokens || parseTokens());
+            const pool = new ChildPool({ ...opts, tokenFn: () => tokenPool.active() });
             pool.refill();
             const server = http.createServer(
-              makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot })
+              makeHandler(pool, secret, { oneShotFn: opts.oneShotFn, warm: opts.warm, oneShot: opts.oneShot, tokenPool })
             );
             const origClose = server.close.bind(server);
             server.close = (cb) => {
@@ -549,12 +605,13 @@ job "beans-ai" {
               return origClose(cb);
             };
             server._pool = pool; // test hook
+            server._tokenPool = tokenPool; // test hook
             return server;
           }
-
+          
           // Exported internals for unit tests.
           export { ChildPool, runWarmTurn, runOneShot, resolveRun, extractResult, carveJson, userTurnLine, makeHandler };
-
+          
           // Start when run directly (the Nomad entrypoint does `node /local/gateway.mjs`).
           const isMain = (() => {
             try {
@@ -563,11 +620,154 @@ job "beans-ai" {
               return false;
             }
           })();
-
+          
           if (isMain) {
             const port = process.env.NOMAD_PORT_http || process.env.PORT || 8080;
             const server = createGateway({ cwd: process.env.ALLOC_DATA || '/alloc/data' });
             server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
+          }
+        EOJS
+      }
+
+      # Sibling module imported by gateway.mjs (subscription-token rotation). Shipped next to
+      # gateway.mjs so `import './token-pool.mjs'` resolves on the box. Embedded by build-hcl.mjs.
+      template {
+        destination = "local/token-pool.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+          // deploy/token-pool.mjs — in-memory Claude subscription token rotation for the beans-ai gateway.
+          //
+          // The gateway authenticates headless with CLAUDE_CODE_OAUTH_TOKEN (a subscription token, not an
+          // API key). One subscription hits its usage window and the gateway goes silent until it resets.
+          // This holds several tokens (one per account: a primary plus one or two backups) and rotates to
+          // the next healthy one the instant a turn comes back "usage limit reached".
+          //
+          // SIMPLE variant (Dario's call, 2026-10-19): the token list lives in the Nomad Variable alongside
+          // the bearer, and benching is in-memory. No database. On a restart the benched state resets, which
+          // self-corrects: a still-exhausted token just re-benches on its next use (cheap). The richer
+          // Neon-backed store Quinn uses (quinn-discord/token-pool.mjs + db.mjs) is the promotion path if
+          // beans ever needs benched state to survive restarts or be shared; the pure detection below is
+          // lifted from that module unchanged so the two stay in sync.
+          //
+          // A subscription token can only be minted by an interactive `claude setup-token` browser login;
+          // it can never be generated. Dario seeds the list into the Nomad Variable.
+
+          const DEFAULT_COOLDOWN_MIN = Number(process.env.BEANS_TOKEN_COOLDOWN_MIN) || 60;
+
+          // ── Pure detection (lifted from quinn-discord/token-pool.mjs, kept identical) ──────────────
+          // Decide if `text` (a claude run's output) is a subscription-limit failure, and pull the reset
+          // time if present. The machine form is "usage limit reached|<unix-epoch>"; human phrasings carry
+          // no parseable reset.
+          export function detectExhaustion(text) {
+            if (!text) return { exhausted: false, resetAt: null };
+            const t = String(text);
+            const epochM = t.match(/usage limit reached\s*[|:]\s*(\d{10,13})/i);
+            if (epochM) {
+              let n = Number(epochM[1]);
+              if (n < 1e12) n *= 1000; // seconds -> ms
+              const d = new Date(n);
+              return { exhausted: true, resetAt: isNaN(d.getTime()) ? null : d };
+            }
+            const SIGNATURES = [
+              /usage limit reached/i,
+              /reached your (?:usage )?limit/i,
+              /\b5-hour limit reached\b/i,
+              /\bweekly limit reached\b/i,
+              /\blimit will reset\b/i,
+              /you'?ve (?:hit|reached) your [^.\n]*limit/i,
+            ];
+            if (SIGNATURES.some((re) => re.test(t))) return { exhausted: true, resetAt: null };
+            return { exhausted: false, resetAt: null };
+          }
+
+          export function cooldownReset(now = new Date()) {
+            return new Date(now.getTime() + DEFAULT_COOLDOWN_MIN * 60 * 1000);
+          }
+
+          export function allExhaustedMessage(reset) {
+            const when = reset ? ` La primera se resetea alrededor de ${new Date(reset).toISOString()}.` : '';
+            return `Todas las cuentas de Beans estan en su limite de uso.${when} Agrega una cuenta o espera el reset.`;
+          }
+
+          // Parse the token list from env. Accepts CLAUDE_CODE_OAUTH_TOKENS as a JSON array OR a
+          // newline/comma-separated list, and the single CLAUDE_CODE_OAUTH_TOKEN for back-compat. Order is
+          // preserved (primary first), empties dropped, duplicates removed.
+          export function parseTokens(env = process.env) {
+            const out = [];
+            const push = (v) => {
+              const s = String(v || '').trim();
+              if (s && !out.includes(s)) out.push(s);
+            };
+            const many = (env.CLAUDE_CODE_OAUTH_TOKENS || '').trim();
+            if (many) {
+              if (many.startsWith('[')) {
+                try { JSON.parse(many).forEach(push); } catch { /* fall through to split */ }
+              }
+              if (!out.length) many.split(/[\n,]/).forEach(push);
+            }
+            push(env.CLAUDE_CODE_OAUTH_TOKEN);
+            // Numbered back-compat: CLAUDE_CODE_OAUTH_TOKEN_2, _3, ...
+            for (let i = 2; i <= 9; i++) push(env['CLAUDE_CODE_OAUTH_TOKEN_' + i]);
+            return out;
+          }
+
+          function tail(token) {
+            return '…' + String(token).slice(-6);
+          }
+
+          // In-memory pool: a list of tokens, each benchable until a reset time.
+          export class TokenPool {
+            constructor(tokens = []) {
+              this.entries = tokens.map((token, i) => ({ token, exhaustedUntil: null, label: 'acct-' + (i + 1) }));
+            }
+
+            get size() {
+              return this.entries.length;
+            }
+
+            _healthy(now) {
+              const t = now instanceof Date ? now.getTime() : now;
+              return this.entries.filter((e) => !e.exhaustedUntil || e.exhaustedUntil.getTime() <= t);
+            }
+
+            // The token to spawn with: the first healthy one, or null when the pool is empty/all-benched.
+            active(now = new Date()) {
+              const h = this._healthy(now);
+              return h.length ? h[0].token : null;
+            }
+
+            bench(token, resetAt) {
+              const e = this.entries.find((x) => x.token === token);
+              if (e) e.exhaustedUntil = resetAt instanceof Date ? resetAt : cooldownReset();
+            }
+
+            allBenched(now = new Date()) {
+              return this.size > 0 && this._healthy(now).length === 0;
+            }
+
+            earliestReset() {
+              const times = this.entries.map((e) => e.exhaustedUntil).filter(Boolean).map((d) => d.getTime());
+              return times.length ? new Date(Math.min(...times)) : null;
+            }
+
+            // Masked board for /health; never exposes a token.
+            statuses(now = new Date()) {
+              const t = now.getTime();
+              return this.entries.map((e, i) => ({
+                label: e.label,
+                tail: tail(e.token),
+                active: i === 0 ? undefined : undefined, // active is derived; omit to avoid implying order
+                benched: !!(e.exhaustedUntil && e.exhaustedUntil.getTime() > t),
+                until: e.exhaustedUntil ? e.exhaustedUntil.toISOString() : null,
+              }));
+            }
+          }
+
+          // The env a spawned claude child should carry: the active token overrides whatever is ambient, so
+          // rotation takes effect on the next spawn. Pure so the wiring is unit-testable without a binary.
+          export function childSpawnEnv(baseEnv, activeToken) {
+            if (!activeToken) return baseEnv;
+            return { ...baseEnv, CLAUDE_CODE_OAUTH_TOKEN: activeToken };
           }
         EOJS
       }
