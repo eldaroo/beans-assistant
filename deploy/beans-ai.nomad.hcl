@@ -871,8 +871,8 @@ job "beans-ai" {
           }
 
           export function allExhaustedMessage(reset) {
-            const when = reset ? ` La primera se resetea alrededor de ${new Date(reset).toISOString()}.` : '';
-            return `Todas las cuentas de Beans estan en su limite de uso.${when} Agrega una cuenta o espera el reset.`;
+            const when = reset ? ` La primera se resetea alrededor de $${new Date(reset).toISOString()}.` : '';
+            return `Todas las cuentas de Beans estan en su limite de uso.$${when} Agrega una cuenta o espera el reset.`;
           }
 
           // Parse the token list from env. Accepts CLAUDE_CODE_OAUTH_TOKENS as a JSON array OR a

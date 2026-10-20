@@ -27,7 +27,12 @@ export function render() {
   let out = readFileSync(join(HERE, 'beans-ai.nomad.tmpl.hcl'), 'utf8');
   for (const [marker, file] of Object.entries(EMBEDS)) {
     if (!out.includes(marker)) throw new Error('template missing ' + marker);
-    const src = readFileSync(join(HERE, file), 'utf8');
+    const src = readFileSync(join(HERE, file), 'utf8')
+      // Escape HCL2 interpolation: a JS template literal `${...}` in the heredoc would be read as
+      // HCL interpolation at parse time. `$${` is HCL2's literal-`${` escape, which the parser turns
+      // back into `${` in the template string; consul-template then passes it through unchanged
+      // (it uses `{{ }}`, not `${ }`), so the box receives the original JS.
+      .replace(/\$\{/g, () => '$${');
     const embedded = src
       .replace(/\n+$/, '') // drop trailing blank lines so the heredoc is tight
       .split('\n')
@@ -35,7 +40,9 @@ export function render() {
       .join('\n');
     const markerLine = new RegExp('^[ \\t]*' + marker + '[ \\t]*$', 'm');
     if (!markerLine.test(out)) throw new Error('no standalone ' + marker + ' line in template');
-    out = out.replace(markerLine, embedded);
+    // Replace with a FUNCTION so `$$`/`$&` in the embedded code are inserted literally, not treated
+    // as String.replace replacement patterns (that would undo the `$${` HCL escape above).
+    out = out.replace(markerLine, () => embedded);
   }
   return out;
 }
