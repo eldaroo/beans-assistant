@@ -82,6 +82,10 @@ const TOOL_MODE_DISALLOWED = Array.from(new Set([
 
 const BEANS_MCP_CONFIG = process.env.BEANS_MCP_CONFIG || '/local/mcp-beans.json';
 const AGENT_MAX_TURNS = Number(process.env.BEANS_AGENT_MAX_TURNS) || 6;
+// A native-tool agent turn is multi-hop (cold child start + MCP connect + a tool roundtrip to the
+// internal API + model generation), so it needs far more headroom than a tool-free classification
+// turn. Keep it under the client's call_agent timeout so the gateway returns a result, not a cutoff.
+const AGENT_TURN_TIMEOUT = Number(process.env.BEANS_AGENT_TIMEOUT_MS) || 120000;
 
 // The tool-mode flags, shared by the real turn and the boot self-check so they probe what runs.
 function agentFlags(mcpConfig = BEANS_MCP_CONFIG) {
@@ -108,7 +112,7 @@ export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CON
 
 // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
 // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
+function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';

@@ -105,10 +105,12 @@ jobs:
             GOOGLE_REDIRECT_URI  = "https://beans-command-center.mdlautomations.duckdns.org/auth/google/callback"
 
             # Native tool-use chat (spec 007): drive the beans-ai gateway agent loop.
-            BEANS_CHAT_AGENT       = "1"
-            BEANS_AI_GATEWAY_URL   = "https://beans-ai.mdlautomations.duckdns.org"
-            BEANS_AI_SHARED_SECRET = "$BEANS_AI_SHARED_SECRET"
-            INTERNAL_SERVICE_TOKEN = "$INTERNAL_SERVICE_TOKEN"
+            BEANS_CHAT_AGENT        = "1"
+            BEANS_AI_GATEWAY_URL    = "https://beans-ai.mdlautomations.duckdns.org"
+            BEANS_AI_SHARED_SECRET  = "$BEANS_AI_SHARED_SECRET"
+            INTERNAL_SERVICE_TOKEN  = "$INTERNAL_SERVICE_TOKEN"
+            # Agent turns are multi-hop; wait past the gateway's 120s turn ceiling.
+            BEANS_AI_GATEWAY_TIMEOUT = "150"
 
             GEMINI_MODEL       = "gemini-2.5-flash"
             GEMINI_TEMPERATURE = "0.2"
