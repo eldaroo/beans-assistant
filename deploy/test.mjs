@@ -4,6 +4,7 @@
 // sentinel "all checks passed." in output, so we emit it when node:test leaves exitCode clean.
 import './gateway.test.mjs';
 import './tool-posture.test.mjs';
+import './beans-mcp.test.mjs';
 
 process.on('exit', (code) => {
   if (!process.exitCode && !code) console.log('all checks passed.');
