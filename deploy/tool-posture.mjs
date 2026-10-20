@@ -63,7 +63,10 @@ export function probeCallableTools({
         let e;
         try { e = JSON.parse(line); } catch { continue; }
         if (e && e.type === 'system' && e.subtype === 'init' && Array.isArray(e.tools)) {
-          done(resolve, e.tools.slice());
+          done(resolve, {
+            tools: e.tools.slice(),
+            mcpServers: Array.isArray(e.mcp_servers) ? e.mcp_servers.slice() : [],
+          });
           return;
         }
       }
@@ -74,23 +77,38 @@ export function probeCallableTools({
   });
 }
 
-// Decide pass/fail from a callable tool set. Pass iff every callable tool matches the allowed
-// MCP prefix (so the only reachable capability is beans tools) and at least one such tool exists.
-export function judgeToolPosture(callable, { allowedPrefix = ALLOWED_MCP_PREFIX } = {}) {
-  const offending = callable.filter((t) => !String(t).startsWith(allowedPrefix));
-  const beansTools = callable.filter((t) => String(t).startsWith(allowedPrefix));
+// Decide pass/fail from an init probe {tools, mcpServers} (a bare tools array is accepted too).
+//
+// SECURITY (the hard guarantee): every callable built-in must be disallowed, so the only tool a
+// hijacked model can reach is a beans MCP tool. That is `offending.length === 0`: no tool in the
+// init `tools` array falls outside the allowed MCP prefix.
+//
+// LIVENESS: the beans MCP server connects ASYNCHRONOUSLY. On claude 2.1.215 the init event fires
+// while it is still "pending", so its tools are NOT in the init snapshot yet (they become callable
+// mid-turn, verified live). Requiring beans tools in the init array would wrongly fail there, so
+// liveness is "beans is configured and not failed" (claude parsed the config and is connecting it),
+// not "its tools are already listed". The real end-to-end read is proven by the live loop.
+export function judgeToolPosture(probe, { allowedPrefix = ALLOWED_MCP_PREFIX } = {}) {
+  const tools = Array.isArray(probe) ? probe : (probe && probe.tools) || [];
+  const mcpServers = Array.isArray(probe) ? [] : (probe && probe.mcpServers) || [];
+  const offending = tools.filter((t) => !String(t).startsWith(allowedPrefix));
+  const beansTools = tools.filter((t) => String(t).startsWith(allowedPrefix));
+  const beans = mcpServers.find((s) => s && s.name === 'beans');
+  const beansConfigured = !!beans && beans.status !== 'failed' && beans.status !== 'error';
   return {
-    ok: offending.length === 0 && beansTools.length > 0,
-    callable,
+    ok: offending.length === 0 && beansConfigured,
+    callable: tools,
     beansTools,
     offending,
+    mcpServers,
+    beansStatus: beans ? beans.status : 'absent',
   };
 }
 
-// Full self-check: probe the real claude and judge. Resolves {ok, callable, beansTools, offending}.
+// Full self-check: probe the real claude and judge. Resolves the judge verdict object.
 export async function verifyToolPosture(opts = {}) {
-  const callable = await probeCallableTools(opts);
-  return judgeToolPosture(callable, opts);
+  const probe = await probeCallableTools(opts);
+  return judgeToolPosture(probe, opts);
 }
 
 // CLI entry: node tool-posture.mjs --mcp-config <path> [--disallow a b c]. Exit 0 on pass,

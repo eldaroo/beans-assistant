@@ -139,6 +139,18 @@ job "beans-ai" {
           fi
           log "isolation OK: no org-keyring value; env carries the model token(s), the bearer, and the beans internal-op wiring"
           log "toolchain: node $(node --version) · $(claude --version 2>/dev/null | head -1)"
+
+          # Pin the Claude CLI to a version where MCP servers connect BEFORE the first turn (2.1.304).
+          # The image's 2.1.215 connects MCP asynchronously, so the beans tools are not callable at
+          # turn start and the agent cannot use them (verified on the box). Skip if already pinned.
+          WANT_CLAUDE="2.1.304"
+          HAVE_CLAUDE="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          if [ "$${HAVE_CLAUDE}" != "$${WANT_CLAUDE}" ]; then
+            log "pinning Claude CLI $${HAVE_CLAUDE} -> $${WANT_CLAUDE}"
+            npm i -g @anthropic-ai/claude-code@$${WANT_CLAUDE} >/dev/null 2>&1 || { log "FATAL: claude pin failed"; exit 1; }
+            log "pinned: $(claude --version 2>/dev/null | head -1)"
+          fi
+
           log "starting warm gateway on :$${NOMAD_PORT_http}"
           exec node /local/gateway.mjs
         EOS

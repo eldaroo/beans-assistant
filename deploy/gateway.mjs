@@ -65,12 +65,19 @@ const SAFE_ARGS = ['--disallowedTools', ...DISALLOWED_TOOLS];
 // (spike 2026-10-19), so the real guard is the boot posture self-check (verifyToolMode) that probes
 // the actual callable set and refuses to serve unless it is exactly mcp__beans__*. This denylist is
 // defense-in-depth; the self-check catches anything a new claude version adds that it misses.
+// The complete built-in set observed on the deployed claude (2.1.215, quinn-brain image). The boot
+// self-check (verifyToolMode) is the backstop: if a future version adds a tool this misses, it fails
+// closed. Keep this a superset so the box boots clean.
 const TOOL_MODE_DISALLOWED = Array.from(new Set([
-  ...DISALLOWED_TOOLS,
+  ...DISALLOWED_TOOLS, // Bash, BashOutput, KillShell, Edit, Write, Read, NotebookEdit, WebFetch, WebSearch, Task, Glob, Grep
   'TodoWrite', 'Monitor', 'Workflow', 'SendMessage', 'RemoteTrigger',
   'CronCreate', 'CronDelete', 'CronList', 'DesignSync', 'EnterWorktree', 'ExitWorktree',
   'ListAgents', 'PushNotification', 'ScheduleWakeup', 'ReportFindings', 'ToolSearch',
   'Skill', 'EndConversation', 'ReadMcpResourceTool', 'ListMcpResourcesTool',
+  // The 2.1.215 Task family and the onboarding helper seen leaking in the first prod boot.
+  'TaskCreate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TaskUpdate', 'ShareOnboardingGuide',
+  // Present on the pinned 2.1.304 (caught by the boot self-check on the second prod boot).
+  'PublishPlugin',
 ]));
 
 const BEANS_MCP_CONFIG = process.env.BEANS_MCP_CONFIG || '/local/mcp-beans.json';
@@ -101,7 +108,7 @@ export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CON
 
 // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
 // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
+function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';
@@ -111,6 +118,7 @@ function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_C
       '--output-format', 'stream-json',
       '--verbose',
       '--max-turns', String(maxTurns),
+      ...(system ? ['--append-system-prompt', system] : []),
       ...agentFlags(mcpConfig),
     ];
     let child;
@@ -144,7 +152,7 @@ function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_C
     child.on('error', (e) => finish(reject, e));
     child.on('close', (code) => { if (!settled) finish(reject, new Error('child-close-' + code)); });
     try {
-      child.stdin.write(userTurnLine(combined));
+      child.stdin.write(userTurnLine(userText));
       child.stdin.end();
     } catch (e) {
       finish(reject, e);
@@ -153,13 +161,13 @@ function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_C
 }
 
 // Resolve one /run-agent with token rotation: on a usage-limit turn, bench + rotate + retry.
-async function resolveAgent(combined, opts = {}) {
+async function resolveAgent(userText, opts = {}) {
   const tokenPool = opts.tokenPool;
   const attempts = tokenPool && tokenPool.size > 1 ? tokenPool.size : 1;
   for (let i = 0; i < attempts; i++) {
     const current = tokenPool ? tokenPool.active() : undefined;
     if (tokenPool && tokenPool.size > 1 && !current) break;
-    const text = await (opts.agentFn || runAgentTurn)(combined, { ...opts, token: current });
+    const text = await (opts.agentFn || runAgentTurn)(userText, { ...opts, token: current });
     if (tokenPool && tokenPool.size > 1) {
       const ex = detectExhaustion(text);
       if (ex.exhausted) {
@@ -579,13 +587,13 @@ function makeHandler(pool, secret, runOpts = {}) {
           res.end(errorBody('empty-prompt', 'prompt is required'));
           return;
         }
-        const combined = (system ? system + '\n\n' : '') + prompt;
         try {
-          const { text, path } = await resolveAgent(combined, {
+          const { text, path } = await resolveAgent(prompt, {
             tokenPool: runOpts.tokenPool,
             claudeBin: pool.claudeBin,
             cwd: pool.cwd,
             agentFn: runOpts.agentFn,
+            system,
           });
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: true, path, text }));

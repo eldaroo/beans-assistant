@@ -139,6 +139,18 @@ job "beans-ai" {
           fi
           log "isolation OK: no org-keyring value; env carries the model token(s), the bearer, and the beans internal-op wiring"
           log "toolchain: node $(node --version) · $(claude --version 2>/dev/null | head -1)"
+
+          # Pin the Claude CLI to a version where MCP servers connect BEFORE the first turn (2.1.304).
+          # The image's 2.1.215 connects MCP asynchronously, so the beans tools are not callable at
+          # turn start and the agent cannot use them (verified on the box). Skip if already pinned.
+          WANT_CLAUDE="2.1.304"
+          HAVE_CLAUDE="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          if [ "$${HAVE_CLAUDE}" != "$${WANT_CLAUDE}" ]; then
+            log "pinning Claude CLI $${HAVE_CLAUDE} -> $${WANT_CLAUDE}"
+            npm i -g @anthropic-ai/claude-code@$${WANT_CLAUDE} >/dev/null 2>&1 || { log "FATAL: claude pin failed"; exit 1; }
+            log "pinned: $(claude --version 2>/dev/null | head -1)"
+          fi
+
           log "starting warm gateway on :$${NOMAD_PORT_http}"
           exec node /local/gateway.mjs
         EOS
@@ -217,12 +229,19 @@ job "beans-ai" {
           // (spike 2026-10-19), so the real guard is the boot posture self-check (verifyToolMode) that probes
           // the actual callable set and refuses to serve unless it is exactly mcp__beans__*. This denylist is
           // defense-in-depth; the self-check catches anything a new claude version adds that it misses.
+          // The complete built-in set observed on the deployed claude (2.1.215, quinn-brain image). The boot
+          // self-check (verifyToolMode) is the backstop: if a future version adds a tool this misses, it fails
+          // closed. Keep this a superset so the box boots clean.
           const TOOL_MODE_DISALLOWED = Array.from(new Set([
-            ...DISALLOWED_TOOLS,
+            ...DISALLOWED_TOOLS, // Bash, BashOutput, KillShell, Edit, Write, Read, NotebookEdit, WebFetch, WebSearch, Task, Glob, Grep
             'TodoWrite', 'Monitor', 'Workflow', 'SendMessage', 'RemoteTrigger',
             'CronCreate', 'CronDelete', 'CronList', 'DesignSync', 'EnterWorktree', 'ExitWorktree',
             'ListAgents', 'PushNotification', 'ScheduleWakeup', 'ReportFindings', 'ToolSearch',
             'Skill', 'EndConversation', 'ReadMcpResourceTool', 'ListMcpResourcesTool',
+            // The 2.1.215 Task family and the onboarding helper seen leaking in the first prod boot.
+            'TaskCreate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop', 'TaskUpdate', 'ShareOnboardingGuide',
+            // Present on the pinned 2.1.304 (caught by the boot self-check on the second prod boot).
+            'PublishPlugin',
           ]));
           
           const BEANS_MCP_CONFIG = process.env.BEANS_MCP_CONFIG || '/local/mcp-beans.json';
@@ -253,7 +272,7 @@ job "beans-ai" {
           
           // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
           // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-          function runAgentTurn(combined, { claudeBin, cwd, token, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
+          function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = DEFAULTS.runTimeoutMs, spawnChild } = {}) {
             return new Promise((resolve, reject) => {
               let settled = false;
               let out = '';
@@ -263,6 +282,7 @@ job "beans-ai" {
                 '--output-format', 'stream-json',
                 '--verbose',
                 '--max-turns', String(maxTurns),
+                ...(system ? ['--append-system-prompt', system] : []),
                 ...agentFlags(mcpConfig),
               ];
               let child;
@@ -296,7 +316,7 @@ job "beans-ai" {
               child.on('error', (e) => finish(reject, e));
               child.on('close', (code) => { if (!settled) finish(reject, new Error('child-close-' + code)); });
               try {
-                child.stdin.write(userTurnLine(combined));
+                child.stdin.write(userTurnLine(userText));
                 child.stdin.end();
               } catch (e) {
                 finish(reject, e);
@@ -305,13 +325,13 @@ job "beans-ai" {
           }
           
           // Resolve one /run-agent with token rotation: on a usage-limit turn, bench + rotate + retry.
-          async function resolveAgent(combined, opts = {}) {
+          async function resolveAgent(userText, opts = {}) {
             const tokenPool = opts.tokenPool;
             const attempts = tokenPool && tokenPool.size > 1 ? tokenPool.size : 1;
             for (let i = 0; i < attempts; i++) {
               const current = tokenPool ? tokenPool.active() : undefined;
               if (tokenPool && tokenPool.size > 1 && !current) break;
-              const text = await (opts.agentFn || runAgentTurn)(combined, { ...opts, token: current });
+              const text = await (opts.agentFn || runAgentTurn)(userText, { ...opts, token: current });
               if (tokenPool && tokenPool.size > 1) {
                 const ex = detectExhaustion(text);
                 if (ex.exhausted) {
@@ -731,13 +751,13 @@ job "beans-ai" {
                     res.end(errorBody('empty-prompt', 'prompt is required'));
                     return;
                   }
-                  const combined = (system ? system + '\n\n' : '') + prompt;
                   try {
-                    const { text, path } = await resolveAgent(combined, {
+                    const { text, path } = await resolveAgent(prompt, {
                       tokenPool: runOpts.tokenPool,
                       claudeBin: pool.claudeBin,
                       cwd: pool.cwd,
                       agentFn: runOpts.agentFn,
+                      system,
                     });
                     res.writeHead(200, { 'content-type': 'application/json' });
                     res.end(JSON.stringify({ ok: true, path, text }));
@@ -1028,7 +1048,10 @@ job "beans-ai" {
                   let e;
                   try { e = JSON.parse(line); } catch { continue; }
                   if (e && e.type === 'system' && e.subtype === 'init' && Array.isArray(e.tools)) {
-                    done(resolve, e.tools.slice());
+                    done(resolve, {
+                      tools: e.tools.slice(),
+                      mcpServers: Array.isArray(e.mcp_servers) ? e.mcp_servers.slice() : [],
+                    });
                     return;
                   }
                 }
@@ -1039,23 +1062,38 @@ job "beans-ai" {
             });
           }
 
-          // Decide pass/fail from a callable tool set. Pass iff every callable tool matches the allowed
-          // MCP prefix (so the only reachable capability is beans tools) and at least one such tool exists.
-          export function judgeToolPosture(callable, { allowedPrefix = ALLOWED_MCP_PREFIX } = {}) {
-            const offending = callable.filter((t) => !String(t).startsWith(allowedPrefix));
-            const beansTools = callable.filter((t) => String(t).startsWith(allowedPrefix));
+          // Decide pass/fail from an init probe {tools, mcpServers} (a bare tools array is accepted too).
+          //
+          // SECURITY (the hard guarantee): every callable built-in must be disallowed, so the only tool a
+          // hijacked model can reach is a beans MCP tool. That is `offending.length === 0`: no tool in the
+          // init `tools` array falls outside the allowed MCP prefix.
+          //
+          // LIVENESS: the beans MCP server connects ASYNCHRONOUSLY. On claude 2.1.215 the init event fires
+          // while it is still "pending", so its tools are NOT in the init snapshot yet (they become callable
+          // mid-turn, verified live). Requiring beans tools in the init array would wrongly fail there, so
+          // liveness is "beans is configured and not failed" (claude parsed the config and is connecting it),
+          // not "its tools are already listed". The real end-to-end read is proven by the live loop.
+          export function judgeToolPosture(probe, { allowedPrefix = ALLOWED_MCP_PREFIX } = {}) {
+            const tools = Array.isArray(probe) ? probe : (probe && probe.tools) || [];
+            const mcpServers = Array.isArray(probe) ? [] : (probe && probe.mcpServers) || [];
+            const offending = tools.filter((t) => !String(t).startsWith(allowedPrefix));
+            const beansTools = tools.filter((t) => String(t).startsWith(allowedPrefix));
+            const beans = mcpServers.find((s) => s && s.name === 'beans');
+            const beansConfigured = !!beans && beans.status !== 'failed' && beans.status !== 'error';
             return {
-              ok: offending.length === 0 && beansTools.length > 0,
-              callable,
+              ok: offending.length === 0 && beansConfigured,
+              callable: tools,
               beansTools,
               offending,
+              mcpServers,
+              beansStatus: beans ? beans.status : 'absent',
             };
           }
 
-          // Full self-check: probe the real claude and judge. Resolves {ok, callable, beansTools, offending}.
+          // Full self-check: probe the real claude and judge. Resolves the judge verdict object.
           export async function verifyToolPosture(opts = {}) {
-            const callable = await probeCallableTools(opts);
-            return judgeToolPosture(callable, opts);
+            const probe = await probeCallableTools(opts);
+            return judgeToolPosture(probe, opts);
           }
 
           // CLI entry: node tool-posture.mjs --mcp-config <path> [--disallow a b c]. Exit 0 on pass,
