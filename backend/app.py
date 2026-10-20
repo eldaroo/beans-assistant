@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 # Import API routers
-from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores, productos, stock_page, ventas, resultado
+from backend.api import tenants, products, sales, expenses, stock, analytics, chat, chat_tenant, onboarding, onboarding_web, auth, home, costos, produccion, logistica, proveedores, productos, stock_page, ventas, resultado, internal_ops
 from backend.auth.dependencies import (
     get_session_user,
     require_internal_or_admin,
@@ -83,6 +83,10 @@ app.include_router(chat_tenant.router, prefix="/api/tenants", tags=["Tenant Chat
 
 # Chat simulation: admin-only (debug tool, takes phone from body, not URL).
 app.include_router(chat.router, prefix="/api", tags=["Chat Simulation"], dependencies=[Depends(require_role("admin"))])
+
+# Internal operation API (spec 007, native-tool-use chat): the gateway's tools call
+# these. Internal-token gated INSIDE the handler; tenant pinned via header, never body.
+app.include_router(internal_ops.router, tags=["Internal Ops"])
 
 # Control Center status home (the owner's default landing). The route is
 # tenant-scoped and owner-gated inside the router via require_tenant_match.
