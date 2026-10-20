@@ -20,6 +20,7 @@ const EMBEDS = {
   '@@GATEWAY_MJS@@': 'gateway.mjs',
   '@@TOKEN_POOL_MJS@@': 'token-pool.mjs',
   '@@TOOL_POSTURE_MJS@@': 'tool-posture.mjs',
+  '@@EGRESS_GUARD_MJS@@': 'egress-guard.mjs',
   '@@BEANS_MCP_MJS@@': 'beans-mcp.mjs',
 };
 

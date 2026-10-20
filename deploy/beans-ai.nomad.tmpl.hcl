@@ -185,6 +185,15 @@ job "beans-ai" {
         EOJS
       }
 
+      # Boot egress allowlist self-check, imported by gateway.mjs (spec 007 M4, AC12). Embedded by build-hcl.mjs.
+      template {
+        destination = "local/egress-guard.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+@@EGRESS_GUARD_MJS@@
+        EOJS
+      }
+
       # The beans MCP tool server the agent child loads. Holds no DB credentials; calls the internal
       # operation API with the internal token and the pinned tenant from env. Embedded by build-hcl.mjs.
       template {

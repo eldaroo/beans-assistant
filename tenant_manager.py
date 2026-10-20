@@ -572,7 +572,9 @@ SELECT COALESCE(SUM(total_amount_cents), 0) AS total_revenue_cents
 FROM sales WHERE status = 'PAID';
 
 CREATE VIEW IF NOT EXISTS expenses_total AS
-SELECT COALESCE(SUM(amount_cents), 0) AS total_expenses_cents FROM expenses;
+SELECT COALESCE(SUM(
+    CASE WHEN category = 'CANCELACION' THEN -amount_cents ELSE amount_cents END
+), 0) AS total_expenses_cents FROM expenses;
 
 CREATE VIEW IF NOT EXISTS profit_summary AS
 SELECT (r.total_revenue_cents - e.total_expenses_cents) / 100.0 AS profit_usd

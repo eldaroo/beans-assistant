@@ -62,6 +62,29 @@
 .tim-toolcard{align-self:flex-start;max-width:85%;font-size:13px;font-weight:600;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--bg)}
 .tim-toolcard.tim-tool-success{border-color:var(--good);color:var(--good);background:var(--good-soft)}
 .tim-toolcard.tim-tool-failure{border-color:var(--danger);color:var(--danger);background:var(--danger-soft)}
+/* spec 007 M3: the two write species. PROVISIONAL (dashed, not-yet-real) vs SETTLED
+   (solid, committed). They are deliberately different materials so a proposal never
+   reads as a receipt (Kaze). The provisional card settles IN PLACE into the receipt. */
+.tim-op{align-self:flex-start;max-width:90%;border-radius:14px;padding:12px 14px;font-size:14px}
+.tim-op-provisional{border:1.5px dashed var(--accent);background:var(--bg);color:var(--text)}
+.tim-op-settled{border:1px solid var(--good);background:var(--good-soft);color:var(--text)}
+.tim-op-undone{border-color:var(--line);background:var(--bg);color:var(--muted);opacity:.75}
+.tim-op-head{font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums}
+.tim-op-fields{margin:8px 0 0;display:grid;gap:2px}
+.tim-op-field{display:flex;justify-content:space-between;gap:12px;font-variant-numeric:tabular-nums}
+.tim-op-field dt{color:var(--muted)}
+.tim-op-field dd{margin:0;font-weight:600;font-variant-numeric:tabular-nums}
+.tim-op-irrev{margin:8px 0 0;font-size:12px;color:var(--danger);font-weight:600}
+.tim-op-balance{margin-top:6px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tim-op-undone-tag{margin-top:6px;font-size:12px;font-weight:700;color:var(--muted)}
+.tim-op-actions{margin-top:10px;display:flex;gap:8px}
+.tim-op-confirm,.tim-op-cancel{min-height:44px;padding:0 16px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;border:1px solid var(--line)}
+.tim-op-confirm{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.tim-op-cancel{background:transparent;color:var(--muted)}
+/* AC17: the Undo toast sits above the composer, loud, with a >= 44px tap target. */
+.tim-undo{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 16px 8px;padding:8px 10px 8px 14px;border-radius:12px;background:var(--text);color:var(--bg);font-size:14px;font-weight:600}
+.tim-undo-label{font-variant-numeric:tabular-nums}
+.tim-undo-btn{min-height:44px;min-width:44px;padding:0 16px;border-radius:10px;border:0;background:var(--bg);color:var(--text);font-size:14px;font-weight:700;cursor:pointer}
 .tim-think{align-self:flex-start;display:inline-flex;gap:4px;padding:12px 16px;border-radius:16px;border-bottom-left-radius:6px;background:var(--bg);border:1px solid var(--line)}
 .tim-think span{width:6px;height:6px;border-radius:50%;background:var(--muted);display:inline-block}
 
@@ -145,7 +168,34 @@
           <template x-if="m.kind === 'tool-card'">
             <div class="tim-toolcard" :class="m.toolCall ? ('tim-tool-' + m.toolCall.state) : ''" x-text="m.toolCall ? m.toolCall.label : ''"></div>
           </template>
-          <template x-if="m.kind !== 'tool-card'">
+          {# spec 007 M3: a PROVISIONAL confirm card (dashed) — the owner clicks, and it #}
+          {# settles in place into the receipt below (solid), it does not respawn. #}
+          <template x-if="m.kind === 'confirm-card'">
+            <div class="tim-op tim-op-provisional" role="group" aria-label="Operación por confirmar">
+              <div class="tim-op-head" x-text="m.proposed ? m.proposed.summary : ''"></div>
+              <dl class="tim-op-fields">
+                <template x-for="(v, k) in (m.proposed ? m.proposed.fields : {})" :key="k">
+                  <div class="tim-op-field"><dt x-text="k"></dt><dd x-text="v"></dd></div>
+                </template>
+              </dl>
+              <template x-if="m.proposed && m.proposed.irreversible">
+                <p class="tim-op-irrev">⚠ Esta operación no se puede deshacer.</p>
+              </template>
+              <div class="tim-op-actions">
+                <button type="button" class="tim-op-confirm" @click="confirmOp(m)">Confirmar</button>
+                <button type="button" class="tim-op-cancel" @click="dismissOp(m)">Cancelar</button>
+              </div>
+            </div>
+          </template>
+          {# The SETTLED receipt (solid): named target, amount, resulting balance. #}
+          <template x-if="m.kind === 'receipt'">
+            <div class="tim-op tim-op-settled" :class="m.undone ? 'tim-op-undone' : ''" role="status">
+              <div class="tim-op-head" x-text="m.receipt ? m.receipt.text : ''"></div>
+              <div class="tim-op-balance" x-text="m.receipt ? m.receipt.balance_label : ''"></div>
+              <template x-if="m.undone"><div class="tim-op-undone-tag">Deshecho</div></template>
+            </div>
+          </template>
+          <template x-if="m.kind !== 'tool-card' && m.kind !== 'confirm-card' && m.kind !== 'receipt'">
             <div :class="'tim-bubble tim-' + m.role"><span x-html="m.html"></span></div>
           </template>
         </div>
@@ -172,6 +222,13 @@
         <button type="button" class="rec-stop" @click="stopRecording()">Listo</button>
       </div>
       <p class="rec-note">El audio se transcribe con el servicio de voz de tu navegador.</p>
+    </div>
+
+    {# spec 007 AC17: the loud Undo toast for an auto-posted write. Sits directly above the #}
+    {# composer, persists >= 6s, names the reversal, and its tap target is >= 44px (CSS). #}
+    <div class="tim-undo" x-show="undoToast" x-cloak aria-live="polite">
+      <span class="tim-undo-label" x-text="undoToast ? undoToast.label : ''"></span>
+      <button type="button" class="tim-undo-btn" @click="undoOp()">Deshacer</button>
     </div>
 
     <form class="tim-form" @submit.prevent="send(input)">

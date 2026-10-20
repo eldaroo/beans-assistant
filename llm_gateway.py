@@ -130,6 +130,7 @@ def call_agent(
     url: Optional[str] = None,
     secret: Optional[str] = None,
     timeout: Optional[float] = None,
+    turn_nonce: Optional[str] = None,
 ) -> str:
     """POST one turn to the gateway's ``/run-agent`` (native tool-use) and return the assistant text.
 
@@ -143,7 +144,12 @@ def call_agent(
     sec = secret if secret is not None else shared_secret()
     if not sec:
         raise GatewayError("no-secret", "BEANS_AI_SHARED_SECRET is not set")
-    body = json.dumps({"system": system or "", "prompt": prompt or ""}).encode("utf-8")
+    payload = {"system": system or "", "prompt": prompt or ""}
+    if turn_nonce:
+        # Pinned out of band to the gateway, which injects it into the MCP child's env so any
+        # staged write carries it (lets the app correlate the staged op to this turn by identity).
+        payload["turn_nonce"] = turn_nonce
+    body = json.dumps(payload).encode("utf-8")
     headers = {"content-type": "application/json", "authorization": "Bearer " + sec}
     # Agent turns are multi-hop (model -> tool -> model); allow a longer default ceiling.
     agent_timeout = timeout or max(gateway_timeout(), 90.0)

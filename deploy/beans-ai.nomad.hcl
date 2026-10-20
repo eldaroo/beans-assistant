@@ -202,6 +202,7 @@ job "beans-ai" {
             childSpawnEnv,
           } from './token-pool.mjs';
           import { verifyToolPosture } from './tool-posture.mjs';
+          import { verifyEgressConfig } from './egress-guard.mjs';
           
           const DEFAULTS = {
             poolTarget: 2, // warm children kept idle and ready
@@ -276,7 +277,7 @@ job "beans-ai" {
           
           // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
           // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-          function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
+          function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
             return new Promise((resolve, reject) => {
               let settled = false;
               let out = '';
@@ -296,7 +297,9 @@ job "beans-ai" {
                   : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
                       cwd: cwd || '/alloc/data',
                       stdio: ['pipe', 'pipe', 'ignore'],
-                      env: childSpawnEnv(process.env, token || null),
+                      // Pin the per-turn nonce into the child env (out of band, like the tenant) so the
+                      // MCP server stamps it on any staged write (spec 007 council correlation fix).
+                      env: childSpawnEnv(process.env, token || null, turnNonce ? { BEANS_TURN_NONCE: turnNonce } : null),
                     });
               } catch (e) {
                 return reject(e);
@@ -750,6 +753,7 @@ job "beans-ai" {
                   }
                   const prompt = (payload.prompt ?? '').toString();
                   const system = (payload.system ?? '').toString();
+                  const turnNonce = (payload.turn_nonce ?? '').toString() || null;
                   if (!prompt.trim()) {
                     res.writeHead(400, { 'content-type': 'application/json' });
                     res.end(errorBody('empty-prompt', 'prompt is required'));
@@ -762,6 +766,7 @@ job "beans-ai" {
                       cwd: pool.cwd,
                       agentFn: runOpts.agentFn,
                       system,
+                      turnNonce,
                     });
                     res.writeHead(200, { 'content-type': 'application/json' });
                     res.end(JSON.stringify({ ok: true, path, text }));
@@ -831,6 +836,15 @@ job "beans-ai" {
                   console.error('[beans-ai] FATAL tool-posture probe error: ' + (e && e.message));
                   process.exit(1);
                 }
+                // Boot egress self-check (spec 007 M4, AC12): the box must only be able to name the ops
+                // API and Anthropic as egress. Fail closed on a missing/misconfigured allowlist. The
+                // network-level firewall (Nomad job) is the hard enforcement; this is the in-code backstop.
+                const egress = verifyEgressConfig();
+                if (!egress.ok) {
+                  console.error('[beans-ai] FATAL egress config check failed; reason=' + egress.reason + ' allow=' + JSON.stringify(egress.allowlist));
+                  process.exit(1);
+                }
+                console.log('[beans-ai] egress OK: allow=' + JSON.stringify(egress.allowlist));
               }
               const server = createGateway({ cwd });
               server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));
@@ -975,9 +989,12 @@ job "beans-ai" {
 
           // The env a spawned claude child should carry: the active token overrides whatever is ambient, so
           // rotation takes effect on the next spawn. Pure so the wiring is unit-testable without a binary.
-          export function childSpawnEnv(baseEnv, activeToken) {
-            if (!activeToken) return baseEnv;
-            return { ...baseEnv, CLAUDE_CODE_OAUTH_TOKEN: activeToken };
+          export function childSpawnEnv(baseEnv, activeToken, extra = null) {
+            if (!activeToken && !extra) return baseEnv;
+            const env = { ...baseEnv };
+            if (activeToken) env.CLAUDE_CODE_OAUTH_TOKEN = activeToken;
+            if (extra) Object.assign(env, extra);
+            return env;
           }
         EOJS
       }
@@ -1135,6 +1152,92 @@ job "beans-ai" {
         EOJS
       }
 
+      # Boot egress allowlist self-check, imported by gateway.mjs (spec 007 M4, AC12). Embedded by build-hcl.mjs.
+      template {
+        destination = "local/egress-guard.mjs"
+        perms       = "0644"
+        data        = <<-EOJS
+          // Egress allowlist for the native-tool-use gateway box (spec 007 M4, AC12).
+          //
+          // The box must only ever reach two places: the internal operation API (the ONLY place the
+          // tools call) and Anthropic (the model). Anything else — a data-exfiltration callback a
+          // hijacked model or a compromised dependency might attempt — must be refused. The hard,
+          // network-level enforcement is the Nomad job's egress firewall (infra, deployed in M6); this
+          // module is the application-level allowlist + a boot assertion that the allowlist is sane and
+          // a guarded-fetch wrapper the outbound call paths use, so the control is testable and fails
+          // closed in code as well as at the firewall.
+          import process from 'node:process';
+
+          // Anthropic API hosts the model traffic legitimately reaches.
+          export const ANTHROPIC_HOSTS = ['api.anthropic.com', 'anthropic.com'];
+
+          function _host(u) {
+            try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
+          }
+
+          // Build the allowlist of hostnames from the ops API url plus Anthropic.
+          export function egressAllowlist({ opsUrl = process.env.BEANS_OPS_URL, extra = [] } = {}) {
+            const hosts = new Set(ANTHROPIC_HOSTS.map((h) => h.toLowerCase()));
+            const opsHost = _host(opsUrl);
+            if (opsHost) hosts.add(opsHost);
+            for (const e of extra) { const h = (e || '').toLowerCase(); if (h) hosts.add(h); }
+            return hosts;
+          }
+
+          // True iff `url`'s host is on the allowlist (exact host or a subdomain of an allowed host).
+          export function isEgressAllowed(url, allowlist) {
+            const host = _host(url);
+            if (!host) return false;
+            for (const a of allowlist) {
+              if (host === a || host.endsWith('.' + a)) return true;
+            }
+            return false;
+          }
+
+          // Throw on a disallowed host (the fetch-guard). Fail closed.
+          export function assertEgressAllowed(url, allowlist) {
+            if (!isEgressAllowed(url, allowlist)) {
+              throw new Error('EGRESS-BLOCKED ' + (_host(url) || url));
+            }
+          }
+
+          // Wrap a fetch so every outbound call is checked against the allowlist first.
+          export function guardedFetch(allowlist, fetchImpl = fetch) {
+            return async function (url, opts) {
+              assertEgressAllowed(url, allowlist); // throws -> rejected promise (fail closed)
+              return fetchImpl(url, opts);
+            };
+          }
+
+          // Boot check: the allowlist must contain the ops host AND Anthropic, or we refuse to serve
+          // (a box that cannot name where it may talk is misconfigured). Returns {ok, allowlist, reason}.
+          export function verifyEgressConfig({ opsUrl = process.env.BEANS_OPS_URL } = {}) {
+            const allowlist = egressAllowlist({ opsUrl });
+            const opsHost = _host(opsUrl);
+            if (!opsHost) return { ok: false, allowlist: [...allowlist], reason: 'ops-url-missing-or-invalid' };
+            const hasAnthropic = ANTHROPIC_HOSTS.some((h) => allowlist.has(h));
+            if (!hasAnthropic) return { ok: false, allowlist: [...allowlist], reason: 'anthropic-host-absent' };
+            return { ok: true, allowlist: [...allowlist], reason: null };
+          }
+
+          // CLI: node egress-guard.mjs. Exit 0 if the egress config is sane, 1 otherwise (fail closed).
+          function main() {
+            const r = verifyEgressConfig();
+            if (r.ok) {
+              console.log('EGRESS-OK allow=' + JSON.stringify(r.allowlist));
+              process.exit(0);
+            }
+            console.error('EGRESS-FAIL reason=' + r.reason + ' allow=' + JSON.stringify(r.allowlist));
+            process.exit(1);
+          }
+
+          import { fileURLToPath } from 'node:url';
+          if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+            main();
+          }
+        EOJS
+      }
+
       # The beans MCP tool server the agent child loads. Holds no DB credentials; calls the internal
       # operation API with the internal token and the pinned tenant from env. Embedded by build-hcl.mjs.
       template {
@@ -1149,10 +1252,22 @@ job "beans-ai" {
           // x-beans-tenant header, and the model never sees or sets it (D-037). There is no
           // commit tool and never will be; writes are two-phase previews that land in M3+ (D-038).
           //
-          // M1 ships one read tool, read_stock, so the model -> MCP -> internal API -> DB path is
-          // real. The HTTP call and the message dispatch are exported so they unit-test with an
-          // injected fetch, no network and no spawned child.
+          // M1 shipped one read tool (read_stock). M2 adds the rest of the read surface (s-04):
+          // revenue, profit, sales summary, the eight command-center module snapshots, and a
+          // business_status tool that reads the one existing attention aggregation (AC6). Every
+          // tool argument here is a non-tenant parameter (a limit, a module id); the tenant is
+          // never a tool argument. The HTTP call and the message dispatch are exported so they
+          // unit-test with an injected fetch, no network and no spawned child.
           import process from 'node:process';
+          import { egressAllowlist, isEgressAllowed } from './egress-guard.mjs';
+
+          // The eight command-center modules, by their registry ids. read_module takes one of
+          // these so the owner can ask about a single domain ("¿cómo van los costos?"); the set
+          // is fixed and model-closed (additionalProperties:false) so a hallucinated module id is
+          // a tool error, never a silent wrong read.
+          export const MODULE_IDS = [
+            'caja', 'productos', 'stock', 'ventas', 'costos', 'produccion', 'logistica', 'proveedores',
+          ];
 
           export const TOOLS = [
             {
@@ -1162,45 +1277,349 @@ job "beans-ai" {
                 'the business is fixed for this session. Use it when the owner asks how much of something is left.',
               inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             },
+            {
+              name: 'read_revenue',
+              description:
+                'Read the business total revenue (ingresos). Takes no arguments. Use it when the owner asks ' +
+                'how much the business has sold or billed in total.',
+              inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            },
+            {
+              name: 'read_profit',
+              description:
+                'Read the business profit (ganancia). Takes no arguments. Use it when the owner asks how much ' +
+                'the business is earning or netting.',
+              inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            },
+            {
+              name: 'read_sales_summary',
+              description:
+                'Read a day-by-day summary of recent paid sales (count and revenue per day). Optional "limit" ' +
+                'is how many recent days to include (1 to 50, default 10). Use it when the owner asks how sales ' +
+                'have been going lately.',
+              inputSchema: {
+                type: 'object',
+                properties: { limit: { type: 'integer', minimum: 1, maximum: 50 } },
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'read_module',
+              description:
+                'Read one command-center module\'s current headline and anything in it that needs attention. ' +
+                '"module" is one of: caja (Resultado/net), productos, stock, ventas, costos, produccion, ' +
+                'logistica, proveedores. Use it when the owner asks about one specific area of the business.',
+              inputSchema: {
+                type: 'object',
+                properties: { module: { type: 'string', enum: MODULE_IDS } },
+                required: ['module'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'business_status',
+              description:
+                'Read the one prioritized "what needs attention today" list across the whole business (low stock, ' +
+                'overdue items, and so on). Takes no arguments. Use it when the owner asks how the business is doing ' +
+                'or what needs them today. This is the same list the command-center home shows; never invent items.',
+              inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            },
+            // ── Write-PREVIEW tools (spec 007 M3). These PREPARE a write; they never record it. ──
+            // There is still no commit tool: the owner confirms in the command center (or an obvious,
+            // reversible, owner-grounded write is auto-confirmed by the client). After calling one,
+            // tell the owner what you prepared — do NOT say it is already saved.
+            {
+              name: 'register_sale',
+              description:
+                'Prepare recording a sale. Does NOT record it by itself: it stages a proposal the owner confirms ' +
+                '(or that is auto-confirmed when it is obvious and reversible). "product" is what was sold; ' +
+                '"quantity" defaults to 1; "unit_amount" is the price per unit the owner stated, in whole currency ' +
+                'units (e.g. 400), when they stated one. After calling, tell the owner what you prepared; never claim ' +
+                'it is already saved.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  product: { type: 'string' },
+                  quantity: { type: 'integer', minimum: 1 },
+                  unit_amount: { type: 'number' },
+                },
+                required: ['product'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'register_expense',
+              description:
+                'Prepare recording a business expense. Does NOT record it by itself. "amount" is the amount in whole ' +
+                'currency units the owner stated; "description" is what it was for; "category" is optional. After ' +
+                'calling, tell the owner what you prepared; never claim it is already saved.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  amount: { type: 'number' },
+                  description: { type: 'string' },
+                  category: { type: 'string' },
+                },
+                required: ['amount', 'description'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'add_stock',
+              description:
+                'Prepare adding stock (units on hand) to a product. Does NOT record it by itself. "product" is the ' +
+                'product; "quantity" is how many units to add. After calling, tell the owner what you prepared; never ' +
+                'claim it is already saved.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  product: { type: 'string' },
+                  quantity: { type: 'integer', minimum: 1 },
+                },
+                required: ['product', 'quantity'],
+                additionalProperties: false,
+              },
+            },
+            // ── Confirm-only write previews (spec 007 M4, D-044): irreversible / bulk / destructive. ──
+            // These ALWAYS wait for the owner to confirm (they never auto-complete). Prepare them, then
+            // tell the owner what will change and that it needs their confirmation; never claim it is done.
+            {
+              name: 'update_product_price',
+              description:
+                'Prepare CHANGING a product\'s sale price. Irreversible (the old price is not kept), so it always ' +
+                'needs the owner\'s confirmation. "product" is the product; "new_amount" is the new price in whole ' +
+                'currency units. After calling, tell the owner the old and new price and that they must confirm.',
+              inputSchema: {
+                type: 'object',
+                properties: { product: { type: 'string' }, new_amount: { type: 'number' } },
+                required: ['product', 'new_amount'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'register_product',
+              description:
+                'Prepare CREATING a new product in the catalog. Always needs the owner\'s confirmation. "name" is the ' +
+                'product name; "price_amount" is its sale price in whole currency units; "cost_amount" is optional.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  price_amount: { type: 'number' },
+                  cost_amount: { type: 'number' },
+                },
+                required: ['name', 'price_amount'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'register_products_batch',
+              description:
+                'Prepare CREATING several products at once. Always needs ONE confirmation for the whole set. ' +
+                '"products" is a list, each with "name" and "price_amount" (and optional "cost_amount").',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  products: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        name: { type: 'string' },
+                        price_amount: { type: 'number' },
+                        cost_amount: { type: 'number' },
+                      },
+                      required: ['name', 'price_amount'],
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                required: ['products'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'deactivate_product',
+              description:
+                'Prepare DEACTIVATING (hiding) a product so it is no longer sold. Always needs the owner\'s ' +
+                'confirmation. "product" is the product to deactivate.',
+              inputSchema: {
+                type: 'object',
+                properties: { product: { type: 'string' } },
+                required: ['product'],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: 'cancel_last_operation',
+              description:
+                'Prepare CANCELLING the most recent operation (the last sale, expense, or stock entry). Takes no ' +
+                'arguments. Always needs the owner\'s confirmation and shows exactly which operation would be cancelled.',
+              inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+            },
           ];
 
-          // Call the internal read_stock endpoint. Returns an MCP tool-result content object.
+          // Generic call to an internal read endpoint. Returns an MCP tool-result content object.
           // Never throws for an operational failure: it returns an is_error content so the model
-          // can tell the owner something went wrong instead of the loop crashing.
-          export async function readStock({ opsUrl, token, phone, fetchImpl = fetch } = {}) {
+          // can tell the owner something went wrong instead of the loop crashing. `label` names the
+          // tool in any error message; `resultKey` is the field lifted from the {ok:true,...} body.
+          export async function callRead(
+            { opsUrl, token, phone, path, body = '{}', fetchImpl = fetch } = {},
+            { label, resultKey } = {},
+          ) {
             if (!opsUrl || !token || !phone) {
-              return { content: [{ type: 'text', text: 'read_stock not configured (missing ops url, token, or tenant).' }], isError: true };
+              return { content: [{ type: 'text', text: `$${label} not configured (missing ops url, token, or tenant).` }], isError: true };
+            }
+            const url = opsUrl.replace(/\/$/, '') + path;
+            // Egress allowlist (AC12): a tool may only ever reach the ops API (+ Anthropic). Fail closed.
+            if (!isEgressAllowed(url, egressAllowlist({ opsUrl }))) {
+              return { content: [{ type: 'text', text: `$${label} blocked: egress not allowed to $${url}` }], isError: true };
             }
             let res;
             try {
-              res = await fetchImpl(opsUrl.replace(/\/$/, '') + '/internal/ops/read_stock', {
+              res = await fetchImpl(url, {
                 method: 'POST',
                 headers: {
                   'content-type': 'application/json',
                   'x-internal-token': token,
                   'x-beans-tenant': phone,
                 },
-                body: '{}',
+                body,
               });
             } catch (e) {
-              return { content: [{ type: 'text', text: 'read_stock could not reach the operation API: ' + e.message }], isError: true };
+              return { content: [{ type: 'text', text: `$${label} could not reach the operation API: ` + e.message }], isError: true };
             }
-            let body;
-            try { body = await res.json(); } catch { body = null; }
-            if (!res.ok || !body || body.ok !== true) {
-              const msg = (body && body.error && body.error.message) || ('read_stock failed (HTTP ' + res.status + ')');
+            let payload;
+            try { payload = await res.json(); } catch { payload = null; }
+            if (!res.ok || !payload || payload.ok !== true) {
+              const msg = (payload && payload.error && payload.error.message) || (`$${label} failed (HTTP ` + res.status + ')');
               return { content: [{ type: 'text', text: msg }], isError: true };
             }
-            return { content: [{ type: 'text', text: JSON.stringify({ stock: body.stock }) }] };
+            // Return only the named result field, under a stable top-level key, so the model gets a
+            // tight JSON blob rather than the transport envelope.
+            const out = resultKey ? { [resultKey]: payload[resultKey] } : payload;
+            return { content: [{ type: 'text', text: JSON.stringify(out) }] };
           }
 
-          // Build a JSON-RPC dispatcher. `readStockImpl` is injectable for tests.
-          export function makeDispatcher({ readStockImpl = readStock, config = {} } = {}) {
+          export async function readStock(cfg = {}) {
+            return callRead({ ...cfg, path: '/internal/ops/read_stock' }, { label: 'read_stock', resultKey: 'stock' });
+          }
+
+          export async function readRevenue(cfg = {}) {
+            return callRead({ ...cfg, path: '/internal/ops/read_revenue' }, { label: 'read_revenue', resultKey: 'revenue' });
+          }
+
+          export async function readProfit(cfg = {}) {
+            return callRead({ ...cfg, path: '/internal/ops/read_profit' }, { label: 'read_profit', resultKey: 'profit' });
+          }
+
+          export async function readSalesSummary(cfg = {}, { limit } = {}) {
+            const body = JSON.stringify(Number.isInteger(limit) ? { limit } : {});
+            return callRead({ ...cfg, path: '/internal/ops/read_sales_summary', body }, { label: 'read_sales_summary', resultKey: 'sales_summary' });
+          }
+
+          export async function readModule(cfg = {}, { module } = {}) {
+            const body = JSON.stringify({ module });
+            return callRead({ ...cfg, path: '/internal/ops/read_module', body }, { label: 'read_module', resultKey: 'module' });
+          }
+
+          export async function businessStatus(cfg = {}) {
+            return callRead({ ...cfg, path: '/internal/ops/business_status' }, { label: 'business_status', resultKey: 'attention' });
+          }
+
+          // Call an internal write-PREVIEW endpoint. Returns the staged preview (or a clarify) to the
+          // model, but NEVER the op_token: the commit handle travels only to the owner's browser via the
+          // chat envelope metadata, so even a hijacked model holds nothing that could commit (D-040).
+          export async function callPreview({ opsUrl, token, phone, path, body = '{}', turnNonce, fetchImpl = fetch } = {}, { label } = {}) {
+            if (!opsUrl || !token || !phone) {
+              return { content: [{ type: 'text', text: `$${label} not configured (missing ops url, token, or tenant).` }], isError: true };
+            }
+            const url = opsUrl.replace(/\/$/, '') + path;
+            if (!isEgressAllowed(url, egressAllowlist({ opsUrl }))) {
+              return { content: [{ type: 'text', text: `$${label} blocked: egress not allowed to $${url}` }], isError: true };
+            }
+            const headers = { 'content-type': 'application/json', 'x-internal-token': token, 'x-beans-tenant': phone };
+            // Pin the per-turn nonce out of band so the server stamps the staged op with this turn's id.
+            if (turnNonce) headers['x-beans-turn'] = turnNonce;
+            let res;
+            try {
+              res = await fetchImpl(url, { method: 'POST', headers, body });
+            } catch (e) {
+              return { content: [{ type: 'text', text: `$${label} could not reach the operation API: ` + e.message }], isError: true };
+            }
+            let payload;
+            try { payload = await res.json(); } catch { payload = null; }
+            if (!res.ok || !payload || payload.ok !== true) {
+              const msg = (payload && payload.error && payload.error.message) || (`$${label} failed (HTTP ` + res.status + ')');
+              return { content: [{ type: 'text', text: msg }], isError: true };
+            }
+            // Strip the transport ok flag and the commit handle before handing anything to the model.
+            const { ok, op_token, ...visible } = payload; // eslint-disable-line no-unused-vars
+            return { content: [{ type: 'text', text: JSON.stringify(visible) }] };
+          }
+
+          export async function registerSale(cfg = {}, { product, quantity, unit_amount } = {}) {
+            const body = JSON.stringify({ product, quantity, unit_amount });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/register_sale', body }, { label: 'register_sale' });
+          }
+
+          export async function registerExpense(cfg = {}, { amount, description, category } = {}) {
+            const body = JSON.stringify({ amount, description, category });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/register_expense', body }, { label: 'register_expense' });
+          }
+
+          export async function addStock(cfg = {}, { product, quantity } = {}) {
+            const body = JSON.stringify({ product, quantity });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/add_stock', body }, { label: 'add_stock' });
+          }
+
+          export async function updateProductPrice(cfg = {}, { product, new_amount } = {}) {
+            const body = JSON.stringify({ product, new_amount });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/update_product_price', body }, { label: 'update_product_price' });
+          }
+
+          export async function registerProduct(cfg = {}, { name, price_amount, cost_amount } = {}) {
+            const body = JSON.stringify({ name, price_amount, cost_amount });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/register_product', body }, { label: 'register_product' });
+          }
+
+          export async function registerProductsBatch(cfg = {}, { products } = {}) {
+            const body = JSON.stringify({ products });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/register_products_batch', body }, { label: 'register_products_batch' });
+          }
+
+          export async function deactivateProduct(cfg = {}, { product } = {}) {
+            const body = JSON.stringify({ product });
+            return callPreview({ ...cfg, path: '/internal/ops/preview/deactivate_product', body }, { label: 'deactivate_product' });
+          }
+
+          export async function cancelLastOperation(cfg = {}) {
+            return callPreview({ ...cfg, path: '/internal/ops/preview/cancel_last_operation', body: '{}' }, { label: 'cancel_last_operation' });
+          }
+
+          // Build a JSON-RPC dispatcher. Each `*Impl` is injectable for tests.
+          export function makeDispatcher({
+            readStockImpl = readStock,
+            readRevenueImpl = readRevenue,
+            readProfitImpl = readProfit,
+            readSalesSummaryImpl = readSalesSummary,
+            readModuleImpl = readModule,
+            businessStatusImpl = businessStatus,
+            registerSaleImpl = registerSale,
+            registerExpenseImpl = registerExpense,
+            addStockImpl = addStock,
+            updateProductPriceImpl = updateProductPrice,
+            registerProductImpl = registerProduct,
+            registerProductsBatchImpl = registerProductsBatch,
+            deactivateProductImpl = deactivateProduct,
+            cancelLastOperationImpl = cancelLastOperation,
+            config = {},
+          } = {}) {
             return async function dispatch(msg) {
               const { id, method, params } = msg || {};
               if (method === 'initialize') {
                 const pv = (params && params.protocolVersion) || '2024-11-05';
-                return { jsonrpc: '2.0', id, result: { protocolVersion: pv, capabilities: { tools: {} }, serverInfo: { name: 'beans', version: '0.1.0' } } };
+                return { jsonrpc: '2.0', id, result: { protocolVersion: pv, capabilities: { tools: {} }, serverInfo: { name: 'beans', version: '0.2.0' } } };
               }
               if (method && method.startsWith('notifications/')) return null; // notifications get no response
               if (method === 'tools/list') {
@@ -1208,11 +1627,24 @@ job "beans-ai" {
               }
               if (method === 'tools/call') {
                 const name = params && params.name;
-                if (name === 'read_stock') {
-                  const r = await readStockImpl({ opsUrl: config.opsUrl, token: config.token, phone: config.phone });
-                  return { jsonrpc: '2.0', id, result: r };
-                }
-                return { jsonrpc: '2.0', id, error: { code: -32601, message: 'unknown tool ' + name } };
+                const args = (params && params.arguments) || {};
+                let r;
+                if (name === 'read_stock') r = await readStockImpl(config);
+                else if (name === 'read_revenue') r = await readRevenueImpl(config);
+                else if (name === 'read_profit') r = await readProfitImpl(config);
+                else if (name === 'read_sales_summary') r = await readSalesSummaryImpl(config, { limit: args.limit });
+                else if (name === 'read_module') r = await readModuleImpl(config, { module: args.module });
+                else if (name === 'business_status') r = await businessStatusImpl(config);
+                else if (name === 'register_sale') r = await registerSaleImpl(config, { product: args.product, quantity: args.quantity, unit_amount: args.unit_amount });
+                else if (name === 'register_expense') r = await registerExpenseImpl(config, { amount: args.amount, description: args.description, category: args.category });
+                else if (name === 'add_stock') r = await addStockImpl(config, { product: args.product, quantity: args.quantity });
+                else if (name === 'update_product_price') r = await updateProductPriceImpl(config, { product: args.product, new_amount: args.new_amount });
+                else if (name === 'register_product') r = await registerProductImpl(config, { name: args.name, price_amount: args.price_amount, cost_amount: args.cost_amount });
+                else if (name === 'register_products_batch') r = await registerProductsBatchImpl(config, { products: args.products });
+                else if (name === 'deactivate_product') r = await deactivateProductImpl(config, { product: args.product });
+                else if (name === 'cancel_last_operation') r = await cancelLastOperationImpl(config);
+                else return { jsonrpc: '2.0', id, error: { code: -32601, message: 'unknown tool ' + name } };
+                return { jsonrpc: '2.0', id, result: r };
               }
               if (id !== undefined && id !== null) return { jsonrpc: '2.0', id, result: {} };
               return null;
@@ -1225,6 +1657,8 @@ job "beans-ai" {
               opsUrl: process.env.BEANS_OPS_URL,
               token: process.env.INTERNAL_SERVICE_TOKEN,
               phone: process.env.BEANS_TENANT_PHONE,
+              // The gateway injects this per request so a staged write is stamped with this turn's id.
+              turnNonce: process.env.BEANS_TURN_NONCE,
             };
             const dispatch = makeDispatcher({ config });
             const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
