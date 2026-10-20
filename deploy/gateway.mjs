@@ -38,6 +38,7 @@ import {
   childSpawnEnv,
 } from './token-pool.mjs';
 import { verifyToolPosture } from './tool-posture.mjs';
+import { verifyEgressConfig } from './egress-guard.mjs';
 
 const DEFAULTS = {
   poolTarget: 2, // warm children kept idle and ready
@@ -112,7 +113,7 @@ export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CON
 
 // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
 // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
+function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';
@@ -132,7 +133,9 @@ function runAgentTurn(userText, { claudeBin, cwd, token, system, mcpConfig = BEA
         : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
             cwd: cwd || '/alloc/data',
             stdio: ['pipe', 'pipe', 'ignore'],
-            env: childSpawnEnv(process.env, token || null),
+            // Pin the per-turn nonce into the child env (out of band, like the tenant) so the
+            // MCP server stamps it on any staged write (spec 007 council correlation fix).
+            env: childSpawnEnv(process.env, token || null, turnNonce ? { BEANS_TURN_NONCE: turnNonce } : null),
           });
     } catch (e) {
       return reject(e);
@@ -586,6 +589,7 @@ function makeHandler(pool, secret, runOpts = {}) {
         }
         const prompt = (payload.prompt ?? '').toString();
         const system = (payload.system ?? '').toString();
+        const turnNonce = (payload.turn_nonce ?? '').toString() || null;
         if (!prompt.trim()) {
           res.writeHead(400, { 'content-type': 'application/json' });
           res.end(errorBody('empty-prompt', 'prompt is required'));
@@ -598,6 +602,7 @@ function makeHandler(pool, secret, runOpts = {}) {
             cwd: pool.cwd,
             agentFn: runOpts.agentFn,
             system,
+            turnNonce,
           });
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: true, path, text }));
@@ -667,6 +672,15 @@ if (isMain) {
         console.error('[beans-ai] FATAL tool-posture probe error: ' + (e && e.message));
         process.exit(1);
       }
+      // Boot egress self-check (spec 007 M4, AC12): the box must only be able to name the ops
+      // API and Anthropic as egress. Fail closed on a missing/misconfigured allowlist. The
+      // network-level firewall (Nomad job) is the hard enforcement; this is the in-code backstop.
+      const egress = verifyEgressConfig();
+      if (!egress.ok) {
+        console.error('[beans-ai] FATAL egress config check failed; reason=' + egress.reason + ' allow=' + JSON.stringify(egress.allowlist));
+        process.exit(1);
+      }
+      console.log('[beans-ai] egress OK: allow=' + JSON.stringify(egress.allowlist));
     }
     const server = createGateway({ cwd });
     server.listen(port, () => console.log('[beans-ai] warm gateway http on ' + port));

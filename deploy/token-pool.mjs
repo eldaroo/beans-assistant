@@ -128,7 +128,10 @@ export class TokenPool {
 
 // The env a spawned claude child should carry: the active token overrides whatever is ambient, so
 // rotation takes effect on the next spawn. Pure so the wiring is unit-testable without a binary.
-export function childSpawnEnv(baseEnv, activeToken) {
-  if (!activeToken) return baseEnv;
-  return { ...baseEnv, CLAUDE_CODE_OAUTH_TOKEN: activeToken };
+export function childSpawnEnv(baseEnv, activeToken, extra = null) {
+  if (!activeToken && !extra) return baseEnv;
+  const env = { ...baseEnv };
+  if (activeToken) env.CLAUDE_CODE_OAUTH_TOKEN = activeToken;
+  if (extra) Object.assign(env, extra);
+  return env;
 }

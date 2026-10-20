@@ -109,7 +109,9 @@ FROM sales WHERE status = 'PAID';
 
 -- Total expenses
 CREATE OR REPLACE VIEW expenses_total AS
-SELECT COALESCE(SUM(amount_cents), 0) AS total_expenses_cents
+SELECT COALESCE(SUM(
+    CASE WHEN category = 'CANCELACION' THEN -amount_cents ELSE amount_cents END
+), 0) AS total_expenses_cents
 FROM expenses;
 
 -- Profit summary

@@ -1,20 +1,9 @@
-"""Chat cutover to the native tool-use agent (spec 007 M1).
-
-The full loop (gateway -> claude child -> beans MCP -> internal API) is proven live; these pin the
-command-center side deterministically: the cutover flag, the persona/system prompt, and that
-_invoke_agent drives the gateway client with the built context and returns its text.
+"""Chat on the native tool-use agent (spec 007). Since M5 retired the LangGraph, the agent
+path is the only path (no cutover flag). These pin the command-center side deterministically:
+the persona/system prompt, and that _invoke_agent drives the gateway client with the built
+context and returns its text.
 """
-import backend.services.chat_service as chat_mod
 from backend.services.chat_service import ChatService
-
-
-def test_use_agent_flag(monkeypatch):
-    monkeypatch.delenv("BEANS_CHAT_AGENT", raising=False)
-    assert ChatService._use_agent() is False
-    monkeypatch.setenv("BEANS_CHAT_AGENT", "1")
-    assert ChatService._use_agent() is True
-    monkeypatch.setenv("BEANS_CHAT_AGENT", "0")
-    assert ChatService._use_agent() is False
 
 
 def test_agent_system_prompt_is_timonel_and_honest():

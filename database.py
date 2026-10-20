@@ -238,7 +238,7 @@ def add_stock(data: dict):
     reason = data.get("reason", "Stock update")
 
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO stock_movements (
                 product_id,
@@ -256,6 +256,9 @@ def add_stock(data: dict):
                 reason,
             ),
         )
+        # The new movement's id is returned so a reversible ADD_STOCK can be
+        # undone cleanly via cancel_stock_movement(movement_id) (spec 007 AC15).
+        movement_id = cur.lastrowid
 
         stock = conn.execute(
             "SELECT stock_qty FROM stock_current WHERE product_id = ?",
@@ -266,6 +269,7 @@ def add_stock(data: dict):
         "status": "ok",
         "message": "Stock updated",
         "product_id": data["product_id"],
+        "movement_id": movement_id,
         "current_stock": stock["stock_qty"] if stock else None,
     }
 
@@ -713,34 +717,33 @@ def cancel_sale(sale_id: int):
         if not sale:
             raise ValueError(f"Venta con ID {sale_id} no encontrada")
 
-        # Get sale items
-        items = conn.execute(
-            """
-            SELECT product_id, quantity, unit_price_cents
-            FROM sale_items
-            WHERE sale_id = ?
-            """,
-            (sale_id,)
-        ).fetchall()
+        # Append-inverse void (spec 007 AC15, D-043): preserve the sale + items +
+        # original OUT movements as the audit record, flip status to CANCELLED so the
+        # revenue view (status='PAID') drops it, and append compensating IN movements
+        # once. A second call is a no-op, so a double Undo tap cannot double-restore.
+        already = sale["status"] == "CANCELLED"
+        if not already:
+            items = conn.execute(
+                """
+                SELECT product_id, quantity, unit_price_cents
+                FROM sale_items
+                WHERE sale_id = ?
+                """,
+                (sale_id,)
+            ).fetchall()
 
-        # If sale was PAID, restore stock
-        if sale["status"] == "PAID":
-            for item in items:
-                # Add stock back (reverse the OUT movement)
-                conn.execute(
-                    """
-                    INSERT INTO stock_movements
-                    (product_id, movement_type, quantity, reason, created_at)
-                    VALUES (?, 'IN', ?, 'Venta cancelada', CURRENT_TIMESTAMP)
-                    """,
-                    (item["product_id"], item["quantity"]),
-                )
+            if sale["status"] == "PAID":
+                for item in items:
+                    conn.execute(
+                        """
+                        INSERT INTO stock_movements
+                        (product_id, movement_type, quantity, reason, created_at)
+                        VALUES (?, 'IN', ?, 'Venta cancelada', CURRENT_TIMESTAMP)
+                        """,
+                        (item["product_id"], item["quantity"]),
+                    )
 
-        # Delete sale items
-        conn.execute("DELETE FROM sale_items WHERE sale_id = ?", (sale_id,))
-
-        # Delete sale
-        conn.execute("DELETE FROM sales WHERE id = ?", (sale_id,))
+            conn.execute("UPDATE sales SET status = 'CANCELLED' WHERE id = ?", (sale_id,))
 
         # Get updated stats
         revenue = conn.execute("SELECT total_revenue_cents FROM revenue_paid").fetchone()
@@ -748,11 +751,17 @@ def cancel_sale(sale_id: int):
 
     return {
         "status": "ok",
+        "already_cancelled": already,
         "sale_number": sale["sale_number"],
         "cancelled_amount": sale["total_amount_cents"] / 100.0,
         "revenue_usd": revenue["total_revenue_cents"] / 100.0 if revenue and revenue["total_revenue_cents"] is not None else 0.0,
         "profit_usd": profit["profit_usd"] if profit and profit["profit_usd"] is not None else 0.0,
     }
+
+
+def _expense_void_marker(expense_id: int) -> str:
+    """Stable, tenant-scoped marker that makes an expense void idempotent."""
+    return f"[void:{expense_id}]"
 
 
 def cancel_expense(expense_id: int):
@@ -765,6 +774,7 @@ def cancel_expense(expense_id: int):
     Returns:
         Dict with cancellation result
     """
+    marker = _expense_void_marker(expense_id)
     with get_conn() as conn:
         # Get expense details
         expense = conn.execute(
@@ -775,14 +785,33 @@ def cancel_expense(expense_id: int):
         if not expense:
             raise ValueError(f"Gasto con ID {expense_id} no encontrado")
 
-        # Delete expense
-        conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        # Append-inverse void (spec 007 AC15, D-043): preserve the original expense
+        # (audit) and append a compensating negated expense so expenses_total / profit
+        # return to pre-write to the cent. Idempotent: a second call finds the existing
+        # compensating row and does nothing, so a double Undo is safe.
+        existing = conn.execute(
+            "SELECT id FROM expenses WHERE category = 'CANCELACION' AND description LIKE ?",
+            (marker + "%",),
+        ).fetchone()
+        already = existing is not None
+        if not already:
+            # A POSITIVE amount (the expenses CHECK forbids a negative), tagged CANCELACION;
+            # expenses_total subtracts that category, so the net returns to pre-write. This is
+            # the append-inverse voiding row (original preserved as audit).
+            conn.execute(
+                """
+                INSERT INTO expenses (category, description, amount_cents, currency, created_at)
+                VALUES ('CANCELACION', ?, ?, 'USD', CURRENT_TIMESTAMP)
+                """,
+                (f"{marker} Cancelación de: {expense['description']}", expense["amount_cents"]),
+            )
 
         # Get updated profit
         profit = conn.execute("SELECT profit_usd FROM profit_summary").fetchone()
 
     return {
         "status": "ok",
+        "already_cancelled": already,
         "description": expense["description"],
         "cancelled_amount": expense["amount_cents"] / 100.0,
         "profit_usd": profit["profit_usd"] if profit else 0,

@@ -1,42 +1,15 @@
-"""
-Multi-agent system for Beans&Co business management.
+"""Salvaged helpers kept after the old multi-agent Timonel was retired (spec 007 M5).
 
-This package contains specialized agents for:
-- Multi-intent decomposition (split user messages before routing)
-- Intent routing and classification
-- Read-only analytics queries
-- Write operations (business actions)
-- Entity resolution and normalization
+The LangGraph brain (graph.py and the router / decomposer / expander / resolver / safe_node /
+state / read_agent / write_agent nodes) was removed when the native tool-use agent became the
+only chat path. What remains here are the pure, reusable helpers the rest of the app still
+uses: the named Spanish error copy, SKU composition, attribute keywords, and the shared
+missing-field renderer. None of them import a model or the retired graph.
 """
 
-from .state import AgentState, IntentType, OperationType
-from .router import create_router_agent, route_to_next_node
-from .read_agent import create_read_agent
-from .write_agent import create_write_agent, route_after_write
-from .resolver import create_resolver_agent, route_after_resolver
-from .expander import create_expander_node, expand_items
-from .decomposer import (
-    create_decomposer_agent,
-    should_decompose,
-    flush_sub_input_result,
-    _advance_sub_input,
-)
+from .error_copy import compose_error_response, supported_classes
 
 __all__ = [
-    "AgentState",
-    "IntentType",
-    "OperationType",
-    "create_router_agent",
-    "create_read_agent",
-    "create_write_agent",
-    "create_resolver_agent",
-    "create_expander_node",
-    "expand_items",
-    "create_decomposer_agent",
-    "should_decompose",
-    "flush_sub_input_result",
-    "_advance_sub_input",
-    "route_to_next_node",
-    "route_after_write",
-    "route_after_resolver",
+    "compose_error_response",
+    "supported_classes",
 ]

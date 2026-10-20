@@ -131,8 +131,8 @@ CREATE VIEW revenue_paid AS
 
 CREATE VIEW expenses_total AS
     SELECT
-      SUM(amount_cents) AS total_expenses_cents,
-      ROUND(SUM(amount_cents) / 100.0, 2) AS expenses_usd
+      SUM(CASE WHEN category = 'CANCELACION' THEN -amount_cents ELSE amount_cents END) AS total_expenses_cents,
+      ROUND(SUM(CASE WHEN category = 'CANCELACION' THEN -amount_cents ELSE amount_cents END) / 100.0, 2) AS expenses_usd
     FROM expenses;
 
 CREATE VIEW profit_summary AS

@@ -120,6 +120,37 @@ def require_tenant_match(request: Request, phone: str) -> dict:
     return user
 
 
+def require_tenant_session(request: Request, phone: str) -> dict:
+    """Session-cookie-only owner gate for the commit path (spec 007 AC7, D-040).
+
+    Deliberately NOT require_tenant_match: this must REFUSE the internal-service token.
+    /chat/confirm and /chat/undo are the only write-commit capabilities, and they must be
+    reachable ONLY from the owner's authenticated browser (which holds the session cookie),
+    never from the gateway box (which holds the internal token). This is what makes "the
+    model has no tool that reaches commit" true at the auth layer as well as the tool
+    allowlist, whether the click is manual or client-auto-submitted.
+    """
+    user = get_session_user(request)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    if user.get("kind") == "pending":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Onboarding pending. Complete it from /onboarding.",
+        )
+    if user.get("role") == "admin" or user.get("phone_number") == phone:
+        request.state.user = user
+        request.state.tenant_phone = phone
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Cross-tenant access denied",
+    )
+
+
 def require_internal_or_admin(request: Request) -> dict:
     """Bot endpoints: accept either INTERNAL_SERVICE_TOKEN header or admin session."""
     if _has_internal_token(request):

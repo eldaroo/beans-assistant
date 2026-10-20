@@ -251,7 +251,9 @@
             // Onboarding is structurally pinned (no toggle); tenant defaults to
             // pinned and persists user's choice.
             docked: isOnboarding ? 'pinned' : DEFAULT_DOCK,
-            messages: [],                // { id, role, html, streaming?, toolCall?, cards? }
+            messages: [],                // { id, role, html, streaming?, toolCall?, cards?, kind, proposed?, receipt? }
+            undoToast: null,             // { op_token, label } — the loud Undo for an auto-posted write (spec 007 AC17)
+            _undoTimer: null,
             input: '',
 
             // --- voice input (spec 006 T-012) ---
@@ -403,6 +405,23 @@
                     var keep = { id: m.id, role: m.role, kind: m.kind, html: m.html };
                     if (m.toolCall) keep.toolCall = m.toolCall;
                     if (m.cards) keep.cards = m.cards;
+                    if (m.kind === 'receipt') {
+                        // Persist the settled record so it survives a reload instead of
+                        // rehydrating as a blank green box. The Undo toast is transient and is
+                        // not restored, so the op_token is not needed here.
+                        keep.receipt = m.receipt;
+                        if (m.undone) keep.undone = true;
+                    } else if (m.kind === 'confirm-card') {
+                        // A staged op_token is stale after a reload: never restore an actionable
+                        // card with a live "Confirmar" button. Keep an honest record of what was
+                        // proposed, as plain text.
+                        keep.kind = 'text';
+                        keep.role = 'assistant';
+                        keep.html = (m.proposed && m.proposed.summary)
+                            ? escapeHtml('Te preparé: ' + m.proposed.summary + ' (pedímelo de nuevo para confirmarlo)')
+                            : '';
+                    }
+                    if (keep.kind === 'text' && !keep.html) continue;  // drop an empty bubble
                     out.push(keep);
                 }
                 return out;
@@ -780,6 +799,31 @@
                         self.messages.push(msg);
                     }
 
+                    // spec 007 M3: a proposed write. The SERVER decided auto vs ask
+                    // (metadata.proposed_operation.auto) — the model never decides, and the
+                    // commit is never a model capability. auto:true -> the client submits the
+                    // same non-model /chat/confirm on the owner's behalf and lands an instant
+                    // receipt + loud Undo. auto:false -> a confirm card the owner clicks.
+                    // One turn can stage more than one write (e.g. "vendí X y gasté Y"), so the
+                    // server sends a list; fall back to the single-op key for back-compat.
+                    var proposedList = metadata.proposed_operations
+                        || (metadata.proposed_operation ? [metadata.proposed_operation] : []);
+                    for (var pi = 0; pi < proposedList.length; pi++) {
+                        var proposed = proposedList[pi];
+                        if (!proposed || !proposed.op_token) continue;
+                        // Auto-submit ONLY a reversible, server-approved write. Defense in depth:
+                        // never auto-commit an irreversible op even if the server said auto:true —
+                        // it must always show the owner a card with its irreversibility flag.
+                        if (proposed.auto && !proposed.irreversible) {
+                            self._autoConfirm(proposed);
+                        } else {
+                            self.messages.push({
+                                id: nextId(), role: 'assistant', kind: 'confirm-card',
+                                proposed: proposed
+                            });
+                        }
+                    }
+
                     self._setState('streaming', null);
                     setTimeout(function () {
                         for (var k = 0; k < self.messages.length; k++) {
@@ -864,6 +908,132 @@
                     // Persist the settled thread (assistant bubble + any tool
                     // cards, or the error bubble) so it survives a navigation.
                     self._saveThread();
+                });
+            },
+
+            // --- two-phase write commit + Undo (spec 007 M3) ---------------------------
+            // The commit is NEVER a model capability: both paths POST the op_token to the
+            // session-authenticated /chat/confirm, from the owner's own browser. A reversible,
+            // grounded, obvious write (server verdict auto:true) is submitted here without a
+            // click; everything else waits for the owner to click the confirm card.
+
+            _confirmUrl: function () { return this._endpoint + '/confirm'; },
+            _undoUrl: function () { return this._endpoint + '/undo'; },
+
+            // Auto-post: submit on the owner's behalf, then land a receipt + loud Undo. The
+            // post is PESSIMISTIC — the receipt renders ONLY on committed:true (AC16); a
+            // guard rejection (e.g. not enough stock) shows why it could not post, no receipt.
+            _autoConfirm: function (proposed) {
+                var self = this;
+                fetch(this._confirmUrl(), {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ op_token: proposed.op_token })
+                }).then(function (r) { return r.json(); }).then(function (data) {
+                    if (data && data.committed && data.receipt) {
+                        self.messages.push({
+                            id: nextId(), role: 'assistant', kind: 'receipt',
+                            receipt: data.receipt, op_token: proposed.op_token
+                        });
+                        if (data.reversible) { self._showUndo(proposed.op_token, data.receipt); }
+                    } else {
+                        // Pessimistic: nothing posted. Say why, render no receipt, no Undo.
+                        var why = (data && data.message) ? data.message
+                            : 'No pude anotarlo. Probá de nuevo.';
+                        self.messages.push({ id: nextId(), role: 'assistant', kind: 'text',
+                            html: escapeHtml(why) });
+                    }
+                    self._scrollSoon(); self._saveThread();
+                }).catch(function () {
+                    self.messages.push({ id: nextId(), role: 'assistant', kind: 'text',
+                        html: escapeHtml('No pude anotarlo ahora. Probá de nuevo.') });
+                    self._scrollSoon();
+                });
+            },
+
+            // Confirm-card click: commit, then SETTLE THE CARD IN PLACE into a receipt (same
+            // message id — it does not vanish and respawn), per AC10.
+            confirmOp: function (m) {
+                if (!m || !m.proposed || m._busy) return;
+                m._busy = true;
+                var self = this;
+                var token = m.proposed.op_token;
+                fetch(this._confirmUrl(), {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ op_token: token })
+                }).then(function (r) { return r.json(); }).then(function (data) {
+                    for (var i = 0; i < self.messages.length; i++) {
+                        if (self.messages[i] && self.messages[i].id === m.id) {
+                            if (data && data.committed && data.receipt) {
+                                self.messages[i].kind = 'receipt';
+                                self.messages[i].receipt = data.receipt;
+                                self.messages[i].op_token = token;
+                                self.messages[i].proposed = null;
+                                if (data.reversible) { self._showUndo(token, data.receipt); }
+                            } else {
+                                self.messages[i].kind = 'text';
+                                self.messages[i].proposed = null;
+                                self.messages[i].html = escapeHtml(
+                                    (data && data.message) || 'No pude anotarlo. Probá de nuevo.');
+                            }
+                            break;
+                        }
+                    }
+                    self._scrollSoon(); self._saveThread();
+                }).catch(function () { m._busy = false; });
+            },
+
+            // Dismiss a confirm card the owner does not want.
+            dismissOp: function (m) {
+                for (var i = 0; i < this.messages.length; i++) {
+                    if (this.messages[i] && this.messages[i].id === m.id) {
+                        this.messages.splice(i, 1);
+                        break;
+                    }
+                }
+                this._saveThread();
+            },
+
+            // The loud Undo toast (AC17): persists >= 6s, names the reversal, sits above the
+            // composer, with a >= 44px tap target (the CSS enforces the size).
+            _showUndo: function (op_token, receipt) {
+                var self = this;
+                var amount = (receipt && receipt.amount_label) ? (' ' + receipt.amount_label) : '';
+                this.undoToast = { op_token: op_token, label: 'Anotado' + amount };
+                if (this._undoTimer) { clearTimeout(this._undoTimer); }
+                this._undoTimer = setTimeout(function () { self.undoToast = null; }, 8000);
+            },
+
+            undoOp: function () {
+                if (!this.undoToast) return;
+                var self = this;
+                var token = this.undoToast.op_token;
+                this.undoToast = null;
+                if (this._undoTimer) { clearTimeout(this._undoTimer); this._undoTimer = null; }
+                fetch(this._undoUrl(), {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ op_token: token })
+                }).then(function (r) { return r.json(); }).then(function (data) {
+                    // Mark the matching receipt as undone (settles in place) and say so.
+                    for (var i = 0; i < self.messages.length; i++) {
+                        if (self.messages[i] && self.messages[i].op_token === token
+                            && self.messages[i].kind === 'receipt') {
+                            self.messages[i].undone = true;
+                            break;
+                        }
+                    }
+                    self.messages.push({ id: nextId(), role: 'system', kind: 'text',
+                        html: escapeHtml('Listo, lo deshice.') });
+                    // Refresh the dashboard so the reversal shows immediately.
+                    window.dispatchEvent(new CustomEvent('beans:refresh',
+                        { detail: { tenantPhone: self._tenantPhone } }));
+                    self._scrollSoon(); self._saveThread();
+                }).catch(function () {
+                    self.messages.push({ id: nextId(), role: 'system', kind: 'text',
+                        html: escapeHtml('No pude deshacerlo. Probá desde la lista.') });
+                    self._scrollSoon();
                 });
             },
 
