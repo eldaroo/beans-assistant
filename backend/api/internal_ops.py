@@ -44,7 +44,7 @@ def _pinned_tenant(request: Request) -> str:
 
 
 @router.post("/internal/ops/read_stock")
-async def read_stock(request: Request):
+def read_stock(request: Request):
     """Return current stock for the pinned tenant. Internal-token only.
 
     The body is ignored for scope: the tenant comes only from the pinned header,

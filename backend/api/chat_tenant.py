@@ -41,8 +41,14 @@ class TenantChatResponse(BaseModel):
 
 
 @router.post("/{phone}/chat", response_model=TenantChatResponse)
-async def chat_with_tenant(phone: str, chat: TenantChatMessage):
-    """Chat with the AI agent in the context of a specific tenant database."""
+def chat_with_tenant(phone: str, chat: TenantChatMessage):
+    """Chat with the AI agent in the context of a specific tenant database.
+
+    Sync (not async) on purpose: the agent path makes a BLOCKING call to the gateway, and the
+    gateway calls BACK into this app's /internal/ops/* for its tools. An async handler would block
+    the event loop for the whole agent turn and deadlock that nested call; a sync handler runs in
+    FastAPI's threadpool, so the loop stays free to serve the tool callback concurrently.
+    """
     logger.info(f"chat_with_tenant endpoint: phone={phone}, message={chat.message[:50]}...")
     try:
         logger.info(f"chat_with_tenant endpoint: calling ChatService.chat_with_tenant")
