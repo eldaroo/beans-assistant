@@ -1065,13 +1065,22 @@
                 var Rec = (typeof window !== 'undefined') &&
                     (window.SpeechRecognition || window.webkitSpeechRecognition);
                 if (!Rec) {
-                    // Honest fallback (spec 006 T-020 spirit): no STT here, so say
-                    // so and leave the owner typing rather than a dead mic.
+                    // Honest fallback (wal-ledger parity): no STT in THIS browser,
+                    // so say so and drop the owner straight into typing rather than
+                    // leave a dead mic. The mic button itself is never disabled
+                    // (the drawer opened and this ran), so she is never stuck on a
+                    // grey control — she lands in the composer, focused, ready to
+                    // write, and the one parse path treats it identically.
+                    this.open();
                     this.messages.push({
                         id: nextId(), role: 'system', kind: 'text',
                         html: escapeHtml('Este navegador no permite dictado por voz. Escribí tu mensaje y lo proceso igual.')
                     });
                     this._scrollSoon();
+                    this.$nextTick(function () {
+                        var self2 = this; // Alpine binds `this` to the component
+                        if (self2 && self2.$refs && self2.$refs.input) self2.$refs.input.focus();
+                    }.bind(this));
                     return;
                 }
                 var self = this;
