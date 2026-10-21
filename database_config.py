@@ -24,7 +24,7 @@ import os
 import sys
 from contextlib import contextmanager
 from dotenv import load_dotenv
-from tenant_manager import TenantManager, phone_to_schema_name
+from tenant_manager import TenantManager, phone_to_schema_name, get_tenant_manager
 
 # Load environment variables
 load_dotenv()
@@ -75,7 +75,11 @@ def tenant_context(phone_number: str, must_exist: bool = True):
     PostgreSQL:
       - Switches search_path to tenant_<phone_sanitized> schema.
     """
-    tenant_manager = TenantManager()
+    # Shared singleton: building a fresh TenantManager per call re-ran the
+    # tenants-table DDL and reloaded the full registry on every tenant scope —
+    # ~3 cold cross-node Postgres connects per scope, ~10 scopes per home load.
+    # The singleton pays that once per process; resolve_tenant_phone is cached.
+    tenant_manager = get_tenant_manager()
     normalized_phone = tenant_manager.normalize_phone_number(phone_number)
     resolved_phone = tenant_manager.resolve_tenant_phone(normalized_phone) if normalized_phone else None
 

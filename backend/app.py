@@ -6,6 +6,7 @@ Includes an admin web interface for easy database management.
 """
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -54,13 +55,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# GZip server-rendered HTML + JS/CSS + JSON. The box is single-region (Europe);
+# compressing cuts the trans-Atlantic transfer (e.g. the ~60KB chat widget) by
+# ~70%. minimum_size skips tiny bodies where framing overhead isn't worth it.
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 # Get absolute paths
 BACKEND_DIR = Path(__file__).parent
 STATIC_DIR = BACKEND_DIR / "static"
 TEMPLATES_DIR = BACKEND_DIR / "templates"
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+# Mount static files with a repeat-visit cache. Templates reference assets with
+# a ?v=<version> query, so a changed asset gets a new URL; a moderate max-age
+# therefore kills the per-navigation revalidation round trip to the single box
+# without risking a forgotten bump caching forever (self-heals within a day).
+class CachedStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        return response
+
+
+app.mount("/static", CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Setup Jinja2 templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
