@@ -33,12 +33,18 @@ def _render_base():
 
 
 @pytest.mark.unit
-def test_voice_first_launcher_and_drawer_present():
-    """T-007: a mic launcher, collapsed by default, opening a drawer/sheet."""
+def test_launcher_opens_drawer_and_never_hot_mics():
+    """T-007 (revised): a launcher, collapsed by default, that ONLY opens the
+    drawer. Regression guard: tapping the launcher must never auto-start the
+    mic (the old voice-first "open + record in one tap" hot-mic'd the owner;
+    Dario flagged it in prod). Voice stays an explicit composer action — see
+    test_mic_control_and_recording_bar_present."""
     html = _render_base()
-    # the launcher is a mic FAB, voice-first: tapping it starts recording.
     assert 'class="tim-launcher"' in html
-    assert "startRecording()" in html
+    # the launcher opens the drawer and does NOT engage the microphone.
+    launcher = html.split('class="tim-launcher"', 1)[1].split("</button>", 1)[0]
+    assert "@click=\"open()\"" in launcher
+    assert "startRecording()" not in launcher, "launcher must not hot-mic"
     # it is collapsed by default (shown only when not open).
     assert 'x-show="!isOpen"' in html
     # drawer on desktop, bottom sheet on mobile.

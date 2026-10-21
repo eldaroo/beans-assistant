@@ -10,6 +10,7 @@ import os
 import json
 import sqlite3
 import re
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -41,6 +42,16 @@ class TenantManager:
 
         # Load tenant registry (in-memory cache for JSON mode)
         self.registry = self._load_registry()
+
+        # Per-process cache of resolve_tenant_phone results:
+        #   normalized_input_phone -> (resolved_phone, expiry_monotonic)
+        # A single Control Center home load opens ~10 tenant scopes and resolves
+        # the SAME phone each time; without this every scope paid a fresh
+        # cross-node Postgres connect (~0.6s). Only successful resolves are
+        # cached (misses always re-check the DB, so a just-onboarded tenant
+        # resolves immediately). Short TTL so a changed registry self-heals.
+        self._resolve_cache: Dict[str, Any] = {}
+        self._resolve_ttl = 60.0
 
     # ------------------------------------------------------------------
     # PostgreSQL helpers
@@ -210,6 +221,12 @@ class TenantManager:
         if not aliases:
             return None
 
+        # Fast path: a recent successful resolve for this input is cached.
+        cache_key = aliases[0]  # the normalized input phone
+        cached = self._resolve_cache.get(cache_key)
+        if cached is not None and cached[1] > time.monotonic():
+            return cached[0]
+
         if USE_POSTGRES:
             conn = self._get_pg_conn()
             try:
@@ -221,7 +238,9 @@ class TenantManager:
                         )
                         row = cur.fetchone()
                         if row:
-                            return row["phone_number"]
+                            resolved = row["phone_number"]
+                            self._resolve_cache[cache_key] = (resolved, time.monotonic() + self._resolve_ttl)
+                            return resolved
             finally:
                 conn.close()
             return None
@@ -229,8 +248,13 @@ class TenantManager:
         registry = self._load_registry()
         for candidate in aliases:
             if candidate in registry:
+                self._resolve_cache[cache_key] = (candidate, time.monotonic() + self._resolve_ttl)
                 return candidate
         return None
+
+    def clear_resolve_cache(self):
+        """Drop the resolve cache (call after onboarding a new tenant)."""
+        self._resolve_cache.clear()
 
     def _save_registry(self):
         """Persist registry to disk (JSON mode only; PG writes are done inline)."""

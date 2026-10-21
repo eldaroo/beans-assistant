@@ -64,8 +64,13 @@ def get_connection_pool():
         # connection returns to the pool instead of being pinned indefinitely. It is
         # set under SNAPSHOT_TIMEOUT_S (10s) and far above any real OLTP statement
         # (~sub-second), so it only ever fires on a genuine hang.
+        # minconn=8 pre-warms the pool so the 8-way home fan-out does not pay a
+        # cold connect (~0.6s cross-node) per module on the first load after
+        # start/idle. TCP keepalives stop an idle pooled connection from being
+        # silently dropped across the inter-node link (which would otherwise
+        # surface as a slow reconnect on the next checkout).
         _connection_pool = pool.ThreadedConnectionPool(
-            minconn=1,
+            minconn=8,
             maxconn=25,
             host=DB_HOST,
             port=DB_PORT,
@@ -75,9 +80,13 @@ def get_connection_pool():
             cursor_factory=RealDictCursor,
             # Explicit encoding configuration to avoid UTF-8 issues
             client_encoding='UTF8',
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
             options='-c client_encoding=UTF8 -c statement_timeout=9000'
         )
-        print(f"[DB] Connection pool created (1-25 connections, threaded, statement_timeout=9s)")
+        print(f"[DB] Connection pool created (8-25 connections, threaded, keepalive, statement_timeout=9s)")
     return _connection_pool
 
 
