@@ -128,14 +128,15 @@
 {% set mic_icon %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8.5" y1="21" x2="15.5" y2="21"/></svg>{% endset %}
 
 <div x-data='beansChat({ phone: {{ phone | tojson }}, dock: "floating" })'>
-  {# Voice-first launcher: a mic FAB, visible when the drawer is collapsed.
-     Tapping it opens the drawer and starts recording in one move (T-007). When
-     this browser has no speech recognition, it just opens the drawer to type. #}
+  {# Launcher: a chat FAB, visible when the drawer is collapsed. Tapping it ONLY
+     opens the drawer — it never hot-mics the owner. Voice is an explicit, opt-in
+     action via the mic toggle in the composer (never auto-engaged on open). The
+     old voice-first "open + record in one tap" (T-007) was removed: tapping to
+     open should not turn the microphone on by itself. #}
   <button type="button" class="tim-launcher" x-show="!isOpen" x-cloak
-          @click="micSupported ? startRecording() : open()"
-          :aria-label="micSupported ? 'Hablar o grabar audio con Timonel' : 'Abrir chat con Timonel'">
-    <span x-show="micSupported">{{ mic_icon }}</span>
-    <span x-show="!micSupported" x-cloak>{{ tim_icon }}</span>
+          @click="open()"
+          aria-label="Abrir chat con Timonel">
+    {{ tim_icon }}
   </button>
 
   {# Backdrop: closes the drawer on click. #}
