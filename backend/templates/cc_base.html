@@ -120,8 +120,6 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 @media(prefers-reduced-motion:reduce){.reveal,.cc-main-enter{animation:fade .12s ease both}.cc-skeleton::after{display:none}@keyframes fade{from{opacity:0}to{opacity:1}}}
 {% block page_css %}{% endblock %}
 </style>
-<!-- Alpine powers the shared Timonel slot (and any page's Alpine CRUD factory). -->
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 {% block head_extra %}{% endblock %}
 </head>
 <body data-cc-phone="{{ phone }}" data-cc-route="{% if active_route is defined %}{{ active_route }}{% endif %}" data-cc-active-tab="{% if active_tab is defined %}{{ active_tab }}{% endif %}">
@@ -150,15 +148,24 @@ footer{margin:32px 0 8px;font-size:12px;color:var(--muted);text-align:center}
 
 {% block chat %}{% include "_timonel_slot.html" %}{% endblock %}
 
-<!-- Timonel chat factory (window.beansChat); the slot above binds to it.
-     Deferred: it runs after parse (before DOMContentLoaded, so beansChat is
-     defined before Alpine — also deferred — initialises), unblocking paint. -->
-<script defer src="/static/js/chat_widget.js?v=20261021b"></script>
+<!-- Timonel chat factory (window.beansChat); the slot above binds to it. Deferred
+     so it does not block paint. ORDER IS LOAD-BEARING: this and the bridge below
+     MUST come BEFORE the Alpine tag, because deferred scripts run in document
+     order and Alpine auto-starts (scans x-data) the moment it executes. If Alpine
+     ran first, `beansChat` would be undefined when it initialises the slot and the
+     whole Timonel widget would die (opens by default, mic + close dead) — exactly
+     the 2026-10-21 regression from adding `defer` here while Alpine sat above. -->
+<script defer src="/static/js/chat_widget.js?v=20261021c"></script>
 <!-- Chat-to-screen refresh contract across the separate Control Center
      documents (spec 004 AC8 / T-011). Consumes the widget's beans:refresh and
      beans:navigate events; the widget itself is unchanged. Deferred, in order
      after the widget. -->
 <script defer src="/static/js/cc_chat_bridge.js?v=20261019a"></script>
+<!-- Alpine powers the shared Timonel slot (and any page's Alpine CRUD factory).
+     Loaded LAST so every factory (window.beansChat, each page's CRUD factory) is
+     already defined when Alpine auto-starts and scans the DOM for x-data. All
+     three are deferred, so document order === execution order. -->
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 <script>
 (function(){
   var root=document.documentElement;
