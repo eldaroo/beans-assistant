@@ -58,11 +58,21 @@ def test_launcher_opens_drawer_and_never_hot_mics():
 
 @pytest.mark.unit
 def test_mic_control_and_recording_bar_present():
-    """T-012: a mic toggle in the composer and a visible recording bar."""
+    """T-012: a mic toggle in the composer and a visible recording bar.
+
+    Regression guard (2026-10-21, wal-ledger parity): the mic must NEVER be a
+    dead/disabled button. The old `:disabled="!micSupported"` greyed it out when
+    the load-time feature check read false, which is the prod "botón del
+    micrófono gris, no se puede tocar" report. The mic is now always tappable —
+    toggleRecording() re-checks support at click time and degrades to typing when
+    speech recognition is genuinely absent — so the composer's ONLY disabled
+    control is the send button, never the mic."""
     html = _render_base()
     assert 'class="tim-mic"' in html
     assert "toggleRecording()" in html
-    assert ":disabled=\"!micSupported\"" in html   # never a dead button
+    # the mic button carries no :disabled binding (scope the check to the button).
+    mic_btn = html.split('class="tim-mic"', 1)[1].split("</button>", 1)[0]
+    assert ":disabled" not in mic_btn, "mic must never be a dead/disabled button"
     assert 'class="rec-bar"' in html
     assert "recTimeLabel()" in html
     assert "Grabando audio" in html

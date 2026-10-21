@@ -233,12 +233,18 @@
     </div>
 
     <form class="tim-form" @submit.prevent="send(input)">
+      {# wal-ledger parity (2026-10-21): the mic is NEVER a dead/disabled button.
+         The old `:disabled="!micSupported"` greyed it out when the one-time,
+         load-time feature check read false — the prod "botón gris, no se puede
+         tocar" bug. Now it is always tappable: toggleRecording() re-checks for
+         SpeechRecognition AT CLICK TIME (so a browser that has it records even if
+         the load-time flag missed it), and where it is genuinely absent the tap
+         degrades to typing instead of a dead control (Kaze: never a dead button;
+         Timonel still never pretends to hear). #}
       <button type="button" class="tim-mic" :class="recording ? 'active' : ''"
-              :disabled="!micSupported"
               @click="toggleRecording()"
               :aria-pressed="recording ? 'true' : 'false'"
-              :aria-label="recording ? 'Detener grabación' : 'Grabar audio'"
-              :title="micSupported ? '' : 'Tu navegador no permite dictado por voz'">
+              :aria-label="recording ? 'Detener grabación' : 'Grabar audio'">
         {{ mic_icon }}
       </button>
       <textarea class="tim-ta" x-ref="input" x-model="input" rows="1"
