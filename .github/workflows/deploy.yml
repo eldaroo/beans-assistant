@@ -97,6 +97,11 @@ jobs:
           cpu             = 800
           memory          = 512
           memory_max      = 1024
+          # Co-locate the backend on the node that runs postgres + traefik
+          # (vmi3022858): the DB query path was ~110ms/query cross-node, which
+          # dominates page latency once the per-request reconnect storm is gone.
+          # Pinning onto the DB node makes queries node-local.
+          node_constraint = "vmi3022858"
           health_check_path = "/health"
           sticky_session  = false
 
