@@ -97,11 +97,12 @@ jobs:
           cpu             = 800
           memory          = 512
           memory_max      = 1024
-          # Co-locate the backend on the node that runs postgres + traefik
-          # (vmi3022858): the DB query path was ~110ms/query cross-node, which
-          # dominates page latency once the per-request reconnect storm is gone.
-          # Pinning onto the DB node makes queries node-local.
-          node_constraint = "vmi3022858"
+          # NOTE: co-location onto the postgres node (vmi3022858) was attempted
+          # (node_constraint) but that node has no bridge-mode networking
+          # configured, so the bridge-network app can't place there ("missing
+          # network"). Reverted; the backend stays on a bridge-capable node and
+          # pays the cross-node DB hop. Node-local DB would need CNI/bridge set
+          # up on the DB host — out of scope.
           health_check_path = "/health"
           sticky_session  = false
 
