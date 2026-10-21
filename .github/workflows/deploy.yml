@@ -89,8 +89,14 @@ jobs:
 
           scaling_enabled = false
           canary          = 0
-          cpu             = 300
-          memory          = 192
+          # The backend was capped at 300 MHz (0.3 core) / 192 MiB with no burst,
+          # which serialized the sync FastAPI + Jinja render path and starved it
+          # whenever the co-resident beans-ai gateway's Claude children spiked.
+          # Give it ~0.8 core + a 1 GiB soft cap so short render/query bursts
+          # don't OOM or throttle.
+          cpu             = 800
+          memory          = 512
+          memory_max      = 1024
           health_check_path = "/health"
           sticky_session  = false
 
