@@ -268,6 +268,13 @@
                 !!(window.SpeechRecognition || window.webkitSpeechRecognition)),
             recording: false,
             recSeconds: 0,
+            // Live interim transcription shown in the recording bar while the mic
+            // is on (wal-ledger parity, 2026-10-22). With interimResults the owner
+            // SEES words appear as she speaks ("Te escucho…"), so a tap never looks
+            // dead the way it did when nothing surfaced until a final result that,
+            // on Android/es-AR, often never came. Doubles as the fallback transcript
+            // when onend fires without a final (see startRecording).
+            recInterim: '',
 
             // State machine. idle | thinking | tool_running | streaming | error
             state: 'idle',
@@ -1087,16 +1094,27 @@
                 var rec;
                 try { rec = new Rec(); } catch (_) { return; }
                 rec.lang = 'es-AR';
-                rec.interimResults = false;
+                // interimResults ON (wal-ledger parity): stream partial words to the
+                // recording bar so the owner sees it IS listening. Without this, a tap
+                // that never produced a final result (routine on Android Chrome +
+                // es-AR) looked like a dead mic — the core "no funciona" report.
+                rec.interimResults = true;
                 rec.continuous = false;
                 rec.maxAlternatives = 1;
                 this._recTranscript = '';
+                this.recInterim = '';
                 rec.onresult = function (e) {
-                    var txt = '';
+                    // Separate committed (isFinal) text from the live interim tail.
+                    // Final text accrues to _recTranscript (what we send); interim is
+                    // shown live and kept as a fallback for onend.
+                    var interim = '';
                     for (var i = e.resultIndex; i < e.results.length; i++) {
-                        if (e.results[i] && e.results[i][0]) txt += e.results[i][0].transcript;
+                        var r = e.results[i];
+                        if (!r || !r[0]) continue;
+                        if (r.isFinal) self._recTranscript += r[0].transcript;
+                        else interim += r[0].transcript;
                     }
-                    self._recTranscript += txt;
+                    self.recInterim = interim;
                 };
                 rec.onerror = function (e) {
                     var code = e && e.error;
@@ -1104,21 +1122,37 @@
                     self.recording = false;
                     self._recognition = null;
                     self._recTranscript = '';  // never send a partial after an error
+                    self.recInterim = '';
+                    // Make failures VISIBLE — a silent failure is the "I tapped and
+                    // nothing happened" report. Only 'aborted' (the owner tapped
+                    // Listo / a restart) stays quiet.
+                    var msg = null;
                     if (code === 'not-allowed' || code === 'service-not-allowed') {
-                        self.messages.push({
-                            id: nextId(), role: 'system', kind: 'text',
-                            html: escapeHtml('No pude usar el micrófono (permiso denegado). Activá el micrófono o escribí tu mensaje.')
-                        });
+                        msg = 'No pude usar el micrófono (permiso denegado). Activá el permiso del micrófono para este sitio, o escribí tu mensaje.';
+                    } else if (code === 'no-speech') {
+                        msg = 'No te escuché. Tocá el micrófono y hablá de nuevo, o escribí tu mensaje.';
+                    } else if (code === 'audio-capture') {
+                        msg = 'No encontré un micrófono en este dispositivo. Escribí tu mensaje y lo proceso igual.';
+                    } else if (code === 'network') {
+                        msg = 'El servicio de voz no respondió (red). Probá de nuevo o escribí tu mensaje.';
+                    } else if (code && code !== 'aborted') {
+                        msg = 'No pude grabar el audio. Probá de nuevo o escribí tu mensaje.';
+                    }
+                    if (msg) {
+                        self.messages.push({ id: nextId(), role: 'system', kind: 'text', html: escapeHtml(msg) });
                         self._scrollSoon();
                     }
-                    // 'no-speech'/'aborted' are silent: the owner simply says nothing.
                 };
                 rec.onend = function () {
                     self._stopRecTimer();
                     self.recording = false;
                     self._recognition = null;
-                    var said = (self._recTranscript || '').trim();
+                    // Fall back to the last interim if no final landed — on Android
+                    // Chrome a short/accented phrase often ends with only interim
+                    // text, and dropping it was the "nothing happened" bug.
+                    var said = (self._recTranscript || self.recInterim || '').trim();
                     self._recTranscript = '';
+                    self.recInterim = '';
                     // Place the transcription in the composer for the owner to
                     // read and send herself — NEVER auto-send. She always sees
                     // what Timonel heard before it acts on her money or stock, so
@@ -1156,7 +1190,7 @@
                     // not fire, so reset here too — never leave the UI stuck
                     // showing "Grabando" with a dead recognizer.
                     try { this._recognition.stop(); }
-                    catch (_) { this.recording = false; this._recognition = null; }
+                    catch (_) { this.recording = false; this._recognition = null; this.recInterim = ''; }
                 } else {
                     this.recording = false;
                 }
