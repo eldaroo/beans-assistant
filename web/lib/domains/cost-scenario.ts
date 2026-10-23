@@ -94,15 +94,15 @@ export async function handleScenario(message: string): Promise<string | null> {
 export function formatReply(r: ScenarioResult): string {
   const scenPartial = r.scenarioStatus === "completo" ? "" : " (costo parcial, sube cuando se completen los componentes)";
   if (!r.moved) {
-    return `Escenario para ${r.productName} en ${r.scenarioCountry}: costo final ${usd(r.scenarioTotalCents)}${scenPartial}. Es un calculo sobre los datos cargados; no cambie nada.`;
+    return `Escenario para ${r.productName} en ${r.scenarioCountry}: costo final ${usd(r.scenarioTotalCents)}${scenPartial}. Es un cálculo sobre los datos cargados; no cambié nada.`;
   }
   const baseFloor = r.baselineStatus === "completo" ? "" : " (parcial, es un piso)";
   if (!r.bothComplete) {
-    return `Escenario para ${r.productName}: producir en ${r.scenarioCountry} da un costo final de ${usd(r.scenarioTotalCents)}${scenPartial}, contra ${usd(r.baselineTotalCents)} en ${r.baselineCountry}${baseFloor}. Todavia no puedo comparar con precision porque falta completar componentes en uno de los dos. Es un calculo sobre los datos cargados; no cambie nada.`;
+    return `Escenario para ${r.productName}: producir en ${r.scenarioCountry} da un costo final de ${usd(r.scenarioTotalCents)}${scenPartial}, contra ${usd(r.baselineTotalCents)} en ${r.baselineCountry}${baseFloor}. Todavía no puedo comparar con precisión porque falta completar componentes en uno de los dos. Es un cálculo sobre los datos cargados; no cambié nada.`;
   }
   const direction =
     r.deltaCents < 0 ? `baja ${usd(Math.abs(r.deltaCents))}` : r.deltaCents > 0 ? `sube ${usd(r.deltaCents)}` : "queda igual";
-  return `Escenario para ${r.productName}: producir en ${r.scenarioCountry} deja el costo final en ${usd(r.scenarioTotalCents)}, contra ${usd(r.baselineTotalCents)} en ${r.baselineCountry} (${direction}). Es un calculo sobre los datos cargados; no cambie nada.`;
+  return `Escenario para ${r.productName}: producir en ${r.scenarioCountry} deja el costo final en ${usd(r.scenarioTotalCents)}, contra ${usd(r.baselineTotalCents)} en ${r.baselineCountry} (${direction}). Es un cálculo sobre los datos cargados; no cambié nada.`;
 }
 
 export { THREE_COUNTRIES };

@@ -6,6 +6,7 @@
 
 import { sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { roundHalfEven } from "@/lib/money";
 import {
   bomLines,
   costInputs,
@@ -95,7 +96,7 @@ export function unitsInMonth(
 // short batch raises per-unit labor. null when no completed batch (pending).
 export function laborPerUnit(batchPaymentCents: number, unitsCompleted: number): number | null {
   if (!unitsCompleted) return null;
-  return Math.round(batchPaymentCents / unitsCompleted);
+  return roundHalfEven(batchPaymentCents / unitsCompleted);
 }
 
 // Sum filled components; a pending one (cents null) is excluded, never zero.
@@ -119,7 +120,7 @@ export function recompute(
 }
 
 function asCents(value: number | null | undefined): number | null {
-  return value === null || value === undefined ? null : Math.round(value);
+  return value === null || value === undefined ? null : roundHalfEven(value);
 }
 
 // ------------------------------------------------------------- repository reads
@@ -143,7 +144,7 @@ async function materials(productId: number, country: string): Promise<[number | 
   const missing = rows.filter((r) => r.unit_usd_cents === null).map((r) => r.name);
   if (missing.length) return [null, "falta precio de: " + missing.join(", ")];
   const total = rows.reduce((s, r) => s + Number(r.quantity) * Number(r.unit_usd_cents), 0);
-  return [Math.round(total), rows.map((r) => r.name).join(", ")];
+  return [roundHalfEven(total), rows.map((r) => r.name).join(", ")];
 }
 
 async function latestRow<T>(query: ReturnType<typeof sql>): Promise<T | null> {
@@ -170,7 +171,7 @@ async function indirectPerUnit(country: string): Promise<[number | null, string]
     pool.period_month,
   );
   if (!units) return [null, `sin producción registrada en ${pool.period_month}`];
-  const perUnit = Math.round(Number(pool.pool_cents) / units);
+  const perUnit = roundHalfEven(Number(pool.pool_cents) / units);
   return [perUnit, `exhibidores + overhead, ${pool.period_month} (${units} u)`];
 }
 
@@ -306,7 +307,7 @@ export async function leadComparison(): Promise<CountryComparison | null> {
 // fx_rate is units of the original currency per 1 USD; usd = original / fx.
 export function usdCentsFrom(originalAmountCents: number, fxRate: number): number {
   if (fxRate <= 0) throw new Error("fx_rate must be positive");
-  return Math.round(originalAmountCents / fxRate);
+  return roundHalfEven(originalAmountCents / fxRate);
 }
 
 export async function recordInputPurchase(params: {

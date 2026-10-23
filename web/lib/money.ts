@@ -8,6 +8,19 @@
 // A maximal run of digits with optional thousands/decimal separators.
 const NUMBER_RE = /\d[\d.,]*\d|\d/g;
 
+// Round half to EVEN (banker's rounding), matching Python's built-in `round()`.
+// JS `Math.round` rounds half UP, which diverges from the Python oracle on exact
+// half-cent cases (e.g. 62.5 -> 62 in Python but 63 in Math.round; 2.5 -> 2 vs 3).
+// Every cents computation ported from a Python `round()` MUST use this so the app
+// re-derives the same integer cents the incumbent produced (spec 008 AC4 parity).
+export function roundHalfEven(x: number): number {
+  const floor = Math.floor(x);
+  const diff = x - floor;
+  if (diff < 0.5) return floor;
+  if (diff > 0.5) return floor + 1;
+  return floor % 2 === 0 ? floor : floor + 1; // exactly .5 -> nearest even
+}
+
 function stripAccents(text: string): string {
   return (text || "").normalize("NFD").replace(/\p{Mn}/gu, "");
 }

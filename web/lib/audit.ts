@@ -8,17 +8,25 @@
 import { and, count, gte, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLog } from "@/db/schema";
+import { DESTRUCTIVE_OP_TYPES } from "@/lib/ops/registry";
 
 const WINDOW_SECONDS = 60;
 const GLOBAL_CAP = 60; // all write intents per window
 const DESTRUCTIVE_CAP = 8; // cancel_* / deactivate per window (tighter)
-export const DESTRUCTIVE_OPS = new Set<string>([
-  "cancel_last_operation",
-  "cancel_sale",
-  "cancel_expense",
-  "cancel_stock_movement",
-  "deactivate_product",
-]);
+
+// The destructive write intents get the tighter cap and fail CLOSED. The names
+// MUST match the operationType the stage path passes (uppercase) and the `name`
+// column audit rows are written with, so the cap and the fail-closed branch
+// actually fire. We reuse the registry's single source of truth rather than a
+// hand-kept lowercase copy: an earlier copy here held the OLD Python op names
+// (lowercase, and `cancel_stock_movement` vs the registry's `CANCEL_STOCK`), so
+// the destructive cap never triggered and destructive ops failed OPEN under DB
+// stress (spec 008 AC7 hardening; caught by m7-guards).
+export const DESTRUCTIVE_OPS = DESTRUCTIVE_OP_TYPES;
+
+function isDestructive(opName: string): boolean {
+  return DESTRUCTIVE_OPS.has((opName || "").toUpperCase());
+}
 
 function isoNow(): string {
   return new Date().toISOString();
@@ -63,7 +71,7 @@ export async function withinCaps(opName: string): Promise<boolean> {
       .from(auditLog)
       .where(gte(auditLog.createdAt, since));
     if (total >= GLOBAL_CAP) return false;
-    if (DESTRUCTIVE_OPS.has(opName)) {
+    if (isDestructive(opName)) {
       const [{ c: dtotal }] = await db
         .select({ c: count() })
         .from(auditLog)
@@ -77,6 +85,6 @@ export async function withinCaps(opName: string): Promise<boolean> {
     }
     return true;
   } catch {
-    return !DESTRUCTIVE_OPS.has(opName);
+    return !isDestructive(opName);
   }
 }

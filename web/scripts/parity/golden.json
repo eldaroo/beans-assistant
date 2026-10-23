@@ -1,0 +1,767 @@
+{
+  "_meta": {
+    "generated_by": "web/scripts/parity/oracle.py",
+    "oracle": "backend.services.{write_verdict,costing_service,cost_scenario} + costing_repository.usd_cents_from",
+    "note": "Golden is the real Python output. TS parity asserts byte-equal against it (AC4). verdict reasons compared as reason-code set (float-repr tail tolerated); auto/review byte-exact."
+  },
+  "money": {
+    "parse_one": [
+      {
+        "raw": "300",
+        "out": 300.0
+      },
+      {
+        "raw": "1.500",
+        "out": 1500.0
+      },
+      {
+        "raw": "1,500",
+        "out": 1500.0
+      },
+      {
+        "raw": "1.5",
+        "out": 1.5
+      },
+      {
+        "raw": "1,5",
+        "out": 1.5
+      },
+      {
+        "raw": "12.50",
+        "out": 12.5
+      },
+      {
+        "raw": "12,50",
+        "out": 12.5
+      },
+      {
+        "raw": "1.500.000",
+        "out": 1500000.0
+      },
+      {
+        "raw": "1,500,000",
+        "out": 1500000.0
+      },
+      {
+        "raw": "2.5",
+        "out": 2.5
+      },
+      {
+        "raw": "0,5",
+        "out": 0.5
+      },
+      {
+        "raw": "100",
+        "out": 100.0
+      },
+      {
+        "raw": "1.234,56",
+        "out": 1234.56
+      },
+      {
+        "raw": "1,234.56",
+        "out": 1234.56
+      },
+      {
+        "raw": "abc",
+        "out": null
+      },
+      {
+        "raw": "",
+        "out": null
+      },
+      {
+        "raw": "10",
+        "out": 10.0
+      },
+      {
+        "raw": "0",
+        "out": 0.0
+      },
+      {
+        "raw": "999.999",
+        "out": 999999.0
+      }
+    ],
+    "parse_numbers": [
+      {
+        "text": "vendi 2 medias a 300",
+        "out": [
+          2.0,
+          300.0
+        ]
+      },
+      {
+        "text": "compre 1.500 de cafe por 12,50",
+        "out": [
+          12.5,
+          1500.0
+        ]
+      },
+      {
+        "text": "gaste 1.234,56 en flete",
+        "out": [
+          1234.56
+        ]
+      },
+      {
+        "text": "nada numerico aca",
+        "out": []
+      },
+      {
+        "text": "stock 10 y 20 y 10",
+        "out": [
+          10.0,
+          20.0
+        ]
+      }
+    ],
+    "numeral_is_grounded": [
+      {
+        "value": 300,
+        "utterance": "vendi a 300",
+        "out": true
+      },
+      {
+        "value": 1500,
+        "utterance": "compre 1.500",
+        "out": true
+      },
+      {
+        "value": 1.5,
+        "utterance": "15",
+        "out": false
+      },
+      {
+        "value": 15,
+        "utterance": "1.5",
+        "out": false
+      },
+      {
+        "value": 12.5,
+        "utterance": "a 12,50",
+        "out": true
+      },
+      {
+        "value": 400,
+        "utterance": "vendi una tabla",
+        "out": false
+      },
+      {
+        "value": null,
+        "utterance": "nada",
+        "out": false
+      }
+    ]
+  },
+  "verdict": [
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "registra una venta por 400 de una tabla",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "tabla",
+        "candidate_count": 1
+      },
+      "auto": true,
+      "requires_human_review": false,
+      "reason_codes": []
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_EXPENSE",
+        "utterance": "gaste 500 en envio",
+        "grounded_amounts": [
+          500
+        ],
+        "product_name": null,
+        "candidate_count": 1
+      },
+      "auto": true,
+      "requires_human_review": false,
+      "reason_codes": []
+    },
+    {
+      "case": {
+        "operation_type": "ADD_STOCK",
+        "utterance": "llegaron 10 termos",
+        "grounded_amounts": [
+          10
+        ],
+        "product_name": "termos",
+        "candidate_count": 1
+      },
+      "auto": true,
+      "requires_human_review": false,
+      "reason_codes": []
+    },
+    {
+      "case": {
+        "operation_type": "UPDATE_PRICE",
+        "utterance": "subi el precio a 800",
+        "grounded_amounts": [
+          800
+        ],
+        "product_name": "tabla",
+        "candidate_count": 1,
+        "irreversible": true
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "irreversible-op"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "dale",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "tabla",
+        "candidate_count": 1
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "bare-confirmation",
+        "product-not-in-utterance",
+        "ungrounded-numerals"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "vendi una tabla",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "tabla",
+        "candidate_count": 1
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "ungrounded-numerals"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "vendi algo por 400",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "pulsera verde",
+        "candidate_count": 1
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "product-not-in-utterance"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "vendi una tabla por 400",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "tabla",
+        "candidate_count": 0
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "no-product-match"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "ADD_STOCK",
+        "utterance": "llegaron 10 medias",
+        "grounded_amounts": [
+          10
+        ],
+        "product_name": "medias",
+        "candidate_count": 2
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "ambiguous-2-candidates"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_SALE",
+        "utterance": "vendi una tabla por 400",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "tabla",
+        "candidate_count": 1,
+        "within_caps": false
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "over-cap"
+      ]
+    },
+    {
+      "case": {
+        "operation_type": "REGISTER_PRODUCT",
+        "utterance": "nueva pulsera por 400",
+        "grounded_amounts": [
+          400
+        ],
+        "product_name": "pulsera",
+        "candidate_count": 1
+      },
+      "auto": false,
+      "requires_human_review": true,
+      "reason_codes": [
+        "not-in-reversible-set"
+      ]
+    }
+  ],
+  "costing": {
+    "month_of_iso_week": [
+      {
+        "week": "2026-W01",
+        "out": "2026-01"
+      },
+      {
+        "week": "2020-W53",
+        "out": "2020-12"
+      },
+      {
+        "week": "2025-W52",
+        "out": "2025-12"
+      },
+      {
+        "week": "2025-W01",
+        "out": "2025-01"
+      },
+      {
+        "week": "2024-W01",
+        "out": "2024-01"
+      },
+      {
+        "week": "2015-W53",
+        "out": "2015-12"
+      },
+      {
+        "week": "2020-W01",
+        "out": "2020-01"
+      }
+    ],
+    "units_rows": [
+      {
+        "period_week": "2026-W01",
+        "units": 10
+      },
+      {
+        "period_week": "2026-W02",
+        "units": 5
+      },
+      {
+        "period_week": "2026-W05",
+        "units": 7
+      }
+    ],
+    "units_in_month": [
+      {
+        "month": "2025-12",
+        "out": 0
+      },
+      {
+        "month": "2026-01",
+        "out": 22
+      },
+      {
+        "month": "2026-02",
+        "out": 0
+      }
+    ],
+    "labor_per_unit": [
+      {
+        "batch_payment_cents": 1000,
+        "units_completed": 0,
+        "out": null
+      },
+      {
+        "batch_payment_cents": 1000,
+        "units_completed": 3,
+        "out": 333
+      },
+      {
+        "batch_payment_cents": 250,
+        "units_completed": 4,
+        "out": 62
+      },
+      {
+        "batch_payment_cents": 300,
+        "units_completed": 8,
+        "out": 38
+      },
+      {
+        "batch_payment_cents": 1000,
+        "units_completed": 1,
+        "out": 1000
+      }
+    ],
+    "usd_cents_from": [
+      {
+        "original_amount_cents": 10000,
+        "fx_rate": 4000,
+        "out": 2
+      },
+      {
+        "original_amount_cents": 10000,
+        "fx_rate": 3,
+        "out": 3333
+      },
+      {
+        "original_amount_cents": 50,
+        "fx_rate": 1,
+        "out": 50
+      },
+      {
+        "original_amount_cents": 30000,
+        "fx_rate": 4000,
+        "out": 8
+      },
+      {
+        "original_amount_cents": 15000,
+        "fx_rate": 4000,
+        "out": 4
+      }
+    ],
+    "recompute": [
+      {
+        "name": "all-filled",
+        "components": [
+          {
+            "key": "materials",
+            "label": "Materiales",
+            "cents": 100,
+            "detail": ""
+          },
+          {
+            "key": "labor",
+            "label": "Mano de obra",
+            "cents": 50,
+            "detail": ""
+          },
+          {
+            "key": "packaging",
+            "label": "Empaque",
+            "cents": 20,
+            "detail": ""
+          },
+          {
+            "key": "shipping",
+            "label": "Envio",
+            "cents": 30,
+            "detail": ""
+          },
+          {
+            "key": "customs",
+            "label": "Aduana",
+            "cents": 10,
+            "detail": ""
+          },
+          {
+            "key": "indirect",
+            "label": "Indirectos",
+            "cents": 5,
+            "detail": ""
+          }
+        ],
+        "overrides": {},
+        "out": {
+          "total_cents": 215,
+          "status": "completo",
+          "pending_labels": []
+        }
+      },
+      {
+        "name": "two-pending",
+        "components": [
+          {
+            "key": "materials",
+            "label": "Materiales",
+            "cents": 100,
+            "detail": ""
+          },
+          {
+            "key": "labor",
+            "label": "Mano de obra",
+            "cents": null,
+            "detail": ""
+          },
+          {
+            "key": "packaging",
+            "label": "Empaque",
+            "cents": 20,
+            "detail": ""
+          },
+          {
+            "key": "shipping",
+            "label": "Envio",
+            "cents": null,
+            "detail": ""
+          },
+          {
+            "key": "customs",
+            "label": "Aduana",
+            "cents": 10,
+            "detail": ""
+          },
+          {
+            "key": "indirect",
+            "label": "Indirectos",
+            "cents": 5,
+            "detail": ""
+          }
+        ],
+        "overrides": {},
+        "out": {
+          "total_cents": 135,
+          "status": "parcial",
+          "pending_labels": [
+            "Mano de obra",
+            "Envio"
+          ]
+        }
+      },
+      {
+        "name": "override-force-pending",
+        "components": [
+          {
+            "key": "materials",
+            "label": "Materiales",
+            "cents": 100,
+            "detail": ""
+          },
+          {
+            "key": "labor",
+            "label": "Mano de obra",
+            "cents": 50,
+            "detail": ""
+          },
+          {
+            "key": "packaging",
+            "label": "Empaque",
+            "cents": 20,
+            "detail": ""
+          },
+          {
+            "key": "shipping",
+            "label": "Envio",
+            "cents": 30,
+            "detail": ""
+          },
+          {
+            "key": "customs",
+            "label": "Aduana",
+            "cents": 10,
+            "detail": ""
+          },
+          {
+            "key": "indirect",
+            "label": "Indirectos",
+            "cents": 5,
+            "detail": ""
+          }
+        ],
+        "overrides": {
+          "materials": null
+        },
+        "out": {
+          "total_cents": 115,
+          "status": "parcial",
+          "pending_labels": [
+            "Materiales"
+          ]
+        }
+      },
+      {
+        "name": "override-fill",
+        "components": [
+          {
+            "key": "materials",
+            "label": "Materiales",
+            "cents": 100,
+            "detail": ""
+          },
+          {
+            "key": "labor",
+            "label": "Mano de obra",
+            "cents": null,
+            "detail": ""
+          },
+          {
+            "key": "packaging",
+            "label": "Empaque",
+            "cents": 20,
+            "detail": ""
+          },
+          {
+            "key": "shipping",
+            "label": "Envio",
+            "cents": null,
+            "detail": ""
+          },
+          {
+            "key": "customs",
+            "label": "Aduana",
+            "cents": 10,
+            "detail": ""
+          },
+          {
+            "key": "indirect",
+            "label": "Indirectos",
+            "cents": 5,
+            "detail": ""
+          }
+        ],
+        "overrides": {
+          "labor": 40,
+          "shipping": 25
+        },
+        "out": {
+          "total_cents": 200,
+          "status": "completo",
+          "pending_labels": []
+        }
+      }
+    ]
+  },
+  "scenario": {
+    "is_scenario": [
+      {
+        "message": "que pasa si produzco en colombia",
+        "out": true
+      },
+      {
+        "message": "escenario costa rica",
+        "out": true
+      },
+      {
+        "message": "cuanto costaria moverlo a armenia",
+        "out": true
+      },
+      {
+        "message": "y si lo hago en costa rica",
+        "out": true
+      },
+      {
+        "message": "vendi 2 medias a 300",
+        "out": false
+      },
+      {
+        "message": "cuanto vendi hoy",
+        "out": false
+      }
+    ],
+    "format_reply": [
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Colombia",
+          "baselineTotalCents": 5000,
+          "scenarioTotalCents": 5000,
+          "deltaCents": 0,
+          "baselineStatus": "completo",
+          "scenarioStatus": "completo",
+          "moved": false,
+          "bothComplete": true
+        },
+        "out": "Escenario para pulsera verde en Colombia: costo final USD 50.00. Es un cálculo sobre los datos cargados; no cambié nada."
+      },
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Costa Rica",
+          "baselineTotalCents": 5000,
+          "scenarioTotalCents": 4200,
+          "deltaCents": -800,
+          "baselineStatus": "completo",
+          "scenarioStatus": "completo",
+          "moved": true,
+          "bothComplete": true
+        },
+        "out": "Escenario para pulsera verde: producir en Costa Rica deja el costo final en USD 42.00, contra USD 50.00 en Colombia (baja USD 8.00). Es un cálculo sobre los datos cargados; no cambié nada."
+      },
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Costa Rica",
+          "baselineTotalCents": 5000,
+          "scenarioTotalCents": 5800,
+          "deltaCents": 800,
+          "baselineStatus": "completo",
+          "scenarioStatus": "completo",
+          "moved": true,
+          "bothComplete": true
+        },
+        "out": "Escenario para pulsera verde: producir en Costa Rica deja el costo final en USD 58.00, contra USD 50.00 en Colombia (sube USD 8.00). Es un cálculo sobre los datos cargados; no cambié nada."
+      },
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Costa Rica",
+          "baselineTotalCents": 5000,
+          "scenarioTotalCents": 5000,
+          "deltaCents": 0,
+          "baselineStatus": "completo",
+          "scenarioStatus": "completo",
+          "moved": true,
+          "bothComplete": true
+        },
+        "out": "Escenario para pulsera verde: producir en Costa Rica deja el costo final en USD 50.00, contra USD 50.00 en Colombia (queda igual). Es un cálculo sobre los datos cargados; no cambié nada."
+      },
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Costa Rica",
+          "baselineTotalCents": 5000,
+          "scenarioTotalCents": 4200,
+          "deltaCents": -800,
+          "baselineStatus": "completo",
+          "scenarioStatus": "parcial",
+          "moved": true,
+          "bothComplete": false
+        },
+        "out": "Escenario para pulsera verde: producir en Costa Rica da un costo final de USD 42.00 (costo parcial, sube cuando se completen los componentes), contra USD 50.00 en Colombia. Todavía no puedo comparar con precisión porque falta completar componentes en uno de los dos. Es un cálculo sobre los datos cargados; no cambié nada."
+      },
+      {
+        "result": {
+          "productName": "pulsera verde",
+          "baselineCountry": "Colombia",
+          "scenarioCountry": "Costa Rica",
+          "baselineTotalCents": 3000,
+          "scenarioTotalCents": 4200,
+          "deltaCents": 1200,
+          "baselineStatus": "parcial",
+          "scenarioStatus": "completo",
+          "moved": true,
+          "bothComplete": false
+        },
+        "out": "Escenario para pulsera verde: producir en Costa Rica da un costo final de USD 42.00, contra USD 30.00 en Colombia (parcial, es un piso). Todavía no puedo comparar con precisión porque falta completar componentes en uno de los dos. Es un cálculo sobre los datos cargados; no cambié nada."
+      }
+    ]
+  }
+}

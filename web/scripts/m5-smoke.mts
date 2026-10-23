@@ -39,7 +39,7 @@ async function main() {
   await cost.recordInputPurchase({ costInputId: ci, originalCurrency: "USD", originalAmountCents: 50, fxRate: 1, quantity: 1 });
   await cost.recordBomLine(p.id, ci, "Colombia", 2);
   const reply = await handleScenario("cuanto costaria producir la pulsera en colombia");
-  check("cost scenario returns a read-only reply", typeof reply === "string" && reply!.startsWith("Escenario") && reply!.includes("no cambie nada"), (reply ?? "").slice(0, 60));
+  check("cost scenario returns a read-only reply", typeof reply === "string" && reply!.startsWith("Escenario") && reply!.includes("no cambié nada"), (reply ?? "").slice(0, 60));
   check("non-scenario message -> null (normal pipeline)", (await handleScenario("vendi 2 medias")) === null);
 
   console.log(fails === 0 ? "\nM5-SMOKE: ALL-PASS" : `\nM5-SMOKE: ${fails} FAIL`);
