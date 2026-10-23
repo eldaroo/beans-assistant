@@ -40,6 +40,9 @@ export async function addStock(params: {
   reference?: string | null;
 }): Promise<{ status: string; movement_id: number }> {
   const { productId, quantity, reason = "Stock update", movementType = "IN", reference = null } = params;
+  // Never let an unresolved product reach the insert (it would send product_id
+  // DEFAULT and fail the NOT NULL/FK with a raw DB error). Fail with a clear message.
+  if (productId == null) throw new Error("No se resolvio el producto para el movimiento de stock");
   const [row] = await db
     .insert(stockMovements)
     .values({ productId, movementType, quantity, reason, reference })

@@ -57,6 +57,17 @@ async function main() {
     ambigStage.ok === true && ambigStage.auto === false && ambigStage.candidate_count === 2,
     ambigStage.ok ? ambigStage.reasons.join(",") : (ambigStage as { message: string }).message);
 
+  // 5b. ADD_STOCK with an unknown product -> clean failure, NOT a confirmable card
+  //     that crashes on commit (the "pulseras" bug: product_id DEFAULT -> FK error).
+  const unknownStage = await stageOperation({
+    operationType: "ADD_STOCK",
+    args: { productRef: `${N} inexistente`, quantity: 4500 },
+    utterance: `entraron 4500 ${N} inexistente`,
+  });
+  check("ADD_STOCK unknown product -> clean product_not_found (no card)",
+    unknownStage.ok === false && (unknownStage as { code: string }).code === "product_not_found",
+    unknownStage.ok ? "staged a card (BUG)" : (unknownStage as { message: string }).message);
+
   // 6. ADD_STOCK deterministic + grounded -> auto.
   const okStage = await stageOperation({
     operationType: "ADD_STOCK",
