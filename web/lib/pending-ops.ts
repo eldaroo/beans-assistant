@@ -1,0 +1,187 @@
+// Two-phase write staging. Ported from backend/repositories/pending_ops_repository.py
+// (spec 007 D-038/D-043) onto the single-business pending_ops table.
+//
+// A write never commits. It stages a validated preview here under an op_token; the
+// non-model /confirm route is the only thing that commits it. The row is DB-backed so
+// it survives a restart and is reachable from any serverless invocation.
+//
+// Lifecycle: staged PENDING (auto NULL = verdict not yet computed) -> app computes the
+// verdict and sets auto/requires_human_review -> /confirm claims PENDING->COMMITTING
+// atomically (single winner) then COMMITTING->COMMITTED once -> Undo path flips
+// COMMITTED->CANCELLING->CANCELLED. Every transition is one conditional UPDATE whose
+// row count names the single winner, which is exactly what neon-http delivers per query.
+
+import { and, asc, eq, isNull } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { pendingOps } from "@/db/schema";
+import type { Verdict } from "@/lib/verdict";
+
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+export interface PendingOp {
+  opToken: string;
+  operationType: string;
+  args: unknown;
+  utterance: string | null;
+  productName: string | null;
+  candidateCount: number | null;
+  turnNonce: string | null;
+  auto: number | null;
+  requiresHumanReview: number | null;
+  status: string;
+  commitResult: unknown;
+  reasons: unknown;
+  createdAt: string;
+  committedAt: string | null;
+}
+
+function hydrate(row: typeof pendingOps.$inferSelect): PendingOp {
+  const parse = (v: string | null): unknown => {
+    if (!v) return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  };
+  return {
+    ...row,
+    args: parse(row.args),
+    commitResult: parse(row.commitResult),
+    reasons: parse(row.reasons),
+  };
+}
+
+// Insert a PENDING op with the verdict not yet computed (auto NULL). Returns created_at.
+// turn_nonce identifies the agent turn that staged this op, so the app correlates a
+// staged write to THIS turn by identity, not by wall-clock.
+export async function stage(params: {
+  opToken: string;
+  operationType: string;
+  args: unknown;
+  utterance?: string | null;
+  productName?: string | null;
+  candidateCount?: number | null;
+  turnNonce?: string | null;
+}): Promise<string> {
+  const createdAt = isoNow();
+  await db.insert(pendingOps).values({
+    opToken: params.opToken,
+    operationType: params.operationType,
+    args: JSON.stringify(params.args),
+    utterance: params.utterance ?? null,
+    productName: params.productName ?? null,
+    candidateCount: params.candidateCount ?? null,
+    turnNonce: params.turnNonce ?? null,
+    auto: null,
+    requiresHumanReview: null,
+    status: "PENDING",
+    createdAt,
+  });
+  return createdAt;
+}
+
+export async function setVerdict(opToken: string, verdict: Verdict): Promise<void> {
+  await db
+    .update(pendingOps)
+    .set({
+      auto: verdict.auto ? 1 : 0,
+      requiresHumanReview: verdict.requiresHumanReview ? 1 : 0,
+      reasons: JSON.stringify(verdict.reasons),
+    })
+    .where(eq(pendingOps.opToken, opToken));
+}
+
+export async function get(opToken: string): Promise<PendingOp | null> {
+  const rows = await db
+    .select()
+    .from(pendingOps)
+    .where(eq(pendingOps.opToken, opToken))
+    .limit(1);
+  return rows.length ? hydrate(rows[0]) : null;
+}
+
+// Atomically transition PENDING -> COMMITTING. Returns true for the single winner;
+// two concurrent confirms of one op_token can never both post.
+export async function claim(opToken: string): Promise<boolean> {
+  const won = await db
+    .update(pendingOps)
+    .set({ status: "COMMITTING" })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "PENDING")))
+    .returning({ opToken: pendingOps.opToken });
+  return won.length > 0;
+}
+
+// Revert COMMITTING -> PENDING when the commit is rejected by a guard, so a later
+// retry (e.g. after stock is added) can claim and commit it again.
+export async function unclaim(opToken: string): Promise<void> {
+  await db
+    .update(pendingOps)
+    .set({ status: "PENDING" })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "COMMITTING")));
+}
+
+// Finalize COMMITTING -> COMMITTED, recording the commit result. Returns true on the
+// transition (the claimer).
+export async function markCommitted(
+  opToken: string,
+  commitResult: unknown,
+): Promise<boolean> {
+  const won = await db
+    .update(pendingOps)
+    .set({
+      status: "COMMITTED",
+      commitResult: JSON.stringify(commitResult),
+      committedAt: isoNow(),
+    })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "COMMITTING")))
+    .returning({ opToken: pendingOps.opToken });
+  return won.length > 0;
+}
+
+// Atomically transition COMMITTED -> CANCELLING for the Undo path. Returns true for
+// the single winner, so a double Undo tap compensates at most once.
+export async function claimCancel(opToken: string): Promise<boolean> {
+  const won = await db
+    .update(pendingOps)
+    .set({ status: "CANCELLING" })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "COMMITTED")))
+    .returning({ opToken: pendingOps.opToken });
+  return won.length > 0;
+}
+
+export async function finalizeCancelled(opToken: string): Promise<void> {
+  await db
+    .update(pendingOps)
+    .set({ status: "CANCELLED" })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "CANCELLING")));
+}
+
+// Revert CANCELLING -> COMMITTED if the compensator failed, so Undo can be retried.
+export async function revertCancel(opToken: string): Promise<void> {
+  await db
+    .update(pendingOps)
+    .set({ status: "COMMITTED" })
+    .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "CANCELLING")));
+}
+
+// Every op this turn staged whose verdict is not yet computed (auto IS NULL,
+// PENDING), correlated by the turn nonce, oldest first. A list so a compound turn
+// (one message that stages a sale AND an expense) surfaces every staged write.
+export async function verdictPendingForTurn(turnNonce: string): Promise<PendingOp[]> {
+  if (!turnNonce) return [];
+  const rows = await db
+    .select()
+    .from(pendingOps)
+    .where(
+      and(
+        eq(pendingOps.turnNonce, turnNonce),
+        eq(pendingOps.status, "PENDING"),
+        isNull(pendingOps.auto),
+      ),
+    )
+    .orderBy(asc(pendingOps.createdAt));
+  return rows.map(hydrate);
+}
