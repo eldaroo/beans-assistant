@@ -64,7 +64,7 @@ Out of scope:
 
 Each milestone is a cohort that ships demonstrably and deploys to a live Vercel URL Dario can open. `/develop --headless` drains them in order.
 
-- **M0 — Shell + infra.** New Next.js 15 app at `web/`, Vercel project under `eldaroos-projects`, Neon project provisioned, edge-middleware auth gate (PIN default, D-008-01), observability stack wired. Deploys an authenticated empty shell to a live URL.
+- **M0 — Shell + infra.** New Next.js 15 app at `web/`, Vercel project under `eldaroos-projects`, Neon project provisioned, Google OAuth gate (D-008-01, existing Beans client reused), observability stack wired. Deploys an authenticated empty shell to a live URL.
 - **M1 — Schema + data migration.** Drizzle single-business schema for all nine domains + `audit_log`. One-time ETL of the live `+54955885565` data from current Postgres → Neon, with a row-count + spot-value reconciliation report. (Live final re-sync happens at M8.)
 - **M2 — Business logic → TS.** Port the nine domains' logic into `lib/` with every guard preserved; `lib/money.ts` for independent amount re-derivation. Parity tests vs Python outputs green.
 - **M3 — API routes.** App Router handlers: per-domain read snapshots + two-phase writes (`op_token` stage + non-model `/confirm` commit), named-error envelope, audit-log append on every write intent.
