@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/auth";
-import { NAV_ITEMS, NavLink } from "./_components/nav";
+import { NAV_ITEMS } from "./_components/nav-items";
+import { NavLink } from "./_components/nav";
 import { Chat } from "./_components/chat";
 
 // Server-side auth guard for every page in the (app) route group, plus the

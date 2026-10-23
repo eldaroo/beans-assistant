@@ -2,17 +2,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export const NAV_ITEMS: Array<[string, string]> = [
-  ["/hoy", "Hoy"],
-  ["/stock", "Stock"],
-  ["/productos", "Productos"],
-  ["/ventas", "Ventas"],
-  ["/costos", "Costos"],
-  ["/produccion", "Produccion"],
-  ["/proveedores", "Proveedores"],
-  ["/logistica", "Logistica"],
-  ["/resultado", "Resultado"],
-];
+// NAV_ITEMS lives in ./nav-items (a server-safe module) and is imported there by
+// the server layout. A data export in this "use client" file resolved to a
+// client-reference stub across the boundary, so NAV_ITEMS.map threw on the server.
 
 export function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
