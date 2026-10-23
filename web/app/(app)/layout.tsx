@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/auth";
 import { NAV_ITEMS, NavLink } from "./_components/nav";
+import { Chat } from "./_components/chat";
 
 // Server-side auth guard for every page in the (app) route group, plus the
 // command-center chrome (sidebar nav + sign-out). An unauthenticated visitor is
@@ -44,6 +45,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
         {children}
       </main>
+      <Chat />
     </div>
   );
 }

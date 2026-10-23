@@ -3,10 +3,7 @@
 // re-derived here; the model never sets the auto flag. (spec 008 AC5/AC6.)
 import { auth } from "@/auth";
 import { ok, fail, requireDb } from "@/lib/http";
-import { getOp } from "@/lib/ops/registry";
-import * as pending from "@/lib/pending-ops";
-import { computeVerdict } from "@/lib/verdict";
-import { withinCaps, appendAudit } from "@/lib/audit";
+import { stageOperation } from "@/lib/ops/stage";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -20,45 +17,16 @@ export async function POST(req: Request) {
   } catch {
     return fail("bad_json", "Request body must be JSON");
   }
-  const operationType = body.operationType ?? "";
-  const op = getOp(operationType);
-  if (!op) return fail("unknown_operation", `Unknown operation ${operationType}`);
-
-  const utterance = body.utterance ?? "";
   try {
-    const resolved = await op.resolve(body.args ?? {});
-    const opToken = crypto.randomUUID();
-    const turnNonce = body.turnNonce ?? crypto.randomUUID();
-    await pending.stage({
-      opToken,
-      operationType: operationType.toUpperCase(),
-      args: resolved.stagedArgs,
-      utterance,
-      productName: resolved.productName,
-      candidateCount: resolved.candidateCount,
-      turnNonce,
+    const r = await stageOperation({
+      operationType: body.operationType ?? "",
+      args: body.args,
+      utterance: body.utterance,
+      turnNonce: body.turnNonce,
     });
-    const caps = await withinCaps(operationType.toUpperCase());
-    const verdict = computeVerdict({
-      operationType,
-      utterance,
-      groundedAmounts: resolved.groundedAmounts,
-      productName: resolved.productName,
-      candidateCount: resolved.candidateCount,
-      withinCaps: caps,
-      irreversible: op.irreversible,
-    });
-    await pending.setVerdict(opToken, verdict);
-    await appendAudit({ name: operationType.toUpperCase(), args: resolved.stagedArgs, caller: "stage", opToken, outcome: "staged" });
-    return ok({
-      op_token: opToken,
-      auto: verdict.auto,
-      requires_human_review: verdict.requiresHumanReview,
-      reasons: verdict.reasons,
-      preview: resolved.stagedArgs,
-      product_name: resolved.productName,
-      candidate_count: resolved.candidateCount,
-    });
+    if (!r.ok) return fail(r.code, r.message);
+    const { ok: _ok, ...data } = r;
+    return ok(data);
   } catch (e) {
     return fail("stage_failed", (e as Error).message, 422);
   }

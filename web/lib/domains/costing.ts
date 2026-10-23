@@ -288,6 +288,13 @@ export async function leadLandedCost(overrides: Record<string, number | null> = 
   return landedCost(types[0].id, countries[0], overrides);
 }
 
+export async function countriesFor(productId: number): Promise<string[]> {
+  const res = await db.execute(
+    sql`SELECT DISTINCT country FROM bom_lines WHERE product_id = ${productId} ORDER BY country`,
+  );
+  return (res.rows as Array<{ country: string }>).map((r) => r.country);
+}
+
 export async function leadComparison(): Promise<CountryComparison | null> {
   const types = await listBraceletTypes();
   if (!types.length) return null;
