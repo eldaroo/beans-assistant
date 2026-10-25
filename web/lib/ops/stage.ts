@@ -17,6 +17,9 @@ export type StageOutcome =
       product_name: string | null;
       candidate_count: number;
       operation_type: string;
+      // Whether this op can be undone after commit (drives the chat's Deshacer affordance).
+      // An irreversible op (price change, product register, cancel, deactivate) has no undo.
+      reversible: boolean;
     }
   | { ok: false; code: string; message: string };
 
@@ -92,5 +95,6 @@ export async function stageOperation(input: {
     product_name: resolved.productName,
     candidate_count: resolved.candidateCount,
     operation_type: operationType,
+    reversible: !op.irreversible,
   };
 }

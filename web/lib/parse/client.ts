@@ -1,7 +1,7 @@
 // The parser client. Calls the stateless Nomad parser (wal-parse pattern) over
 // HTTPS+bearer for a proposal; falls back to the local deterministic parser when the
 // remote is unset or unreachable. The parser only PROPOSES; the app validates + commits.
-import type { Proposal } from "@/lib/parse/types";
+import { actionOf, type Proposal } from "@/lib/parse/types";
 import { fallbackParse } from "@/lib/parse/fallback";
 
 export async function parseMessage(message: string): Promise<Proposal | null> {
@@ -19,7 +19,10 @@ export async function parseMessage(message: string): Promise<Proposal | null> {
         const j = (await res.json()) as { operationType?: string; args?: Record<string, unknown>; none?: boolean; note?: string };
         if (j?.none) return null;
         if (j?.operationType) {
-          return { operationType: j.operationType, args: j.args ?? {}, utterance: message, source: "remote", note: j.note };
+          // The remote parser still emits one op per turn; wrap it into the
+          // ordered-steps action shape. Compound (two-step) turns are built
+          // server-side when a product does not resolve, not by the parser.
+          return actionOf({ operationType: j.operationType, args: j.args ?? {} }, message, "remote", j.note);
         }
       }
     } catch {

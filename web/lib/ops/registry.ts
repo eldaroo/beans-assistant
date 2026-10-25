@@ -9,6 +9,7 @@ import { registerSale, cancelSale } from "@/lib/domains/sales";
 import { registerExpense, cancelExpense } from "@/lib/domains/expenses";
 import { addStock, cancelStockMovement } from "@/lib/domains/stock";
 import { createProduct, updateProduct, deactivateProduct } from "@/lib/domains/products";
+import { mintMinimalProductArgs } from "@/lib/ops/mint";
 
 export interface ResolveResult {
   stagedArgs: Record<string, unknown>;
@@ -106,7 +107,24 @@ export const OPS: Record<string, OpDef> = {
   REGISTER_PRODUCT: {
     irreversible: true,
     async resolve(rawArgs) {
-      return { stagedArgs: rawArgs, productName: null, candidateCount: 1, groundedAmounts: [] };
+      const args = rawArgs as {
+        sku?: string;
+        name?: string;
+        productRef?: string;
+        unitCostCents?: number;
+        unitPriceCents?: number | null;
+      };
+      // Name-only mint (spec 009 AC2): with no sku supplied, derive a minimal product
+      // from the name alone (derived sku, unit cost 0, price pending). This is what lets
+      // "me entraron 50 pulseras rojas" create "pulseras rojas" in one step.
+      if (!args.sku) {
+        const name = (args.name ?? args.productRef ?? "").trim();
+        if (name) {
+          const minted = mintMinimalProductArgs(name);
+          return { stagedArgs: minted as unknown as Record<string, unknown>, productName: minted.name, candidateCount: 1, groundedAmounts: [] };
+        }
+      }
+      return { stagedArgs: rawArgs, productName: args.name ?? null, candidateCount: 1, groundedAmounts: [] };
     },
     commit: (args) => createProduct(args as { sku: string; name: string; unitCostCents: number }),
   },

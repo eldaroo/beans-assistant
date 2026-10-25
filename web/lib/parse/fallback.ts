@@ -4,7 +4,7 @@
 // when it cannot confidently extract, so the turn is handled as a question, never a
 // wrong write. The real breadth lives in the LLM parser on Nomad (M6).
 import { parseOne } from "@/lib/money";
-import type { Proposal } from "@/lib/parse/types";
+import { actionOf, type Proposal } from "@/lib/parse/types";
 
 function norm(s: string): string {
   return s.toLowerCase().normalize("NFKD").replace(/\p{Mn}/gu, "");
@@ -61,12 +61,11 @@ export function fallbackParse(message: string): Proposal | null {
     const after = raw.slice(nums[0].end);
     const descMatch = after.match(/\b(?:en|de|por|para)\s+(.*)$/i);
     const description = (descMatch ? descMatch[1] : after).replace(/[^\w\s]/g, " ").trim() || "gasto";
-    return {
-      operationType: "REGISTER_EXPENSE",
-      args: { amountCents: Math.round(amount * 100), description },
-      utterance: raw,
-      source: "fallback",
-    };
+    return actionOf(
+      { operationType: "REGISTER_EXPENSE", args: { amountCents: Math.round(amount * 100), description } },
+      raw,
+      "fallback",
+    );
   }
 
   // Stock in: "llegaron 10 termos", "entraron 20 medias", "sume 15 de stock de X".
@@ -78,12 +77,11 @@ export function fallbackParse(message: string): Proposal | null {
       const qty = Math.round(nums[0].value);
       const ref = productRef(raw);
       if (!ref) return null;
-      return {
-        operationType: "ADD_STOCK",
-        args: { productRef: ref, quantity: qty },
-        utterance: raw,
-        source: "fallback",
-      };
+      return actionOf(
+        { operationType: "ADD_STOCK", args: { productRef: ref, quantity: qty } },
+        raw,
+        "fallback",
+      );
     }
   }
 
@@ -103,12 +101,11 @@ export function fallbackParse(message: string): Proposal | null {
     if (!ref) return null;
     const item: Record<string, unknown> = { productRef: ref, quantity: qty };
     if (unitPriceCents !== undefined) item.unitPriceCents = unitPriceCents;
-    return {
-      operationType: "REGISTER_SALE",
-      args: { items: [item] },
-      utterance: raw,
-      source: "fallback",
-    };
+    return actionOf(
+      { operationType: "REGISTER_SALE", args: { items: [item] } },
+      raw,
+      "fallback",
+    );
   }
 
   return null;
