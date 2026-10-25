@@ -50,6 +50,37 @@ export async function addStock(params: {
   return { status: "ok", movement_id: row.id };
 }
 
+// Recent inbound stock movements joined with their product name, newest first. The
+// reference resolver (spec 009 M2) matches an owner descriptor ("la entrada de termos")
+// against these. Only IN/ADJUSTMENT movements are cancel targets: an OUT movement is the
+// footprint of a sale and is reversed by cancelling that sale, not by deleting it here.
+export interface StockMovementRef {
+  id: number;
+  productId: number;
+  productName: string;
+  movementType: string;
+  quantity: number;
+  occurredAt: string;
+}
+
+export async function recentStockMovements(limit = 50): Promise<StockMovementRef[]> {
+  const res = await db.execute(
+    sql`SELECT sm.id, sm.product_id, p.name AS product_name, sm.movement_type, sm.quantity, sm.occurred_at
+        FROM stock_movements sm JOIN products p ON p.id = sm.product_id
+        WHERE sm.movement_type IN ('IN','ADJUSTMENT')
+        ORDER BY sm.occurred_at DESC, sm.id DESC
+        LIMIT ${limit}`,
+  );
+  return (res.rows as unknown[] as Array<Record<string, unknown>>).map((r) => ({
+    id: Number(r.id),
+    productId: Number(r.product_id),
+    productName: String(r.product_name),
+    movementType: String(r.movement_type),
+    quantity: Number(r.quantity),
+    occurredAt: String(r.occurred_at),
+  }));
+}
+
 export async function cancelStockMovement(movementId: number): Promise<{ status: string }> {
   const rows = await db
     .delete(stockMovements)

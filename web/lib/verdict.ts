@@ -64,6 +64,11 @@ export function computeVerdict(params: {
   candidateCount: number;
   withinCaps?: boolean;
   irreversible?: boolean;
+  // A PERMANENT registry-level confirm-only stamp (spec 009 AC7 / s-15). It is honored
+  // FIRST, before any grounding logic, so a destructive or cost-model op can never be
+  // promoted onto the auto path by a future grounding change, however well-grounded a turn
+  // looks. Independent of `irreversible`: the flag lives on the OpDef, not in this proof.
+  requiresHumanReview?: boolean;
 }): Verdict {
   const {
     operationType,
@@ -73,9 +78,15 @@ export function computeVerdict(params: {
     candidateCount,
     withinCaps = true,
     irreversible = false,
+    requiresHumanReview: forcedHumanReview = false,
   } = params;
   const reasons: string[] = [];
   const op = (operationType || "").toUpperCase();
+
+  if (forcedHumanReview) {
+    reasons.push("registry-human-review");
+    return { auto: false, requiresHumanReview: true, reasons };
+  }
 
   if (irreversible) {
     reasons.push("irreversible-op");

@@ -2,6 +2,7 @@
 // for a proposed op, write only the pending_ops preview, append a staged audit row.
 // Used by POST /api/ops/stage and by the chat route. The model never sets the verdict.
 import { getOp } from "@/lib/ops/registry";
+import type { RefCandidate } from "@/lib/ops/resolve-ref";
 import * as pending from "@/lib/pending-ops";
 import { computeVerdict } from "@/lib/verdict";
 import { withinCaps, appendAudit } from "@/lib/audit";
@@ -14,6 +15,9 @@ export type StageOutcome =
       requires_human_review: boolean;
       reasons: string[];
       preview: Record<string, unknown>;
+      // The full-consequence line for a destructive/edit confirm card (spec 009 AC6), or
+      // null for a write op whose preview the client summarizes from the args.
+      consequence: string | null;
       product_name: string | null;
       candidate_count: number;
       operation_type: string;
@@ -21,7 +25,17 @@ export type StageOutcome =
       // An irreversible op (price change, product register, cancel, deactivate) has no undo.
       reversible: boolean;
     }
+  // Ambiguous reference (spec 009 AC5): a descriptor matched more than one row. Nothing is
+  // staged; the caller renders a disambiguation picker and re-stages with the chosen id.
+  // pending_args carries the non-id resolved args (e.g. the new price for UPDATE_PRICE) so
+  // the picker re-stage does not lose them — a pick must not drop the thing being changed.
+  | { ok: false; code: "ambiguous_reference"; message: string; candidates: RefCandidate[]; operation_type: string; id_field: string; pending_args: Record<string, unknown> }
   | { ok: false; code: string; message: string };
+
+// Spanish article for a reference noun, for a grammatical not-found message.
+function articleFor(noun: string): string {
+  return noun === "gasto" ? "un" : "una";
+}
 
 // Best-effort product reference text for a clean "not found" message.
 function productRefOf(args: Record<string, unknown>): string | null {
@@ -45,12 +59,32 @@ export async function stageOperation(input: {
   const utterance = input.utterance ?? "";
   const resolved = await op.resolve(input.args ?? {});
 
-  // Guard a product-bound op whose reference did not resolve to any active product.
-  // Only product-looking-up ops (sale/stock/price/deactivate) can return 0 here;
-  // expense and product-registration hardcode a count of 1. Without this guard the
-  // op staged a confirmable card and the commit then failed with a raw DB error
-  // (product_id DEFAULT -> NOT NULL/FK violation). Fail cleanly and actionably.
+  // Ambiguous reference (spec 009 AC5): a descriptor matched more than one row and the op
+  // can disambiguate (it declares a refIdField). Stage nothing; hand the caller the
+  // candidates so it renders a picker and re-stages with the server-resolved id.
+  if (op.refIdField && resolved.candidateCount > 1 && resolved.candidates?.length) {
+    return {
+      ok: false,
+      code: "ambiguous_reference",
+      message: `Encontre ${resolved.candidates.length} coincidencias. Cual?`,
+      candidates: resolved.candidates,
+      operation_type: operationType,
+      id_field: op.refIdField,
+      // Everything the op already resolved EXCEPT the id the pick supplies (the id field
+      // is stripped so the chosen candidate's id wins). For UPDATE_PRICE this carries
+      // unitPriceCents; for the cancels it is empty.
+      pending_args: Object.fromEntries(Object.entries(resolved.stagedArgs).filter(([k]) => k !== op.refIdField)),
+    };
+  }
+
+  // Nothing resolved. A product-bound op (sale/stock/price/deactivate) returns a
+  // product_not_found so the chat can offer a create-then-act heal; a reference op
+  // (cancel sale/expense/stock) returns a clean reference_not_found. Without this guard
+  // the op staged a confirmable card and the commit then failed with a raw DB error.
   if (resolved.candidateCount === 0) {
+    if (op.refNoun && op.refNoun !== "producto") {
+      return { ok: false, code: "reference_not_found", message: `No encontre ${articleFor(op.refNoun)} ${op.refNoun} que coincida. Deci cual con mas detalle (por ejemplo "la ultima" o el nombre).` };
+    }
     const ref = productRefOf(input.args ?? {});
     return {
       ok: false,
@@ -81,6 +115,7 @@ export async function stageOperation(input: {
     candidateCount: resolved.candidateCount,
     withinCaps: caps,
     irreversible: op.irreversible,
+    requiresHumanReview: op.requiresHumanReview,
   });
   await pending.setVerdict(opToken, verdict);
   await appendAudit({ name: operationType, args: resolved.stagedArgs, caller: "stage", opToken, outcome: "staged" });
@@ -92,6 +127,7 @@ export async function stageOperation(input: {
     requires_human_review: verdict.requiresHumanReview,
     reasons: verdict.reasons,
     preview: resolved.stagedArgs,
+    consequence: resolved.preview ?? null,
     product_name: resolved.productName,
     candidate_count: resolved.candidateCount,
     operation_type: operationType,
