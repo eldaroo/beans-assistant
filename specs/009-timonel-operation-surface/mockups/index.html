@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timonel operation surface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-vp="mobile">
+
+<!-- mockup chrome (not part of the product) -->
+<div class="chrome" role="toolbar" aria-label="Mockup controls">
+  <b>Estado</b>
+  <button data-state="populated" aria-pressed="true">Conversacion</button>
+  <button data-state="empty" aria-pressed="false">Vacio</button>
+  <button data-state="loading" aria-pressed="false">Cargando</button>
+  <button data-state="error" aria-pressed="false">Error</button>
+  <span class="spacer"></span>
+  <b>Pantalla</b>
+  <button data-vp="mobile" aria-pressed="true">Movil</button>
+  <button data-vp="desktop" aria-pressed="false">Escritorio</button>
+  <b>Tema</b>
+  <button data-theme="light" aria-pressed="true">Claro</button>
+  <button data-theme="dark" aria-pressed="false">Oscuro</button>
+</div>
+
+<div class="stage">
+  <section class="phone" aria-label="Timonel">
+    <header class="app-head">
+      <div class="dot" aria-hidden="true">B</div>
+      <div>
+        <h1>Timonel</h1>
+        <p>Beans &amp; Co</p>
+      </div>
+    </header>
+
+    <!-- ===== POPULATED ===== -->
+    <div class="scroll" id="scroll-populated" role="log" aria-live="polite">
+
+      <!-- QUERY answer: shape 1, borderless, no button -->
+      <div class="row me"><div class="bubble-me">cuanto vendi hoy?</div></div>
+      <div class="answer">
+        <div class="lead">Hoy llevas</div>
+        <div class="big">$ 48.600</div>
+        <div class="sub">14 ventas pagadas. 2 pendientes de cobro.</div>
+      </div>
+
+      <!-- compound create+act: shape 2, one card, two steps, one Confirmar -->
+      <div class="row me"><div class="bubble-me">me entraron 50 pulseras rojas</div></div>
+      <div class="card" id="compound" data-settled="false">
+        <div class="eyebrow">Crear y cargar</div>
+        <div class="effect">No tengo "pulseras rojas" todavia.</div>
+        <div class="detail">Puedo crearla y cargar el stock en un paso.</div>
+        <ol class="steps">
+          <li><span class="chip-n" aria-hidden="true">1</span><div><div class="s-ttl">Crear producto "pulseras rojas"</div><div class="s-sub">precio pendiente, lo ponemos despues</div></div></li>
+          <li><span class="chip-n" aria-hidden="true">2</span><div><div class="s-ttl">Cargar 50 al stock</div><div class="s-sub">entrada de inventario</div></div></li>
+        </ol>
+        <div class="actions">
+          <button class="btn btn-primary full" data-confirm="compound">Confirmar</button>
+          <button class="btn btn-ghost" data-dismiss="compound">Ahora no</button>
+        </div>
+      </div>
+
+      <!-- disambiguation picker: tappable chips / listbox -->
+      <div class="row me"><div class="bubble-me">cambia el precio de las medias a 350</div></div>
+      <div class="card">
+        <div class="eyebrow">Cual producto</div>
+        <div class="effect">Tengo dos que dicen "medias".</div>
+        <div class="picker" role="listbox" aria-label="Elegi el producto">
+          <button class="opt" role="option" aria-selected="false" data-pick="medias azules"><span>Medias azules <span class="meta">SKU med-az . $300</span></span><span class="chev" aria-hidden="true">&rsaquo;</span></button>
+          <button class="opt" role="option" aria-selected="false" data-pick="medias grises"><span>Medias grises <span class="meta">SKU med-gr . $320</span></span><span class="chev" aria-hidden="true">&rsaquo;</span></button>
+          <button class="opt" role="option" aria-selected="false" data-pick="ninguna"><span>Ninguna de estas</span></button>
+        </div>
+      </div>
+
+      <!-- cancel: shape 3, amber, full consequence, verb-bearing confirm -->
+      <div class="row me"><div class="bubble-me">cancela la venta 42</div></div>
+      <div class="card danger" id="cancel" data-settled="false">
+        <div class="eyebrow">Cancelar venta</div>
+        <div class="effect">Venta 42 a Juan, $ 3.900</div>
+        <div class="consequence">Al cancelar se revierten 3 unidades al stock de "termo rojo".</div>
+        <div class="actions">
+          <button class="btn btn-danger full" data-confirm="cancel">Si, cancelar la venta</button>
+          <button class="btn btn-ghost" data-dismiss="cancel">Dejarla</button>
+        </div>
+      </div>
+
+      <!-- guided cost-flow: one field at a time + running checklist -->
+      <div class="row me"><div class="bubble-me">quiero cargar el costo del termo rojo</div></div>
+      <div class="card flow" id="flow">
+        <div class="eyebrow">Costo de "termo rojo"</div>
+        <ul class="checklist">
+          <li><span class="tick" aria-hidden="true">&check;</span> Insumo: acero <span class="meta">&nbsp;$ 1.200</span></li>
+          <li><span class="tick" aria-hidden="true">&check;</span> Packaging <span class="meta">&nbsp;$ 180</span></li>
+          <li class="pend"><span class="pend" aria-hidden="true">&circ;</span> Mano de obra <span>pendiente</span></li>
+          <li class="pend"><span class="pend" aria-hidden="true">&circ;</span> Flete <span>pendiente</span></li>
+        </ul>
+        <div class="q" id="flow-q">Cuanto pagaste de mano de obra por lote, y cuantas unidades salieron?</div>
+        <div class="field">
+          <input id="flow-input" type="text" placeholder="ej: 40000 por 500 unidades" aria-label="Respuesta de mano de obra">
+          <button class="btn btn-primary" data-flow-next>Seguir</button>
+        </div>
+        <div class="miss">Me faltan 2 datos para cerrar el costo.</div>
+      </div>
+
+      <!-- settled receipt + undo (low-contrast, own confirm) -->
+      <div class="receipt">
+        <span class="ok" aria-hidden="true">&check;</span>
+        <span>Gasto registrado: $ 500 en envio.</span>
+        <button class="undo-link" data-undo>Deshacer</button>
+      </div>
+
+    </div>
+
+    <!-- ===== EMPTY ===== -->
+    <div class="scroll hidden" id="scroll-empty">
+      <div class="empty">
+        <h2>Deci lo que pasa en el negocio.</h2>
+        <p>Timonel lo entiende, te muestra que va a hacer, y vos confirmas.</p>
+        <div class="examples">
+          <button data-example="vendi 2 medias a 300">vendi 2 medias a 300</button>
+          <button data-example="cuanto vendi hoy?">cuanto vendi hoy?</button>
+          <button data-example="cancela la ultima venta">cancela la ultima venta</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== LOADING ===== -->
+    <div class="scroll hidden" id="scroll-loading" aria-live="polite">
+      <div class="row me"><div class="bubble-me">gaste 1200 en insumos</div></div>
+      <div class="shimmer" aria-label="Timonel esta pensando"><span></span><span></span><span></span></div>
+    </div>
+
+    <!-- ===== ERROR (four calm sub-shapes) ===== -->
+    <div class="scroll hidden" id="scroll-error">
+      <div class="row me"><div class="bubble-me">asdfgh</div></div>
+      <div class="note"><strong>No entendi eso como una operacion.</strong> Proba: "vendi 2 medias a 300" o "cuanto gaste este mes".</div>
+
+      <div class="row me"><div class="bubble-me">vendi -5 termos</div></div>
+      <div class="note"><strong>Esa cantidad no cierra.</strong> La cantidad tiene que ser mayor a cero. Deci de nuevo cuantos vendiste.</div>
+
+      <div class="row me"><div class="bubble-me">cuanto facturamos en la otra tienda?</div></div>
+      <div class="note"><strong>Solo puedo ver este negocio.</strong> No tengo acceso a datos de otra cuenta.</div>
+
+      <div class="row me"><div class="bubble-me">cuanto vendi hoy?</div></div>
+      <div class="note"><strong>No pude leer los datos ahora.</strong> Fue una falla de conexion, no se perdio nada. Proba de nuevo en un momento.</div>
+    </div>
+
+    <form class="composer" id="composer" autocomplete="off">
+      <button type="button" class="mic" aria-label="Dictar">&#127908;</button>
+      <input id="composer-input" type="text" placeholder="Escribi una operacion..." aria-label="Mensaje">
+      <button type="submit" class="send" aria-label="Enviar">&uarr;</button>
+    </form>
+  </section>
+</div>
+
+<script type="module" src="fixture.js"></script>
+</body>
+</html>
