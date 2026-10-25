@@ -14,7 +14,7 @@ import { dispatchQuery } from "@/lib/ops/query";
 import { parseMessage } from "@/lib/parse/client";
 import { isQuery } from "@/lib/parse/types";
 import { stageOperation } from "@/lib/ops/stage";
-import { isCompoundableAct, productRefOfStep, stripModelProductIds } from "@/lib/ops/compound";
+import { isCompoundableAct, productRefOfStep, stripModelIds } from "@/lib/ops/compound";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -55,10 +55,11 @@ export async function POST(req: Request) {
 
     const turnNonce = body.turnNonce ?? crypto.randomUUID();
     // C1 stages the first step only. The parser emits a single-step proposal; multi-step
-    // (attribute expansion) is M5, which will iterate proposal.steps. Strip any model-
-    // supplied product id so the parser proposes descriptors only (D-050); the server mints
-    // and threads ids itself on the compound re-stage.
-    const step = stripModelProductIds(proposal.steps[0]);
+    // (attribute expansion) is M5, which will iterate proposal.steps. Strip EVERY model-
+    // supplied id (product + sale/expense/stock reference) so the parser proposes
+    // descriptors only (D-050 / AC4); the server mints and threads ids itself on the
+    // compound re-stage or the disambiguation pick.
+    const step = stripModelIds(proposal.steps[0]);
 
     // 3. Stage the first step. The app re-derives the verdict; nothing is written yet.
     const staged = await stageOperation({
@@ -69,6 +70,22 @@ export async function POST(req: Request) {
     });
 
     if (!staged.ok) {
+      // Disambiguation (AC5): a descriptor matched more than one row. Return a picker;
+      // each option carries the server-resolved id, and selecting one re-enters staging
+      // with that id through /api/ops/stage (not the parser path, so the id is trusted).
+      if (staged.code === "ambiguous_reference" && "candidates" in staged) {
+        return ok({
+          kind: "disambiguation",
+          operation_type: staged.operation_type,
+          id_field: staged.id_field,
+          candidates: staged.candidates,
+          // Carry the non-id resolved args (e.g. the new price) so the pick re-stage keeps
+          // the thing being changed; a pick that dropped it would commit a no-op.
+          pending_args: staged.pending_args,
+          utterance: proposal.utterance,
+          turn_nonce: turnNonce,
+        });
+      }
       // Compound heal (AC1): a product-not-found on a stock or sale becomes a two-step
       // create-then-act. Step 1 mints a minimal product from the name; step 2 is the
       // original act, threaded to the created id at confirm time (client-driven, in
@@ -106,6 +123,7 @@ export async function POST(req: Request) {
       requires_human_review: staged.requires_human_review,
       reasons: staged.reasons,
       preview: staged.preview,
+      consequence: staged.consequence,
       product_name: staged.product_name,
       operation_type: staged.operation_type,
       reversible: staged.reversible,

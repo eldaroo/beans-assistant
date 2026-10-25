@@ -62,6 +62,38 @@ export function stripModelProductIds(step: ParsedOp): ParsedOp {
   return { operationType: step.operationType, args };
 }
 
+// Merge a disambiguation pick's server-resolved id onto the op's other resolved args
+// (spec 009 AC5). The pick supplies the id under `idField`; `pendingArgs` carries the rest
+// the op already resolved (for UPDATE_PRICE, the new unitPriceCents). Dropping pendingArgs
+// here is the bug the council blocked on: a picked price change would re-stage with no
+// price and commit a no-op while the card said "Hecho". Pure.
+export function pickedStageArgs(
+  pendingArgs: Record<string, unknown>,
+  idField: string,
+  id: number,
+): Record<string, unknown> {
+  return { ...pendingArgs, [idField]: id };
+}
+
+// Strip EVERY model-supplied id, not only the product id (spec 009 M2 / AC4 / D-050). A
+// cancel or edit carries a reference id (saleId, expenseId, movementId) the same way a
+// stock/sale carries a productId: the parser is contracted to emit DESCRIPTORS only, so a
+// hijacked parser that emitted `saleId: 7` could otherwise cancel the wrong sale. The chat
+// route runs this on every parser proposal; the only legitimate id arrives later, on a
+// server-authenticated re-stage (the disambiguation pick or the compound thread). Pure.
+//
+// M5 note (ordered multi-step turns): the strip MUST be applied to EVERY proposal step, not
+// only steps[0]. It stays at the chat-route parser boundary (not inside stageOperation) on
+// purpose: the compound thread and the disambiguation pick re-stage carry a legitimate
+// server-resolved id THROUGH stageOperation, and stripping there would discard it.
+const MODEL_REF_IDS = ["saleId", "expenseId", "movementId"] as const;
+export function stripModelIds(step: ParsedOp): ParsedOp {
+  const base = stripModelProductIds(step); // drops productId on the item(s) and top level
+  const args = { ...(base.args ?? {}) };
+  for (const k of MODEL_REF_IDS) delete (args as Record<string, unknown>)[k];
+  return { operationType: base.operationType, args };
+}
+
 // Thread a freshly-created product id into the act step, replacing the unresolved ref.
 // Pure: returns a new step, never mutates. This is how step 2 inherits step 1's result
 // without a model ever supplying an id (D-050): the server mints the product and the
