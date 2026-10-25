@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#240
+
 ---
 date: 2026-10-24
 status: draft, ready to /develop
