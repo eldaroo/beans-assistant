@@ -15,6 +15,10 @@ export type BrainOutcome = { answered: true; reply: string } | { answered: false
 export async function gatewayAnswer(args: {
   utterance: string;
   turnNonce: string;
+  // Threaded OUT OF BAND to the box for grounding (spec 010 M3, T-015, D-061); never reaches
+  // the model. The brain seam just forwards them to runAgent.
+  flowNonce?: string;
+  owner?: string;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): Promise<BrainOutcome> {
@@ -23,6 +27,8 @@ export async function gatewayAnswer(args: {
     const r = await runAgent({
       utterance: args.utterance,
       turnNonce: args.turnNonce,
+      flowNonce: args.flowNonce,
+      owner: args.owner,
       system: TIMONEL_SYSTEM,
       signal: args.signal ?? AbortSignal.timeout(agentTimeoutMs()),
       fetchImpl: args.fetchImpl,

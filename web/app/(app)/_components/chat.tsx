@@ -208,6 +208,24 @@ export function Chat() {
         } else {
           push({ role: "card", opToken: op_token, operation: operation_type, preview, consequence, needsConfirm: true, reversible: Boolean(reversible), state: "pending" });
         }
+      } else if (r.data.kind === "agent") {
+        // The native tool-use brain answered (spec 010 M3, T-016): render its prose, then any
+        // write previews it staged, in order. Each op carries its server-computed verdict; an
+        // auto op client-confirms with a loud Undo affordance, otherwise a confirm card shows.
+        // Same render path as a parser proposal, so the chat looks identical whichever brain ran.
+        if (typeof r.data.reply === "string" && r.data.reply.trim()) push({ role: "answer", text: r.data.reply });
+        for (const op of (r.data.ops ?? []) as Array<{ op_token: string; auto: boolean; operation_type: string; preview: unknown; reversible: boolean; consequence: string | null }>) {
+          const { op_token, auto, operation_type, preview, reversible, consequence } = op;
+          if (auto) {
+            const c = await postJson("/api/ops/confirm", { op_token });
+            // On a failed auto-confirm, leave the card needing the owner's click so they can
+            // retry, rather than an inert pending card with only an error line (council: Edut).
+            push({ role: "card", opToken: op_token, operation: operation_type, preview, consequence, needsConfirm: !c.ok, reversible: Boolean(reversible), state: c.ok ? "done" : "pending" });
+            if (!c.ok) push({ role: "bot", text: `No se pudo confirmar: ${c.error?.message}` });
+          } else {
+            push({ role: "card", opToken: op_token, operation: operation_type, preview, consequence, needsConfirm: true, reversible: Boolean(reversible), state: "pending" });
+          }
+        }
       }
     } catch (e) {
       push({ role: "bot", text: `Error de red: ${(e as Error).message}` });

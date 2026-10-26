@@ -113,7 +113,18 @@ export async function verifyToolMode({ claudeBin, cwd, mcpConfig = BEANS_MCP_CON
 
 // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
 // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
+// The out-of-band facts pinned into the agent child's env (spec 010 M3, T-015). Only non-empty
+// values are set, so a read-only turn (no flow/owner) spawns exactly as before. Exported for the
+// gateway test. None of these is ever a model prompt input or a tool arg.
+export function agentChildEnv({ turnNonce, flowNonce, owner } = {}) {
+  const extra = {};
+  if (turnNonce) extra.BEANS_TURN_NONCE = turnNonce;
+  if (flowNonce) extra.BEANS_FLOW_NONCE = flowNonce;
+  if (owner) extra.BEANS_OWNER = owner;
+  return Object.keys(extra).length ? extra : null;
+}
+
+function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, flowNonce, owner, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';
@@ -133,9 +144,13 @@ function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, mcpC
         : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
             cwd: cwd || '/alloc/data',
             stdio: ['pipe', 'pipe', 'ignore'],
-            // Pin the per-turn nonce into the child env (out of band, like the tenant) so the
-            // MCP server stamps it on any staged write (spec 007 council correlation fix).
-            env: childSpawnEnv(process.env, token || null, turnNonce ? { BEANS_TURN_NONCE: turnNonce } : null),
+            // Pin the per-turn nonce, the flow nonce, and the authenticated owner into the child
+            // env (out of band, like the tenant) so the MCP server stamps the turn nonce on any
+            // staged write (spec 007 correlation) and sends the flow nonce + owner on a
+            // write-preview call so the internal endpoint grounds against operator_turns keyed
+            // by (owner, flowNonce) (spec 010 M3, T-015, D-061). The MODEL never sees these: they
+            // live in the child env, never in the prompt or a tool arg.
+            env: childSpawnEnv(process.env, token || null, agentChildEnv({ turnNonce, flowNonce, owner })),
           });
     } catch (e) {
       return reject(e);
@@ -590,6 +605,11 @@ function makeHandler(pool, secret, runOpts = {}) {
         const prompt = (payload.prompt ?? '').toString();
         const system = (payload.system ?? '').toString();
         const turnNonce = (payload.turn_nonce ?? '').toString() || null;
+        // The flow nonce + owner ride in the request envelope out of band (spec 010 M3, T-015);
+        // the route sends them, the gateway injects them into the child env, the model never
+        // sees them. They key the operator_turns grounding on a write-preview call (D-061).
+        const flowNonce = (payload.flow_nonce ?? '').toString() || null;
+        const owner = (payload.owner ?? '').toString() || null;
         if (!prompt.trim()) {
           res.writeHead(400, { 'content-type': 'application/json' });
           res.end(errorBody('empty-prompt', 'prompt is required'));
@@ -603,6 +623,8 @@ function makeHandler(pool, secret, runOpts = {}) {
             agentFn: runOpts.agentFn,
             system,
             turnNonce,
+            flowNonce,
+            owner,
           });
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ ok: true, path, text }));

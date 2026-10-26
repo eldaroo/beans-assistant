@@ -23,6 +23,8 @@ import { parseMessage } from "@/lib/parse/client";
 import { fallbackParse } from "@/lib/parse/fallback";
 import { isQuery, isAction, actionOf, type ActionProposal } from "@/lib/parse/types";
 import { stageOperation } from "@/lib/ops/stage";
+import { getOp } from "@/lib/ops/registry";
+import { verdictPendingForTurn, type PendingOp } from "@/lib/pending-ops";
 import { isCompoundableAct, productRefOfStep, stripModelIds } from "@/lib/ops/compound";
 import { appendOperatorTurn, groundingCorpusFor, operatorTurnsFor } from "@/lib/flow-turns";
 import { priceAnswer, needsSalePrice, applySalePrice } from "@/lib/flow";
@@ -66,6 +68,26 @@ function pendingSaleFromFlow(priorTurns: string[]): ActionProposal | null {
     if (p && isAction(p) && needsSalePrice(p.steps[0])) return p;
   }
   return null;
+}
+
+// Map a staged pending_ops row back to the op-card shape the client renders (T-016). The
+// verdict (auto / requires_human_review / reasons) and the staged args were computed and
+// persisted at the internal preview endpoint (grounded against operator_turns, D-061); the op
+// never commits here. reversible is derived from the registry (not persisted). consequence is
+// null for the reversible write ops the client summarizes from the preview; the destructive
+// confirm-only ops that carry a consequence line are wired in M5.
+function opCard(po: PendingOp) {
+  return {
+    op_token: po.opToken,
+    operation_type: po.operationType,
+    auto: po.auto === 1,
+    requires_human_review: po.requiresHumanReview === 1,
+    reasons: Array.isArray(po.reasons) ? po.reasons : [],
+    preview: po.args as Record<string, unknown>,
+    consequence: null as string | null,
+    product_name: po.productName,
+    reversible: !getOp(po.operationType)?.irreversible,
+  };
 }
 
 export async function POST(req: Request) {
@@ -115,9 +137,30 @@ export async function POST(req: Request) {
       // (the parser path returns from dispatchQuery before its append). Immaterial — the flow
       // nonce rotates on a terminal response, so a read turn never pollutes a later op's corpus.
       await appendOperatorTurn(owner, flowNonce, message);
-      const g = await gatewayAnswer({ utterance: message, turnNonce, signal: AbortSignal.timeout(agentTimeoutMs()) });
+      // The readback key is minted HERE, server-side, and the body's turnNonce is ignored on the
+      // gateway path (council: Winston): nothing in this path needs a client-echoed nonce (the
+      // disambiguation/compound re-stages that do are parser-only), so the op_token readback is
+      // keyed strictly on a nonce the server controls. Threaded to the box out of band so the
+      // write-preview tools stamp the staged op with it.
+      const gatewayTurnNonce = crypto.randomUUID();
+      // Thread owner + flowNonce OUT OF BAND to the box (T-015, D-061): the write-preview tools
+      // ground against operator_turns keyed by (owner, flowNonce). The model never sees either.
+      const g = await gatewayAnswer({ utterance: message, turnNonce: gatewayTurnNonce, flowNonce, owner, signal: AbortSignal.timeout(agentTimeoutMs()) });
       if (g.answered) {
-        return ok({ kind: "answer", reply: g.reply, flow_nonce: flowNonce, flow_open: false });
+        // Op_token readback (T-016, D-062): the box staged any write previews INSIDE the tool
+        // loop; the op_token never crossed the gateway or the model (callPreview strips it). So
+        // the route recovers the staged ops from pending_ops by the turn nonce IT minted and
+        // renders them as cards / auto-post exactly as the parser path. A turn that only read or
+        // only talked stages nothing, so this is empty and the answer is pure prose.
+        const staged = await verdictPendingForTurn(gatewayTurnNonce);
+        if (staged.length === 0) {
+          return ok({ kind: "answer", reply: g.reply, flow_nonce: flowNonce, flow_open: false });
+        }
+        // A multi-step turn (one message staging several writes) renders in order (AC6). Each op
+        // carries its server-computed verdict; the client auto-posts an auto op and shows a
+        // confirm card otherwise, the same branch it uses for a parser proposal.
+        // flow_open stays false here; gateway-path multi-turn flow management is M4 (T-019/D-064).
+        return ok({ kind: "agent", reply: g.reply, ops: staged.map(opCard), flow_nonce: flowNonce, flow_open: false });
       }
       // Gateway did not answer (unconfigured never happens here; error/timeout/empty do): fall
       // through to the deterministic parser (D-063). The turn is already recorded above, so the
