@@ -27,6 +27,14 @@ import { isCompoundableAct, productRefOfStep, stripModelIds } from "@/lib/ops/co
 import { appendOperatorTurn, groundingCorpusFor, operatorTurnsFor } from "@/lib/flow-turns";
 import { priceAnswer, needsSalePrice, applySalePrice } from "@/lib/flow";
 import { resolveActiveProduct } from "@/lib/domains/products";
+import { gatewayConfigured, agentTimeoutMs } from "@/lib/gateway/client";
+import { gatewayAnswer } from "@/lib/gateway/brain";
+
+// The synchronous agent budget sits under this route cap (spec 010 T-006, D-063): the gateway
+// per-call timeout (agentTimeoutMs, default 45s) must be < maxDuration so the route always runs
+// its own parser fallback rather than being killed by the platform. If live latency in M3
+// (A-Q21) exceeds this, the call goes async; for now it is synchronous with the fallback.
+export const maxDuration = 60;
 
 type SaleItem = { productId?: number; productRef?: string; quantity: number; unitPriceCents?: number };
 
@@ -85,22 +93,74 @@ export async function POST(req: Request) {
   // operator's own turns" is the same principal, not merely "whatever was written under
   // this nonce". A reused/known nonce from another session reads/writes a different owner.
   const owner = session.user.email ?? session.user.name ?? "owner";
+  const turnNonce = body.turnNonce ?? crypto.randomUUID();
 
   try {
-    // 1. Read-only query, dispatched before the write path. Writes nothing. Closes the flow.
-    const q = await dispatchQuery(message);
-    if (q) return ok({ kind: "answer", reply: q.reply, query_id: q.queryId, flow_nonce: flowNonce, flow_open: false });
+    // THE BRAIN SEAM (spec 010 M1, D-058). The native tool-use gateway is the primary brain:
+    // it understands the whole turn and drives the MCP read tools. parseMessage is reached ONLY
+    // on gateway error or timeout (AC1/AC15). When BEANS_AGENT_URL is unset (the prod default
+    // until M6 deploys the box), gatewayConfigured() is false and the route is byte-identical to
+    // the spec-009 parser path below, so M1 is inert in prod.
+    if (gatewayConfigured()) {
+      // GO-LIVE ORDERING (M6, Kaze council): the gateway is read-only in M1. Do not set
+      // BEANS_AGENT_URL in prod until the M3 write-preview tools land and the system prompt
+      // tells the box to leave write intents to the staging path — otherwise a configured
+      // gateway would answer a write turn in prose and the proposal/auto-post path (below)
+      // would be skipped. M1 ships this branch dark (env unset), so this is inert in prod.
+      //
+      // Record the operator's own turn as the grounding source BEFORE the box runs (D-061): the
+      // write path (M3) reads operator_turns from inside the gateway's tool loop, never the
+      // model's tool args, so the current turn must be in the record before /run-agent is hit.
+      // Note vs spec-009 (Winston council): in configured mode a pure read turn is recorded here
+      // (the parser path returns from dispatchQuery before its append). Immaterial — the flow
+      // nonce rotates on a terminal response, so a read turn never pollutes a later op's corpus.
+      await appendOperatorTurn(owner, flowNonce, message);
+      const g = await gatewayAnswer({ utterance: message, turnNonce, signal: AbortSignal.timeout(agentTimeoutMs()) });
+      if (g.answered) {
+        return ok({ kind: "answer", reply: g.reply, flow_nonce: flowNonce, flow_open: false });
+      }
+      // Gateway did not answer (unconfigured never happens here; error/timeout/empty do): fall
+      // through to the deterministic parser (D-063). The turn is already recorded above, so the
+      // helper must not record it again.
+      return await runParserTurn({ message, owner, flowNonce, turnNonce, alreadyRecorded: true });
+    }
+    // Gateway not configured: the spec-009 parser path, unchanged.
+    return await runParserTurn({ message, owner, flowNonce, turnNonce, alreadyRecorded: false });
+  } catch (e) {
+    return fail("chat_failed", (e as Error).message, 422);
+  }
+}
 
-    // Record this operator turn in the server-authenticated flow record BEFORE grounding,
-    // so the corpus includes the current turn. Then build the grounding corpus from the
-    // server's record only (D-052), bounded to the operator and the recent active flow
-    // (TTL inside flow-turns.ts). priorTurns (captured BEFORE the append) recovers a pending
-    // sale for the completion path, and is likewise TTL-bounded so a stale flow cannot
-    // complete a sale the operator did not intend now.
-    const priorTurns = (await operatorTurnsFor(owner, flowNonce)).map((t) => t.text);
-    await appendOperatorTurn(owner, flowNonce, message);
-    const groundingCorpus = await groundingCorpusFor(owner, flowNonce);
+// The deterministic parser path (spec 009), unchanged in behavior — now reached as the fallback
+// when the gateway is off or fails (D-058/D-063). `alreadyRecorded` is true only when the
+// configured gateway already appended this operator turn before failing, so this helper does not
+// double-record it; priorTurns still means "every turn before the current one" in both cases.
+async function runParserTurn(opts: {
+  message: string;
+  owner: string;
+  flowNonce: string;
+  turnNonce: string;
+  alreadyRecorded: boolean;
+}) {
+  const { message, owner, flowNonce, turnNonce, alreadyRecorded } = opts;
 
+  // 1. Read-only query, dispatched before the write path. Writes nothing. Closes the flow.
+  const q = await dispatchQuery(message);
+  if (q) return ok({ kind: "answer", reply: q.reply, query_id: q.queryId, flow_nonce: flowNonce, flow_open: false });
+
+  // Record this operator turn in the server-authenticated flow record (unless the gateway path
+  // already did), so the corpus includes the current turn. Then build the grounding corpus from
+  // the server's record only (D-052), bounded to the operator and the recent active flow (TTL
+  // inside flow-turns.ts). priorTurns is every turn BEFORE the current one — captured before the
+  // append here, or by dropping the already-recorded last turn — so the completion path recovers
+  // a pending sale the same way regardless of which brain ran first. It is TTL-bounded so a stale
+  // flow cannot complete a sale the operator did not intend now.
+  const recorded = (await operatorTurnsFor(owner, flowNonce)).map((t) => t.text);
+  const priorTurns = alreadyRecorded ? recorded.slice(0, -1) : recorded;
+  if (!alreadyRecorded) await appendOperatorTurn(owner, flowNonce, message);
+  const groundingCorpus = await groundingCorpusFor(owner, flowNonce);
+
+  {
     // 2. Parse into an action proposal (ordered steps).
     let proposal = await parseMessage(message);
 
@@ -146,7 +206,6 @@ export async function POST(req: Request) {
       });
     }
 
-    const turnNonce = body.turnNonce ?? crypto.randomUUID();
     // Strip EVERY model-supplied id so the parser proposes descriptors only (D-050 / AC4);
     // the server mints and threads ids itself on the compound re-stage or picker.
     const step = stripModelIds(proposal.steps[0]);
@@ -222,7 +281,5 @@ export async function POST(req: Request) {
       flow_nonce: flowNonce,
       flow_open: false,
     });
-  } catch (e) {
-    return fail("chat_failed", (e as Error).message, 422);
   }
 }

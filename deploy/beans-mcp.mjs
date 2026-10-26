@@ -1,10 +1,12 @@
 // Beans MCP server (spec 007, the tool layer). Line-delimited JSON-RPC 2.0 over stdio.
 //
-// These tools hold NO database credentials (D-036). Each calls the FastAPI internal
-// operation API with the internal service token and the tenant pinned OUT OF BAND:
-// the gateway injects BEANS_TENANT_PHONE per request, the tool sends it as the
-// x-beans-tenant header, and the model never sees or sets it (D-037). There is no
-// commit tool and never will be; writes are two-phase previews that land in M3+ (D-038).
+// These tools hold NO database credentials (D-036). Each calls the Next.js internal
+// operation API (spec 010: BEANS_OPS_URL repointed from the dead FastAPI to the Next app,
+// e.g. https://<app>/api, so a tool path like /internal/ops/read_stock resolves to
+// https://<app>/api/internal/ops/read_stock) with the internal service token and the tenant
+// pinned OUT OF BAND: the gateway injects BEANS_TENANT_PHONE per request, the tool sends it as
+// the x-beans-tenant header, and the model never sees or sets it (D-037). There is no commit
+// tool and never will be; writes are two-phase previews that land in M3+ (D-038).
 //
 // M1 shipped one read tool (read_stock). M2 adds the rest of the read surface (s-04):
 // revenue, profit, sales summary, the eight command-center module snapshots, and a
