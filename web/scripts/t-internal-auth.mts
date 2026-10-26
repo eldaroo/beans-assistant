@@ -5,7 +5,7 @@
 // proves: a missing token is refused, a wrong token is refused (constant-time), a correct token
 // with no tenant is refused, and a correct token + tenant passes with the tenant surfaced. The
 // commit-path denial of the service token is an M3 assertion (the routes land there).
-import { internalGuard } from "@/lib/internal-auth";
+import { internalGuard, allowedTenants } from "@/lib/internal-auth";
 
 let fails = 0;
 function check(name: string, cond: boolean, detail = "") {
@@ -47,6 +47,26 @@ function main() {
   // --- correct token + tenant passes, tenant surfaced (trimmed)
   const good = internalGuard(headers({ "x-internal-token": "service-token-abc", "x-beans-tenant": " +5491100000001 " }), envOk);
   check("correct token + tenant -> ok with trimmed tenant", good.ok && good.tenant === "+5491100000001", JSON.stringify(good));
+
+  // ---------------------------------------------------------------- M3 (T-012): tenant allowlist
+  const envAllow = { INTERNAL_SERVICE_TOKEN: "service-token-abc", BEANS_INTERNAL_TENANTS: " +5491100000001 , +5491100000002 " } as unknown as NodeJS.ProcessEnv;
+
+  // allowedTenants parses comma-separated, trims, drops empties
+  check("allowedTenants parses + trims", JSON.stringify(allowedTenants(envAllow)) === JSON.stringify(["+5491100000001", "+5491100000002"]), JSON.stringify(allowedTenants(envAllow)));
+  check("allowedTenants unset -> []", allowedTenants({} as NodeJS.ProcessEnv).length === 0);
+
+  // a tenant ON the allowlist passes
+  const allowed = internalGuard(headers({ "x-internal-token": "service-token-abc", "x-beans-tenant": "+5491100000001" }), envAllow);
+  check("allowlisted tenant -> ok", allowed.ok && allowed.tenant === "+5491100000001", JSON.stringify(allowed));
+
+  // a tenant OFF the allowlist is refused 403 (defense in depth behind the token) — a leaked
+  // token driving a DIFFERENT business is stopped here
+  const denied = internalGuard(headers({ "x-internal-token": "service-token-abc", "x-beans-tenant": "+5491199999999" }), envAllow);
+  check("non-allowlisted tenant -> 403 tenant_not_allowed", !denied.ok && denied.code === "tenant_not_allowed" && denied.status === 403, JSON.stringify(denied));
+
+  // allowlist UNSET -> any non-empty tenant accepted (dark-safe default, still behind the token)
+  const openDefault = internalGuard(headers({ "x-internal-token": "service-token-abc", "x-beans-tenant": "+anything" }), envOk);
+  check("allowlist unset -> non-empty tenant accepted (open default)", openDefault.ok && openDefault.tenant === "+anything", JSON.stringify(openDefault));
 
   console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAIL`);
   process.exit(fails ? 1 : 0);

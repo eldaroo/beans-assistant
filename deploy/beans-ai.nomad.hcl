@@ -277,7 +277,18 @@ job "beans-ai" {
           
           // Run ONE native tool-use turn on a fresh child (no warm pool: each request gets a disposed child
           // with the current pool token). Resolves the assistant's final text; rejects on timeout/dead child.
-          function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
+          // The out-of-band facts pinned into the agent child's env (spec 010 M3, T-015). Only non-empty
+          // values are set, so a read-only turn (no flow/owner) spawns exactly as before. Exported for the
+          // gateway test. None of these is ever a model prompt input or a tool arg.
+          export function agentChildEnv({ turnNonce, flowNonce, owner } = {}) {
+            const extra = {};
+            if (turnNonce) extra.BEANS_TURN_NONCE = turnNonce;
+            if (flowNonce) extra.BEANS_FLOW_NONCE = flowNonce;
+            if (owner) extra.BEANS_OWNER = owner;
+            return Object.keys(extra).length ? extra : null;
+          }
+          
+          function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, flowNonce, owner, mcpConfig = BEANS_MCP_CONFIG, maxTurns = AGENT_MAX_TURNS, timeoutMs = AGENT_TURN_TIMEOUT, spawnChild } = {}) {
             return new Promise((resolve, reject) => {
               let settled = false;
               let out = '';
@@ -297,9 +308,13 @@ job "beans-ai" {
                   : spawn(claudeBin || process.env.CLAUDE_BIN || 'claude', args, {
                       cwd: cwd || '/alloc/data',
                       stdio: ['pipe', 'pipe', 'ignore'],
-                      // Pin the per-turn nonce into the child env (out of band, like the tenant) so the
-                      // MCP server stamps it on any staged write (spec 007 council correlation fix).
-                      env: childSpawnEnv(process.env, token || null, turnNonce ? { BEANS_TURN_NONCE: turnNonce } : null),
+                      // Pin the per-turn nonce, the flow nonce, and the authenticated owner into the child
+                      // env (out of band, like the tenant) so the MCP server stamps the turn nonce on any
+                      // staged write (spec 007 correlation) and sends the flow nonce + owner on a
+                      // write-preview call so the internal endpoint grounds against operator_turns keyed
+                      // by (owner, flowNonce) (spec 010 M3, T-015, D-061). The MODEL never sees these: they
+                      // live in the child env, never in the prompt or a tool arg.
+                      env: childSpawnEnv(process.env, token || null, agentChildEnv({ turnNonce, flowNonce, owner })),
                     });
               } catch (e) {
                 return reject(e);
@@ -754,6 +769,11 @@ job "beans-ai" {
                   const prompt = (payload.prompt ?? '').toString();
                   const system = (payload.system ?? '').toString();
                   const turnNonce = (payload.turn_nonce ?? '').toString() || null;
+                  // The flow nonce + owner ride in the request envelope out of band (spec 010 M3, T-015);
+                  // the route sends them, the gateway injects them into the child env, the model never
+                  // sees them. They key the operator_turns grounding on a write-preview call (D-061).
+                  const flowNonce = (payload.flow_nonce ?? '').toString() || null;
+                  const owner = (payload.owner ?? '').toString() || null;
                   if (!prompt.trim()) {
                     res.writeHead(400, { 'content-type': 'application/json' });
                     res.end(errorBody('empty-prompt', 'prompt is required'));
@@ -767,6 +787,8 @@ job "beans-ai" {
                       agentFn: runOpts.agentFn,
                       system,
                       turnNonce,
+                      flowNonce,
+                      owner,
                     });
                     res.writeHead(200, { 'content-type': 'application/json' });
                     res.end(JSON.stringify({ ok: true, path, text }));
@@ -875,9 +897,9 @@ job "beans-ai" {
           //
           // A subscription token can only be minted by an interactive `claude setup-token` browser login;
           // it can never be generated. Dario seeds the list into the Nomad Variable.
-
+          
           const DEFAULT_COOLDOWN_MIN = Number(process.env.BEANS_TOKEN_COOLDOWN_MIN) || 60;
-
+          
           // ── Pure detection (lifted from quinn-discord/token-pool.mjs, kept identical) ──────────────
           // Decide if `text` (a claude run's output) is a subscription-limit failure, and pull the reset
           // time if present. The machine form is "usage limit reached|<unix-epoch>"; human phrasings carry
@@ -903,16 +925,16 @@ job "beans-ai" {
             if (SIGNATURES.some((re) => re.test(t))) return { exhausted: true, resetAt: null };
             return { exhausted: false, resetAt: null };
           }
-
+          
           export function cooldownReset(now = new Date()) {
             return new Date(now.getTime() + DEFAULT_COOLDOWN_MIN * 60 * 1000);
           }
-
+          
           export function allExhaustedMessage(reset) {
             const when = reset ? ` La primera se resetea alrededor de $${new Date(reset).toISOString()}.` : '';
             return `Todas las cuentas de Beans estan en su limite de uso.$${when} Agrega una cuenta o espera el reset.`;
           }
-
+          
           // Parse the token list from env. Accepts CLAUDE_CODE_OAUTH_TOKENS as a JSON array OR a
           // newline/comma-separated list, and the single CLAUDE_CODE_OAUTH_TOKEN for back-compat. Order is
           // preserved (primary first), empties dropped, duplicates removed.
@@ -934,46 +956,46 @@ job "beans-ai" {
             for (let i = 2; i <= 9; i++) push(env['CLAUDE_CODE_OAUTH_TOKEN_' + i]);
             return out;
           }
-
+          
           function tail(token) {
             return '…' + String(token).slice(-6);
           }
-
+          
           // In-memory pool: a list of tokens, each benchable until a reset time.
           export class TokenPool {
             constructor(tokens = []) {
               this.entries = tokens.map((token, i) => ({ token, exhaustedUntil: null, label: 'acct-' + (i + 1) }));
             }
-
+          
             get size() {
               return this.entries.length;
             }
-
+          
             _healthy(now) {
               const t = now instanceof Date ? now.getTime() : now;
               return this.entries.filter((e) => !e.exhaustedUntil || e.exhaustedUntil.getTime() <= t);
             }
-
+          
             // The token to spawn with: the first healthy one, or null when the pool is empty/all-benched.
             active(now = new Date()) {
               const h = this._healthy(now);
               return h.length ? h[0].token : null;
             }
-
+          
             bench(token, resetAt) {
               const e = this.entries.find((x) => x.token === token);
               if (e) e.exhaustedUntil = resetAt instanceof Date ? resetAt : cooldownReset();
             }
-
+          
             allBenched(now = new Date()) {
               return this.size > 0 && this._healthy(now).length === 0;
             }
-
+          
             earliestReset() {
               const times = this.entries.map((e) => e.exhaustedUntil).filter(Boolean).map((d) => d.getTime());
               return times.length ? new Date(Math.min(...times)) : null;
             }
-
+          
             // Masked board for /health; never exposes a token.
             statuses(now = new Date()) {
               const t = now.getTime();
@@ -986,7 +1008,7 @@ job "beans-ai" {
               }));
             }
           }
-
+          
           // The env a spawned claude child should carry: the active token overrides whatever is ambient, so
           // rotation takes effect on the next spawn. Pure so the wiring is unit-testable without a binary.
           export function childSpawnEnv(baseEnv, activeToken, extra = null) {
@@ -995,7 +1017,7 @@ job "beans-ai" {
             if (activeToken) env.CLAUDE_CODE_OAUTH_TOKEN = activeToken;
             if (extra) Object.assign(env, extra);
             return env;
-          }
+          }
         EOJS
       }
 
@@ -1018,10 +1040,10 @@ job "beans-ai" {
           // probe the real `claude` with the intended argv, read the INIT `tools` array it reports, and
           // refuse to serve unless that set is exactly the beans MCP tools and nothing else. Fail closed.
           import { spawn } from 'node:child_process';
-
+          
           // Tools the gateway intends to expose. Only names matching this prefix may be callable.
           export const ALLOWED_MCP_PREFIX = 'mcp__beans__';
-
+          
           // Probe the real claude binary with the gateway's intended argv and return the INIT tool set.
           // We only need the first `{"type":"system","subtype":"init","tools":[...]}` line, so we read
           // stdout until that event arrives, then kill the child. No model turn is spent.
@@ -1043,7 +1065,7 @@ job "beans-ai" {
               ];
               if (disallowedTools.length) args.push('--disallowedTools', ...disallowedTools);
               if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
-
+          
               let child;
               try {
                 child = spawn(claudeBin, args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -1051,12 +1073,12 @@ job "beans-ai" {
                 reject(new Error('probe spawn failed: ' + e.message));
                 return;
               }
-
+          
               let buf = '';
               let settled = false;
               const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill(); } catch {} fn(v); };
               const timer = setTimeout(() => done(reject, new Error('probe timeout: no init event in ' + timeoutMs + 'ms')), timeoutMs);
-
+          
               child.on('error', (e) => done(reject, new Error('probe error: ' + e.message)));
               child.stdout.setEncoding('utf8');
               child.stdout.on('data', (chunk) => {
@@ -1082,7 +1104,7 @@ job "beans-ai" {
               });
             });
           }
-
+          
           // Decide pass/fail from an init probe {tools, mcpServers} (a bare tools array is accepted too).
           //
           // SECURITY (the hard guarantee): every callable built-in must be disallowed, so the only tool a
@@ -1110,13 +1132,13 @@ job "beans-ai" {
               beansStatus: beans ? beans.status : 'absent',
             };
           }
-
+          
           // Full self-check: probe the real claude and judge. Resolves the judge verdict object.
           export async function verifyToolPosture(opts = {}) {
             const probe = await probeCallableTools(opts);
             return judgeToolPosture(probe, opts);
           }
-
+          
           // CLI entry: node tool-posture.mjs --mcp-config <path> [--disallow a b c]. Exit 0 on pass,
           // 1 on a leak (fail closed), 2 on a probe error. The gateway entrypoint calls this at boot.
           async function main(argv) {
@@ -1143,12 +1165,12 @@ job "beans-ai" {
               process.exit(2);
             }
           }
-
+          
           // Run main only when invoked directly, not when imported.
           import { fileURLToPath } from 'node:url';
           if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
             main(process.argv.slice(2));
-          }
+          }
         EOJS
       }
 
@@ -1167,14 +1189,14 @@ job "beans-ai" {
           // a guarded-fetch wrapper the outbound call paths use, so the control is testable and fails
           // closed in code as well as at the firewall.
           import process from 'node:process';
-
+          
           // Anthropic API hosts the model traffic legitimately reaches.
           export const ANTHROPIC_HOSTS = ['api.anthropic.com', 'anthropic.com'];
-
+          
           function _host(u) {
             try { return new URL(u).hostname.toLowerCase(); } catch { return ''; }
           }
-
+          
           // Build the allowlist of hostnames from the ops API url plus Anthropic.
           export function egressAllowlist({ opsUrl = process.env.BEANS_OPS_URL, extra = [] } = {}) {
             const hosts = new Set(ANTHROPIC_HOSTS.map((h) => h.toLowerCase()));
@@ -1183,7 +1205,7 @@ job "beans-ai" {
             for (const e of extra) { const h = (e || '').toLowerCase(); if (h) hosts.add(h); }
             return hosts;
           }
-
+          
           // True iff `url`'s host is on the allowlist (exact host or a subdomain of an allowed host).
           export function isEgressAllowed(url, allowlist) {
             const host = _host(url);
@@ -1193,14 +1215,14 @@ job "beans-ai" {
             }
             return false;
           }
-
+          
           // Throw on a disallowed host (the fetch-guard). Fail closed.
           export function assertEgressAllowed(url, allowlist) {
             if (!isEgressAllowed(url, allowlist)) {
               throw new Error('EGRESS-BLOCKED ' + (_host(url) || url));
             }
           }
-
+          
           // Wrap a fetch so every outbound call is checked against the allowlist first.
           export function guardedFetch(allowlist, fetchImpl = fetch) {
             return async function (url, opts) {
@@ -1208,7 +1230,7 @@ job "beans-ai" {
               return fetchImpl(url, opts);
             };
           }
-
+          
           // Boot check: the allowlist must contain the ops host AND Anthropic, or we refuse to serve
           // (a box that cannot name where it may talk is misconfigured). Returns {ok, allowlist, reason}.
           export function verifyEgressConfig({ opsUrl = process.env.BEANS_OPS_URL } = {}) {
@@ -1219,7 +1241,7 @@ job "beans-ai" {
             if (!hasAnthropic) return { ok: false, allowlist: [...allowlist], reason: 'anthropic-host-absent' };
             return { ok: true, allowlist: [...allowlist], reason: null };
           }
-
+          
           // CLI: node egress-guard.mjs. Exit 0 if the egress config is sane, 1 otherwise (fail closed).
           function main() {
             const r = verifyEgressConfig();
@@ -1230,11 +1252,11 @@ job "beans-ai" {
             console.error('EGRESS-FAIL reason=' + r.reason + ' allow=' + JSON.stringify(r.allowlist));
             process.exit(1);
           }
-
+          
           import { fileURLToPath } from 'node:url';
           if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
             main();
-          }
+          }
         EOJS
       }
 
@@ -1246,11 +1268,13 @@ job "beans-ai" {
         data        = <<-EOJS
           // Beans MCP server (spec 007, the tool layer). Line-delimited JSON-RPC 2.0 over stdio.
           //
-          // These tools hold NO database credentials (D-036). Each calls the FastAPI internal
-          // operation API with the internal service token and the tenant pinned OUT OF BAND:
-          // the gateway injects BEANS_TENANT_PHONE per request, the tool sends it as the
-          // x-beans-tenant header, and the model never sees or sets it (D-037). There is no
-          // commit tool and never will be; writes are two-phase previews that land in M3+ (D-038).
+          // These tools hold NO database credentials (D-036). Each calls the Next.js internal
+          // operation API (spec 010: BEANS_OPS_URL repointed from the dead FastAPI to the Next app,
+          // e.g. https://<app>/api, so a tool path like /internal/ops/read_stock resolves to
+          // https://<app>/api/internal/ops/read_stock) with the internal service token and the tenant
+          // pinned OUT OF BAND: the gateway injects BEANS_TENANT_PHONE per request, the tool sends it as
+          // the x-beans-tenant header, and the model never sees or sets it (D-037). There is no commit
+          // tool and never will be; writes are two-phase previews that land in M3+ (D-038).
           //
           // M1 shipped one read tool (read_stock). M2 adds the rest of the read surface (s-04):
           // revenue, profit, sales summary, the eight command-center module snapshots, and a
@@ -1260,7 +1284,7 @@ job "beans-ai" {
           // unit-test with an injected fetch, no network and no spawned child.
           import process from 'node:process';
           import { egressAllowlist, isEgressAllowed } from './egress-guard.mjs';
-
+          
           // The eight command-center modules, by their registry ids. read_module takes one of
           // these so the owner can ask about a single domain ("¿cómo van los costos?"); the set
           // is fixed and model-closed (additionalProperties:false) so a hallucinated module id is
@@ -1268,7 +1292,7 @@ job "beans-ai" {
           export const MODULE_IDS = [
             'caja', 'productos', 'stock', 'ventas', 'costos', 'produccion', 'logistica', 'proveedores',
           ];
-
+          
           export const TOOLS = [
             {
               name: 'read_stock',
@@ -1319,8 +1343,8 @@ job "beans-ai" {
             {
               name: 'business_status',
               description:
-                'Read the one prioritized "what needs attention today" list across the whole business (low stock, ' +
-                'overdue items, and so on). Takes no arguments. Use it when the owner asks how the business is doing ' +
+                'Read the one prioritized "what needs attention today" list across the whole business (overdue ' +
+                'arrivals, overdue supplier check-ins, pending customs). Takes no arguments. Use it when the owner asks how the business is doing ' +
                 'or what needs them today. This is the same list the command-center home shows; never invent items.',
               inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             },
@@ -1458,7 +1482,7 @@ job "beans-ai" {
               inputSchema: { type: 'object', properties: {}, additionalProperties: false },
             },
           ];
-
+          
           // Generic call to an internal read endpoint. Returns an MCP tool-result content object.
           // Never throws for an operational failure: it returns an is_error content so the model
           // can tell the owner something went wrong instead of the loop crashing. `label` names the
@@ -1500,37 +1524,37 @@ job "beans-ai" {
             const out = resultKey ? { [resultKey]: payload[resultKey] } : payload;
             return { content: [{ type: 'text', text: JSON.stringify(out) }] };
           }
-
+          
           export async function readStock(cfg = {}) {
             return callRead({ ...cfg, path: '/internal/ops/read_stock' }, { label: 'read_stock', resultKey: 'stock' });
           }
-
+          
           export async function readRevenue(cfg = {}) {
             return callRead({ ...cfg, path: '/internal/ops/read_revenue' }, { label: 'read_revenue', resultKey: 'revenue' });
           }
-
+          
           export async function readProfit(cfg = {}) {
             return callRead({ ...cfg, path: '/internal/ops/read_profit' }, { label: 'read_profit', resultKey: 'profit' });
           }
-
+          
           export async function readSalesSummary(cfg = {}, { limit } = {}) {
             const body = JSON.stringify(Number.isInteger(limit) ? { limit } : {});
             return callRead({ ...cfg, path: '/internal/ops/read_sales_summary', body }, { label: 'read_sales_summary', resultKey: 'sales_summary' });
           }
-
+          
           export async function readModule(cfg = {}, { module } = {}) {
             const body = JSON.stringify({ module });
             return callRead({ ...cfg, path: '/internal/ops/read_module', body }, { label: 'read_module', resultKey: 'module' });
           }
-
+          
           export async function businessStatus(cfg = {}) {
             return callRead({ ...cfg, path: '/internal/ops/business_status' }, { label: 'business_status', resultKey: 'attention' });
           }
-
+          
           // Call an internal write-PREVIEW endpoint. Returns the staged preview (or a clarify) to the
           // model, but NEVER the op_token: the commit handle travels only to the owner's browser via the
           // chat envelope metadata, so even a hijacked model holds nothing that could commit (D-040).
-          export async function callPreview({ opsUrl, token, phone, path, body = '{}', turnNonce, fetchImpl = fetch } = {}, { label } = {}) {
+          export async function callPreview({ opsUrl, token, phone, path, body = '{}', turnNonce, flowNonce, owner, fetchImpl = fetch } = {}, { label } = {}) {
             if (!opsUrl || !token || !phone) {
               return { content: [{ type: 'text', text: `$${label} not configured (missing ops url, token, or tenant).` }], isError: true };
             }
@@ -1539,8 +1563,14 @@ job "beans-ai" {
               return { content: [{ type: 'text', text: `$${label} blocked: egress not allowed to $${url}` }], isError: true };
             }
             const headers = { 'content-type': 'application/json', 'x-internal-token': token, 'x-beans-tenant': phone };
-            // Pin the per-turn nonce out of band so the server stamps the staged op with this turn's id.
+            // Pin the per-turn nonce out of band so the server stamps the staged op with this turn's id,
+            // and the flow nonce + owner so the internal endpoint grounds the verdict against the
+            // server-authenticated operator_turns record keyed by (owner, flowNonce), NEVER these tool
+            // args (spec 010 M3, T-015/T-014, D-061). All three come from the gateway-injected child env,
+            // never from the model: the model cannot read or set a header.
             if (turnNonce) headers['x-beans-turn'] = turnNonce;
+            if (flowNonce) headers['x-beans-flow'] = flowNonce;
+            if (owner) headers['x-beans-owner'] = owner;
             let res;
             try {
               res = await fetchImpl(url, { method: 'POST', headers, body });
@@ -1557,46 +1587,46 @@ job "beans-ai" {
             const { ok, op_token, ...visible } = payload; // eslint-disable-line no-unused-vars
             return { content: [{ type: 'text', text: JSON.stringify(visible) }] };
           }
-
+          
           export async function registerSale(cfg = {}, { product, quantity, unit_amount } = {}) {
             const body = JSON.stringify({ product, quantity, unit_amount });
             return callPreview({ ...cfg, path: '/internal/ops/preview/register_sale', body }, { label: 'register_sale' });
           }
-
+          
           export async function registerExpense(cfg = {}, { amount, description, category } = {}) {
             const body = JSON.stringify({ amount, description, category });
             return callPreview({ ...cfg, path: '/internal/ops/preview/register_expense', body }, { label: 'register_expense' });
           }
-
+          
           export async function addStock(cfg = {}, { product, quantity } = {}) {
             const body = JSON.stringify({ product, quantity });
             return callPreview({ ...cfg, path: '/internal/ops/preview/add_stock', body }, { label: 'add_stock' });
           }
-
+          
           export async function updateProductPrice(cfg = {}, { product, new_amount } = {}) {
             const body = JSON.stringify({ product, new_amount });
             return callPreview({ ...cfg, path: '/internal/ops/preview/update_product_price', body }, { label: 'update_product_price' });
           }
-
+          
           export async function registerProduct(cfg = {}, { name, price_amount, cost_amount } = {}) {
             const body = JSON.stringify({ name, price_amount, cost_amount });
             return callPreview({ ...cfg, path: '/internal/ops/preview/register_product', body }, { label: 'register_product' });
           }
-
+          
           export async function registerProductsBatch(cfg = {}, { products } = {}) {
             const body = JSON.stringify({ products });
             return callPreview({ ...cfg, path: '/internal/ops/preview/register_products_batch', body }, { label: 'register_products_batch' });
           }
-
+          
           export async function deactivateProduct(cfg = {}, { product } = {}) {
             const body = JSON.stringify({ product });
             return callPreview({ ...cfg, path: '/internal/ops/preview/deactivate_product', body }, { label: 'deactivate_product' });
           }
-
+          
           export async function cancelLastOperation(cfg = {}) {
             return callPreview({ ...cfg, path: '/internal/ops/preview/cancel_last_operation', body: '{}' }, { label: 'cancel_last_operation' });
           }
-
+          
           // Build a JSON-RPC dispatcher. Each `*Impl` is injectable for tests.
           export function makeDispatcher({
             readStockImpl = readStock,
@@ -1650,15 +1680,19 @@ job "beans-ai" {
               return null;
             };
           }
-
+          
           // stdio main loop: read line-delimited JSON-RPC, dispatch, write responses.
           function main() {
             const config = {
               opsUrl: process.env.BEANS_OPS_URL,
               token: process.env.INTERNAL_SERVICE_TOKEN,
               phone: process.env.BEANS_TENANT_PHONE,
-              // The gateway injects this per request so a staged write is stamped with this turn's id.
+              // The gateway injects these per request (out of band, never a model input): the turn nonce
+              // stamps a staged write; the flow nonce + owner let the internal endpoint ground the verdict
+              // against operator_turns keyed by (owner, flowNonce) (spec 010 M3, T-015, D-061).
               turnNonce: process.env.BEANS_TURN_NONCE,
+              flowNonce: process.env.BEANS_FLOW_NONCE,
+              owner: process.env.BEANS_OWNER,
             };
             const dispatch = makeDispatcher({ config });
             const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
@@ -1677,11 +1711,11 @@ job "beans-ai" {
               }
             });
           }
-
+          
           import { fileURLToPath } from 'node:url';
           if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
             main();
-          }
+          }
         EOJS
       }
 

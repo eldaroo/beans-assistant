@@ -286,7 +286,7 @@ export async function businessStatus(cfg = {}) {
 // Call an internal write-PREVIEW endpoint. Returns the staged preview (or a clarify) to the
 // model, but NEVER the op_token: the commit handle travels only to the owner's browser via the
 // chat envelope metadata, so even a hijacked model holds nothing that could commit (D-040).
-export async function callPreview({ opsUrl, token, phone, path, body = '{}', turnNonce, fetchImpl = fetch } = {}, { label } = {}) {
+export async function callPreview({ opsUrl, token, phone, path, body = '{}', turnNonce, flowNonce, owner, fetchImpl = fetch } = {}, { label } = {}) {
   if (!opsUrl || !token || !phone) {
     return { content: [{ type: 'text', text: `${label} not configured (missing ops url, token, or tenant).` }], isError: true };
   }
@@ -295,8 +295,14 @@ export async function callPreview({ opsUrl, token, phone, path, body = '{}', tur
     return { content: [{ type: 'text', text: `${label} blocked: egress not allowed to ${url}` }], isError: true };
   }
   const headers = { 'content-type': 'application/json', 'x-internal-token': token, 'x-beans-tenant': phone };
-  // Pin the per-turn nonce out of band so the server stamps the staged op with this turn's id.
+  // Pin the per-turn nonce out of band so the server stamps the staged op with this turn's id,
+  // and the flow nonce + owner so the internal endpoint grounds the verdict against the
+  // server-authenticated operator_turns record keyed by (owner, flowNonce), NEVER these tool
+  // args (spec 010 M3, T-015/T-014, D-061). All three come from the gateway-injected child env,
+  // never from the model: the model cannot read or set a header.
   if (turnNonce) headers['x-beans-turn'] = turnNonce;
+  if (flowNonce) headers['x-beans-flow'] = flowNonce;
+  if (owner) headers['x-beans-owner'] = owner;
   let res;
   try {
     res = await fetchImpl(url, { method: 'POST', headers, body });
@@ -413,8 +419,12 @@ function main() {
     opsUrl: process.env.BEANS_OPS_URL,
     token: process.env.INTERNAL_SERVICE_TOKEN,
     phone: process.env.BEANS_TENANT_PHONE,
-    // The gateway injects this per request so a staged write is stamped with this turn's id.
+    // The gateway injects these per request (out of band, never a model input): the turn nonce
+    // stamps a staged write; the flow nonce + owner let the internal endpoint ground the verdict
+    // against operator_turns keyed by (owner, flowNonce) (spec 010 M3, T-015, D-061).
     turnNonce: process.env.BEANS_TURN_NONCE,
+    flowNonce: process.env.BEANS_FLOW_NONCE,
+    owner: process.env.BEANS_OWNER,
   };
   const dispatch = makeDispatcher({ config });
   const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');

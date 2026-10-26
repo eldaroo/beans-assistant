@@ -46,5 +46,29 @@ export function internalGuard(headers: HeaderBag, env: NodeJS.ProcessEnv = proce
   const tenant = (headers.get("x-beans-tenant") ?? "").trim();
   if (!tenant) return { ok: false, code: "tenant_required", message: "x-beans-tenant header is required", status: 400 };
 
+  // Single-business allowlist validation (M3, T-012, D-060). The tenant is pinned out of band
+  // by the gateway and must never be trusted as an arbitrary value: a leaked service token that
+  // tried to drive a DIFFERENT business is refused here, behind the token, as defense in depth.
+  // BEANS_INTERNAL_TENANTS is a comma-separated allowlist (today: the one Beans phone). Unset
+  // means "open" so the first deploy is reachable before the list is set (same discipline as
+  // auth.ts's BEANS_ALLOWED_EMAILS) — the family is still gated by INTERNAL_SERVICE_TOKEN, so an
+  // unset allowlist never opens the door to the unauthenticated. Set it in prod at M6 go-live.
+  const allow = allowedTenants(env);
+  if (allow.length > 0 && !allow.includes(tenant)) {
+    // The tenant is a pinned out-of-band value, never model-visible, so naming it here does not
+    // leak into the model's tool output (unlike the token path); the specific value aids audit.
+    console.error(`internalGuard: tenant ${tenant} is not in BEANS_INTERNAL_TENANTS`);
+    return { ok: false, code: "tenant_not_allowed", message: "Tenant not allowed", status: 403 };
+  }
+
   return { ok: true, tenant };
+}
+
+// The single-business tenant allowlist, parsed from BEANS_INTERNAL_TENANTS (comma-separated,
+// trimmed, empties dropped). Exported so the M3 guard test drives the allowed/denied split.
+export function allowedTenants(env: NodeJS.ProcessEnv = process.env): string[] {
+  return (env.BEANS_INTERNAL_TENANTS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }

@@ -11,7 +11,7 @@
 // COMMITTED->CANCELLING->CANCELLED. Every transition is one conditional UPDATE whose
 // row count names the single winner, which is exactly what neon-http delivers per query.
 
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pendingOps } from "@/db/schema";
 import type { Verdict } from "@/lib/verdict";
@@ -167,9 +167,19 @@ export async function revertCancel(opToken: string): Promise<void> {
     .where(and(eq(pendingOps.opToken, opToken), eq(pendingOps.status, "CANCELLING")));
 }
 
-// Every op this turn staged whose verdict is not yet computed (auto IS NULL,
-// PENDING), correlated by the turn nonce, oldest first. A list so a compound turn
-// (one message that stages a sale AND an expense) surfaces every staged write.
+// Every op this turn staged that is still PENDING (not yet committed or cancelled),
+// correlated by the turn nonce, oldest first (spec 010 M3, T-016, D-062). This is how the
+// chat route recovers the op_tokens the box staged inside the gateway tool loop: the token
+// never crosses the gateway or the model (callPreview strips it), so the route reads the
+// staged ops back from Neon by the nonce IT minted and injected out of band, then renders
+// the confirm card / auto-post in order. A list so a compound turn (one message that stages
+// a sale AND an expense) surfaces every staged write.
+//
+// The ops come back WITH their server-computed verdict already set: stageOperation grounds
+// and computes the verdict at the internal preview endpoint (D-061), then stages the op, so a
+// PENDING row for the turn already carries auto/requires_human_review/reasons. The readback
+// filters only on (turn, PENDING) — an op the route already rendered and the owner committed
+// leaves PENDING, so it never re-renders; a still-PENDING op is exactly the unrendered set.
 export async function verdictPendingForTurn(turnNonce: string): Promise<PendingOp[]> {
   if (!turnNonce) return [];
   const rows = await db
@@ -179,7 +189,6 @@ export async function verdictPendingForTurn(turnNonce: string): Promise<PendingO
       and(
         eq(pendingOps.turnNonce, turnNonce),
         eq(pendingOps.status, "PENDING"),
-        isNull(pendingOps.auto),
       ),
     )
     .orderBy(asc(pendingOps.createdAt));

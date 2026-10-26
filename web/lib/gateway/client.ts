@@ -43,6 +43,13 @@ export function agentTimeoutMs(): number {
 type RunAgentArgs = {
   utterance: string;
   turnNonce: string;
+  // The flow nonce and the authenticated operator, threaded OUT OF BAND (spec 010 M3, T-015,
+  // D-061). The gateway injects them into the per-request MCP env (BEANS_FLOW_NONCE / BEANS_OWNER)
+  // so the box's write-preview tools ground against the server-authenticated operator_turns
+  // record keyed by (owner, flowNonce). The MODEL never sees either: they ride in the request
+  // envelope, not the prompt, and the box puts them in the child env, never a tool arg.
+  flowNonce?: string;
+  owner?: string;
   system?: string;
   // The route owns the budget: it passes one AbortSignal.timeout(agentTimeoutMs()). When a
   // caller omits it (a test), the client builds its own from agentTimeoutMs().
@@ -50,7 +57,7 @@ type RunAgentArgs = {
   fetchImpl?: typeof fetch;
 };
 
-export async function runAgent({ utterance, turnNonce, system, signal, fetchImpl = fetch }: RunAgentArgs): Promise<GatewayResult> {
+export async function runAgent({ utterance, turnNonce, flowNonce, owner, system, signal, fetchImpl = fetch }: RunAgentArgs): Promise<GatewayResult> {
   const url = process.env.BEANS_AGENT_URL;
   const bearer = process.env.BEANS_AGENT_BEARER;
   if (!url || !bearer) throw new GatewayError("gateway_unconfigured", "BEANS_AGENT_URL / BEANS_AGENT_BEARER are not set");
@@ -63,10 +70,11 @@ export async function runAgent({ utterance, turnNonce, system, signal, fetchImpl
     res = await fetchImpl(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
-      // The gateway's /run-agent contract: { prompt, system, turn_nonce }. The flow nonce and
-      // the tenant are threaded into the gateway's MCP env out of band in M3 (T-015), never
-      // here and never into the model's view.
-      body: JSON.stringify({ prompt: utterance, system: system ?? "", turn_nonce: turnNonce }),
+      // The gateway's /run-agent contract: { prompt, system, turn_nonce, flow_nonce, owner }.
+      // The gateway injects flow_nonce + owner (and the pinned tenant) into the per-request MCP
+      // env out of band (T-015); they never enter the model's view. Omitted fields serialize as
+      // undefined (absent), so an unconfigured caller or a read-only turn is byte-compatible.
+      body: JSON.stringify({ prompt: utterance, system: system ?? "", turn_nonce: turnNonce, flow_nonce: flowNonce, owner }),
       signal: budget,
     });
   } catch (e) {
