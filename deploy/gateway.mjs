@@ -89,13 +89,37 @@ const AGENT_MAX_TURNS = Number(process.env.BEANS_AGENT_MAX_TURNS) || 6;
 const AGENT_TURN_TIMEOUT = Number(process.env.BEANS_AGENT_TIMEOUT_MS) || 120000;
 
 // The tool-mode flags, shared by the real turn and the boot self-check so they probe what runs.
-function agentFlags(mcpConfig = BEANS_MCP_CONFIG) {
+export function agentFlags(mcpConfig = BEANS_MCP_CONFIG) {
   return [
     '--allowedTools', 'mcp__beans__*',
     '--disallowedTools', ...TOOL_MODE_DISALLOWED,
     '--mcp-config', mcpConfig,
     '--strict-mcp-config',
   ];
+}
+
+// The COMPLETE production argv for one agent turn (spec 010 M5, T-025, AC-T8). The single source
+// of truth for how the real child is spawned, so the boot posture self-check validates the exact
+// tool governance that runs — not a hand-kept copy that could drift. runAgentTurn calls this; the
+// posture self-check derives its probe from the same TOOL_MODE_DISALLOWED + mcp__beans__* flags.
+// --dangerously-skip-permissions is NEVER here: in headless -p with no TTY, that absence is what
+// keeps a tool call auto-DENIED unless it is an allowlisted MCP tool (the whole safety model).
+export function buildAgentArgs({ system, maxTurns = AGENT_MAX_TURNS, mcpConfig = BEANS_MCP_CONFIG } = {}) {
+  return [
+    '-p',
+    '--input-format', 'stream-json',
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--max-turns', String(maxTurns),
+    ...(system ? ['--append-system-prompt', system] : []),
+    ...agentFlags(mcpConfig),
+  ];
+}
+
+// True iff an argv asks to skip permissions. The production argv must NEVER satisfy this (AC-T8);
+// a test asserts it on buildAgentArgs so a future edit that adds the flag fails loudly.
+export function argvSkipsPermissions(argv) {
+  return (argv || []).some((a) => String(a) === '--dangerously-skip-permissions');
 }
 
 // Boot posture self-check: probe the real claude with the production tool-mode flags and confirm
@@ -128,15 +152,7 @@ function runAgentTurn(userText, { claudeBin, cwd, token, system, turnNonce, flow
   return new Promise((resolve, reject) => {
     let settled = false;
     let out = '';
-    const args = [
-      '-p',
-      '--input-format', 'stream-json',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--max-turns', String(maxTurns),
-      ...(system ? ['--append-system-prompt', system] : []),
-      ...agentFlags(mcpConfig),
-    ];
+    const args = buildAgentArgs({ system, maxTurns, mcpConfig });
     let child;
     try {
       child = spawnChild

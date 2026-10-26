@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 import { internalGuard } from "@/lib/internal-auth";
 import { fail, requireDb } from "@/lib/http";
+import { auditToolCall } from "@/lib/audit";
 import { revenuePaidCents } from "@/lib/domains/analytics";
 import { centsToUsd } from "@/lib/money";
 
@@ -17,6 +18,7 @@ export async function POST(req: Request) {
   if (dbErr) return dbErr;
   try {
     const cents = await revenuePaidCents();
+    await auditToolCall("read_revenue");
     return NextResponse.json({ ok: true, revenue: { revenue_cents: cents, revenue_usd: centsToUsd(cents) } });
   } catch (e) {
     // The error.message is lifted into MODEL-visible tool output by the MCP callRead, so it

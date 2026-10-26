@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { internalGuard } from "@/lib/internal-auth";
 import { fail, requireDb } from "@/lib/http";
+import { auditToolCall } from "@/lib/audit";
 import { salesSummary } from "@/lib/domains/analytics";
 
 export const runtime = "nodejs";
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
 
   try {
     const sales_summary = await salesSummary(limit);
+    await auditToolCall("read_sales_summary");
     return NextResponse.json({ ok: true, sales_summary });
   } catch (e) {
     console.error("read_sales_summary internal read failed:", (e as Error).message);

@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { internalGuard } from "@/lib/internal-auth";
 import { fail, requireDb } from "@/lib/http";
+import { auditToolCall } from "@/lib/audit";
 import { currentStock } from "@/lib/domains/stock";
 
 export const runtime = "nodejs";
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
   if (dbErr) return dbErr;
   try {
     const stock = await currentStock();
+    await auditToolCall("read_stock");
     // The MCP tool reads payload.stock directly (its resultKey), so this is a flat named result,
     // not ok(data). Errors still return the named-error envelope the MCP reads as error.message.
     return NextResponse.json({ ok: true, stock });

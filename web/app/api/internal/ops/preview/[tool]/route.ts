@@ -57,6 +57,34 @@ export async function POST(req: Request, ctx: { params: Promise<{ tool: string }
   const groundingCorpus = turns.map((t) => t.text).join("\n");
   const utterance = turns.length ? turns[turns.length - 1].text : "";
 
+  // A batch tool (register_products_batch, M5 T-022) stages several ops under the SAME turn
+  // nonce; the chat route's verdictPendingForTurn readback then renders one confirm card per
+  // product in order. Every op is confirm-only (REGISTER_PRODUCT is irreversible), so a batch
+  // can never auto-post. No op_token is returned (the route reads them back by the turn nonce);
+  // the model gets only a count of what was prepared, to relay to the owner.
+  if ("batch" in mapped) {
+    try {
+      const results = [];
+      for (const inp of mapped.batch) {
+        results.push(await stageOperation({ operationType: inp.operationType, args: inp.args, utterance, turnNonce, groundingCorpus }));
+      }
+      const staged = results.filter((r) => r.ok) as Extract<Awaited<ReturnType<typeof stageOperation>>, { ok: true }>[];
+      const names = staged.map((r) => r.product_name).filter(Boolean);
+      return NextResponse.json({
+        ok: true,
+        batch: true,
+        staged_count: staged.length,
+        requested_count: mapped.batch.length,
+        products: names,
+        // Confirm-only by construction; surfaced so the model tells the owner it needs confirmation.
+        requires_human_review: true,
+      });
+    } catch (e) {
+      console.error(`internal preview batch failed:`, (e as Error).message);
+      return fail("preview_failed", "No pude preparar esas operaciones", 500);
+    }
+  }
+
   try {
     const r = await stageOperation({
       operationType: mapped.input.operationType,

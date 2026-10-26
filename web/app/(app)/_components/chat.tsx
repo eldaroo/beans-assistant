@@ -18,11 +18,12 @@ type Candidate = { id: number; label: string; detail?: string };
 // The destructive and edit ops (spec 009 M3): their card is amber and its confirm button
 // carries the verb, so the safety spine is visible, not theater (Kaze, three response
 // shapes). Everything else is a neutral create card.
-const DESTRUCTIVE_OPS = new Set(["CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK", "UPDATE_PRICE", "DEACTIVATE_PRODUCT", "EDIT_PRODUCT"]);
+const DESTRUCTIVE_OPS = new Set(["CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK", "CANCEL_LAST", "UPDATE_PRICE", "DEACTIVATE_PRODUCT", "EDIT_PRODUCT"]);
 function confirmVerb(operation: string): string {
   switch (operation.toUpperCase()) {
     case "CANCEL_SALE":
-    case "CANCEL_EXPENSE": return "Cancelar";
+    case "CANCEL_EXPENSE":
+    case "CANCEL_LAST": return "Cancelar";
     case "CANCEL_STOCK": return "Revertir";
     case "UPDATE_PRICE": return "Cambiar precio";
     case "DEACTIVATE_PRODUCT": return "Desactivar";
@@ -37,6 +38,7 @@ function actionLabel(operation: string): string {
     case "CANCEL_SALE": return "Cancelar venta";
     case "CANCEL_EXPENSE": return "Cancelar gasto";
     case "CANCEL_STOCK": return "Revertir entrada";
+    case "CANCEL_LAST": return "Cancelar última operación";
     case "UPDATE_PRICE": return "Cambiar precio";
     case "DEACTIVATE_PRODUCT": return "Desactivar producto";
     case "EDIT_PRODUCT": return "Editar producto";
@@ -45,12 +47,19 @@ function actionLabel(operation: string): string {
 }
 // Spanish fallback summary for the destructive/edit ops, so a card whose server consequence
 // is somehow absent never shows a raw opType ("CANCEL_SALE"). The normal path always carries
-// the consequence; this only guards the degrade case.
-function destructiveFallback(operation: string): string {
+// the consequence; this only guards the degrade case. CANCEL_LAST reads the preview {kind,id}
+// so the card NAMES the operation it will cancel (council: Edut BLOCK — informed consent: the
+// owner must see which operation, never a vague "cancel the last thing").
+function destructiveFallback(operation: string, preview?: unknown): string {
   switch (operation.toUpperCase()) {
     case "CANCEL_SALE": return "Cancelar la venta indicada.";
     case "CANCEL_EXPENSE": return "Cancelar el gasto indicado.";
     case "CANCEL_STOCK": return "Revertir la entrada de stock indicada.";
+    case "CANCEL_LAST": {
+      const p = preview as { kind?: string; id?: number } | undefined;
+      const noun = p?.kind === "sale" ? "la venta" : p?.kind === "expense" ? "el gasto" : p?.kind === "stock" ? "la entrada de stock" : "la última operación";
+      return p?.id != null ? `Cancelar ${noun} #${p.id} (la última operación registrada).` : "Cancelar la última operación registrada.";
+    }
     case "UPDATE_PRICE": return "Cambiar el precio del producto indicado.";
     case "DEACTIVATE_PRODUCT": return "Desactivar el producto indicado.";
     case "EDIT_PRODUCT": return "Editar el producto indicado.";
@@ -454,7 +463,7 @@ export function Chat() {
             // Full consequence line (server-provided); fall back to a Spanish default for a
             // destructive op if it is ever absent, never a raw opType. Split the first
             // sentence (the identity) from the rest (the effect) for the mockup's two tiers.
-            const line = m.consequence || (destructive ? destructiveFallback(m.operation) : summarize(m.operation, m.preview));
+            const line = m.consequence || (destructive ? destructiveFallback(m.operation, m.preview) : summarize(m.operation, m.preview));
             const dot = line.indexOf(". ");
             const identity = dot > 0 ? line.slice(0, dot + 1) : line;
             const effect = dot > 0 ? line.slice(dot + 2) : "";

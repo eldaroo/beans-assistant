@@ -844,6 +844,57 @@ Mode: UPDATE. Scope: only the decisions that connect the whole business-operatio
 - **Panel source.** Quinn synthesis of the Winston (native loop) and Edut/Tamir (consent)
   lenses.
 
+### D-065: The confirm-only tools wire through the same stage path; a per-turn auto-post cap bounds fan-out (spec 010 M5, T-022/T-023)
+
+- **Chosen.** The confirm-only write-preview tools (`update_product_price`, `register_product`,
+  `register_products_batch`, `deactivate_product`, `cancel_last_operation`) map through the same
+  pure `preview-map` → `stageOperation` path the reversible set uses; they carry no new commit
+  path and no new model trust. `register_products_batch` fans out to N `REGISTER_PRODUCT` stages
+  under one turn nonce (bounded by `BATCH_MAX`), each rendering its own confirm card.
+  `cancel_last_operation` resolves to a new cross-type `CANCEL_LAST` op that reads the newest
+  sale / expense / stock server-side (`pickNewestOperation`, pure) and stages the matching cancel;
+  it is destructive-capped. Every one of these is `irreversible` (most also `requiresHumanReview`),
+  so `computeVerdict` forces `auto:false` — they can never be promoted onto the auto path.
+- **The per-turn cap.** `numeralIsGrounded` is set-membership, not consumption (D-041), so one
+  grounded operator turn could ground an unbounded number of reversible auto-writes the model
+  stages. `demoteOverTurnCap` (pure) holds the fan-out of a single turn to `TURN_AUTO_CAP`
+  reversible auto-posts; past the cap, a write demotes to a confirm card. This is a distinct
+  guard from the per-session window caps (`lib/audit`), which bound total volume, not per-turn
+  fan-out.
+- **Panel source.** Tamir (the auto-post fan-out catch, AC-T6) + Amelia (the re-home-not-rebuild
+  mapping).
+
+### D-066: The spec-007 security controls are re-homed on the Vercel/Neon stack as executable, tested controls (spec 010 M5, T-024..T-027)
+
+- **Chosen.** The four spec-007 controls land on the new stack with tests, not as prose:
+  (a) the boot tool-posture self-check probes with the IDENTICAL production argv (`buildAgentArgs`
+  is the single source; `agentFlags` the shared tool governance) and asserts no callable built-in
+  and no `--dangerously-skip-permissions`; one child per request is disposed; (b) the network
+  egress firewall is the load-bearing control — a Nomad `NET_ADMIN` + nftables default-DROP output
+  chain allowing only loopback, established, DNS, and TCP/443 to the resolved `BEANS_OPS_URL` host
+  + `api.anthropic.com`, fail-closed, with `egress-guard.mjs` as the in-code second layer;
+  (c) every tool call (reads via `auditToolCall`, write intents via `stageOperation`) appends to
+  the append-only `audit_log`, with per-session + global caps (`capDecision`, tighter on
+  destructive ops); (d) the injection corpus is re-proven — a tool-returned instruction stays
+  ungrounded (grounding reads `operator_turns` only, D-061) so it never auto-posts, and any
+  built-in a hijacked model reaches fails the posture gate.
+- **Honest edge.** The firewall's live apply (nft availability on the brain image, Vercel's
+  dynamic ops-host IPs) is validated at deploy (#273/#274), not in the working tree; the config
+  and its shape are tested here. `BEANS_EGRESS_FIREWALL=0` is a documented, explicit deploy
+  escape hatch, never the default.
+- **Panel source.** Tamir (the eight new-stack security ACs) + Binyan (structural).
+
+### D-067: The parser is retired to the fallback role; go-live is the deploy + Dario's token + Edut's consent sign-off (spec 010 M6, T-028..T-031)
+
+- **Chosen.** The deterministic parser is retained ONLY as the degrade path (D-058): the chat
+  route reaches `parseMessage` exactly on the gateway-failure set (unconfigured / error / timeout
+  / empty), proven by `gatewayAnswer`'s `answered` contract and a route source-assertion. The
+  parser is not deleted. Go-live — deploying the `beans-ai` gateway, minting
+  `INTERNAL_SERVICE_TOKEN`, and the prod walk proving the reported dead-end is gone — is an
+  operator-gated act (#273/#274); Edut's consent sign-off on the revived write model (#275) is the
+  named-human gate. Those three are external to the build and tracked on the parent issue.
+- **Panel source.** Winston (the seam) + Edut (the consent gate, external).
+
 ## Carry-forward ledger (spec-007 decisions on the new stack)
 
 | Decision | Status on Vercel/Neon |
@@ -869,5 +920,7 @@ Mode: UPDATE. Scope: only the decisions that connect the whole business-operatio
   folded into `x-beans-turn`? Fallback: a distinct header, since turn and flow have different
   lifetimes. (D-061)
 - **A-Q23.** When the gateway loop reads a tool result then stages a write in the same turn,
-  is the per-session tool-call cap tight enough to bound a runaway loop? Fallback: measure,
-  add a tool-call counter if a turn loops. (D-063, D-035)
+  is the per-session tool-call cap tight enough to bound a runaway loop? **Addressed (M5, D-065):**
+  the per-turn auto-post cap (`demoteOverTurnCap`, `TURN_AUTO_CAP`) bounds the auto-post fan-out of
+  a single turn independently of the per-session window caps; live tool-call-count tuning stays a
+  deploy-time calibration. (D-063, D-035, D-065)

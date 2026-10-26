@@ -59,6 +59,26 @@ export interface Verdict {
   reasons: string[];
 }
 
+// The per-turn auto-post cap (spec 010 M5, T-023, AC-T6). A single grounded operator turn can
+// auto-post at most this many reversible writes. This bounds a DISTINCT risk from the per-session
+// window cap in lib/audit: numeralIsGrounded is SET-MEMBERSHIP, not consumption, so one grounded
+// numeral ("vendi 3") can ground three separate auto-sales the model stages from one turn. The
+// session window cap (60/window) would let all of them auto-post; this cap holds the fan-out of a
+// single turn to a human-sized number so a runaway or hijacked loop cannot auto-post a burst.
+export const TURN_AUTO_CAP = Number(process.env.BEANS_TURN_AUTO_CAP) || 3;
+
+// Demote a verdict to confirm-only when this turn has already auto-posted TURN_AUTO_CAP writes.
+// Pure: the caller supplies the count of prior auto writes staged under the same turn nonce
+// (lib/pending-ops.countAutoForTurn); this decides and records the demotion. Only an auto verdict
+// is ever demoted, and only at-or-above the cap — the first `cap` auto writes of a turn are
+// unaffected, so normal multi-write turns ("vendi 2 medias y 1 termo") still auto-post.
+export function demoteOverTurnCap(verdict: Verdict, priorAutoCount: number, cap: number = TURN_AUTO_CAP): Verdict {
+  if (verdict.auto && priorAutoCount >= cap) {
+    return { auto: false, requiresHumanReview: true, reasons: [...verdict.reasons, `per-turn-write-cap:${cap}`] };
+  }
+  return verdict;
+}
+
 export function computeVerdict(params: {
   operationType: string;
   utterance: string;

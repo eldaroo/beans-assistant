@@ -7,6 +7,9 @@ import './tool-posture.test.mjs';
 import './beans-mcp.test.mjs';
 import './token-pool.test.mjs';
 import './agent-mode.test.mjs';
+import './posture-argv.test.mjs';
+import './injection-corpus.test.mjs';
+import './egress-firewall.test.mjs';
 
 process.on('exit', (code) => {
   if (!process.exitCode && !code) console.log('all checks passed.');

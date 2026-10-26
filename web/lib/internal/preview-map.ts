@@ -20,7 +20,16 @@
 export type StageInput = { operationType: string; args: Record<string, unknown> };
 export type PreviewMapResult =
   | { ok: true; input: StageInput }
+  // A batch tool (register_products_batch) maps to several staged ops under one turn; the
+  // route stages each and the chat readback renders one confirm card per product. Each op is
+  // confirm-only (REGISTER_PRODUCT is irreversible), so a batch never auto-posts.
+  | { ok: true; batch: StageInput[] }
   | { ok: false; code: string; message: string };
+
+// A single register_products_batch call may stage at most this many products. A bound on the
+// fan-out (council: Tamir) so a hijacked model cannot stage thousands of inert previews in one
+// tool call; 50 is far above any real one-message product drop.
+export const BATCH_MAX = 50;
 
 // Whole currency units -> cents, matching the parser's Math.round(v * 100) convention
 // (lib/parse/fallback.ts). A non-finite OR negative amount yields undefined so the op stages
@@ -82,9 +91,65 @@ export function mapPreviewTool(tool: string, args: Record<string, unknown>): Pre
       const quantity = Number.isFinite(qn) && qn > 0 ? qn : 1;
       return { ok: true, input: { operationType: "ADD_STOCK", args: { productRef: product, quantity } } };
     }
+    // ── Confirm-only tools (spec 010 M5, T-022). Each maps to an irreversible registry op, so
+    // computeVerdict forces auto:false (requiresHumanReview) and the owner confirms on a card.
+    // The keystone holds: these mappings never produce the utterance or grounding corpus either;
+    // the endpoint still builds those from operator_turns. A price/amount is a model-authored
+    // numeral that rides only in args and is grounded against the operator's own words, but since
+    // the op is confirm-only the grounding never gates auto-post — the human card is the gate.
+    case "update_product_price": {
+      const product = typeof args.product === "string" ? args.product.trim() : "";
+      if (!product) return { ok: false, code: "bad_tool_args", message: "update_product_price requires a product" };
+      const cents = toCents(args.new_amount);
+      if (cents === undefined) return { ok: false, code: "bad_tool_args", message: "update_product_price requires a non-negative new_amount" };
+      return { ok: true, input: { operationType: "UPDATE_PRICE", args: { productRef: product, unitPriceCents: cents } } };
+    }
+    case "register_product": {
+      const r = mapRegisterProduct(args);
+      return r.ok ? { ok: true, input: { operationType: "REGISTER_PRODUCT", args: r.args } } : r;
+    }
+    case "register_products_batch": {
+      const list = Array.isArray(args.products) ? args.products : null;
+      if (!list || list.length === 0) return { ok: false, code: "bad_tool_args", message: "register_products_batch requires a non-empty products list" };
+      if (list.length > BATCH_MAX) return { ok: false, code: "bad_tool_args", message: `register_products_batch is limited to ${BATCH_MAX} products` };
+      const batch: StageInput[] = [];
+      for (const p of list) {
+        const r = mapRegisterProduct((p ?? {}) as Record<string, unknown>);
+        if (!r.ok) return r; // one bad product fails the whole set, nothing is staged ambiguously
+        batch.push({ operationType: "REGISTER_PRODUCT", args: r.args });
+      }
+      return { ok: true, batch };
+    }
+    case "deactivate_product": {
+      const product = typeof args.product === "string" ? args.product.trim() : "";
+      if (!product) return { ok: false, code: "bad_tool_args", message: "deactivate_product requires a product" };
+      return { ok: true, input: { operationType: "DEACTIVATE_PRODUCT", args: { productRef: product } } };
+    }
+    case "cancel_last_operation":
+      // No args by design: the registry CANCEL_LAST op resolves the single most-recent operation
+      // (sale / expense / stock) server-side and stages the matching cancel, confirm-only. The
+      // model names nothing to cancel; the server picks the newest and shows the owner which one.
+      return { ok: true, input: { operationType: "CANCEL_LAST", args: {} } };
     default:
-      // The confirm-only tools (update_product_price, register_product, register_products_batch,
-      // deactivate_product, cancel_last_operation) land in M5 (T-022).
-      return { ok: false, code: "unsupported_tool", message: `write-preview tool ${tool} is not wired yet` };
+      // Any tool not mapped above is a clean error, never a silent no-op.
+      return { ok: false, code: "unsupported_tool", message: `write-preview tool ${tool} is not wired` };
   }
+}
+
+// Map the register_product arg shape ({ name, price_amount, cost_amount? }) to REGISTER_PRODUCT
+// args. Shared by the single tool and the batch tool. A stated price is carried through (the
+// name-only auto-mint used by the compound heal leaves price pending; an explicit register does
+// not), and a stated cost overrides the mint's 0 placeholder. A non-finite/negative amount is a
+// clean error, never a silently-defaulted or negative value.
+function mapRegisterProduct(
+  args: Record<string, unknown>,
+): { ok: true; args: Record<string, unknown> } | { ok: false; code: string; message: string } {
+  const name = typeof args.name === "string" ? args.name.trim().slice(0, 120) : "";
+  if (!name) return { ok: false, code: "bad_tool_args", message: "register_product requires a name" };
+  const price = toCents(args.price_amount);
+  if (price === undefined) return { ok: false, code: "bad_tool_args", message: "register_product requires a non-negative price_amount" };
+  const out: Record<string, unknown> = { name, unitPriceCents: price };
+  const cost = toCents(args.cost_amount);
+  if (cost !== undefined) out.unitCostCents = cost;
+  return { ok: true, args: out };
 }
