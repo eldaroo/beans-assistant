@@ -31,7 +31,13 @@ type HeaderBag = { get(name: string): string | null };
 
 export function internalGuard(headers: HeaderBag, env: NodeJS.ProcessEnv = process.env): InternalAuthResult {
   const expected = env.INTERNAL_SERVICE_TOKEN;
-  if (!expected) return { ok: false, code: "internal_not_configured", message: "INTERNAL_SERVICE_TOKEN is not set", status: 503 };
+  // The message is lifted into MODEL-visible tool output by the MCP callRead, so it stays
+  // generic and never names the env var; the specific misconfiguration is logged server-side
+  // (Tamir, council M2). The machine-readable code is unchanged for the M1 guard test.
+  if (!expected) {
+    console.error("internalGuard: INTERNAL_SERVICE_TOKEN is not set");
+    return { ok: false, code: "internal_not_configured", message: "Servicio no disponible", status: 503 };
+  }
 
   const presented = headers.get("x-internal-token") ?? "";
   if (!presented || !constantTimeEqual(presented, expected)) {
