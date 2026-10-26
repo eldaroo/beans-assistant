@@ -159,7 +159,12 @@ export async function POST(req: Request) {
         // A multi-step turn (one message staging several writes) renders in order (AC6). Each op
         // carries its server-computed verdict; the client auto-posts an auto op and shows a
         // confirm card otherwise, the same branch it uses for a parser proposal.
-        // flow_open stays false here; gateway-path multi-turn flow management is M4 (T-019/D-064).
+        //
+        // M4 (T-019/D-064): the multi-turn CONSENT gate now reaches this path through the preview
+        // endpoint — an op whose grounding spans more than the current turn is forced auto:false and
+        // lands on a confirm card here too. What M4 did NOT wire is gateway-path flow_open management
+        // (keeping a flow open across turns to gather a missing fact on the gateway path); that stays
+        // deferred, so flow_open is false here and a gateway corpus is single-turn for now.
         return ok({ kind: "agent", reply: g.reply, ops: staged.map(opCard), flow_nonce: flowNonce, flow_open: false });
       }
       // Gateway did not answer (unconfigured never happens here; error/timeout/empty do): fall
