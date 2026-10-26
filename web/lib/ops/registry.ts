@@ -9,11 +9,14 @@ import { registerSale, cancelSale } from "@/lib/domains/sales";
 import { registerExpense, cancelExpense } from "@/lib/domains/expenses";
 import { addStock, cancelStockMovement } from "@/lib/domains/stock";
 import { createProduct, updateProduct, deactivateProduct } from "@/lib/domains/products";
+import { recordProduction, normalizeWeek } from "@/lib/domains/production";
+import { createSupplier, recordCheckin } from "@/lib/domains/suppliers";
 import { mintMinimalProductArgs } from "@/lib/ops/mint";
 import {
   resolveSale,
   resolveExpense,
   resolveStockMovement,
+  resolveSupplier,
   type RefCandidate,
   type RefResolution,
 } from "@/lib/ops/resolve-ref";
@@ -286,7 +289,158 @@ export const OPS: Record<string, OpDef> = {
     },
     commit: (args) => cancelStockMovement((args as { movementId: number }).movementId),
   },
+
+  // ------------------------------------- orphan operational writes (spec 009 M6 / AC12)
+  // Production record, supplier create, supplier check-in, product non-price edit — each
+  // reachable from chat and each confirm-only (irreversible: true keeps them off the
+  // auto-post path, so they always show a card the owner confirms). None was reachable
+  // from the assistant before; they are the "connect the rest of the business" cohort.
+
+  // Record a week's production. The optional product resolves server-side; the week
+  // defaults to the current ISO week when the owner does not name one.
+  RECORD_PRODUCTION: {
+    irreversible: true,
+    async resolve(rawArgs) {
+      const args = rawArgs as { productRef?: string; country?: string; periodWeek?: string; unitsProduced?: number };
+      const week = args.periodWeek ? normalizeWeek(args.periodWeek) : currentIsoWeek();
+      const country = (args.country ?? "").trim();
+      // Coerce + clamp a possibly-garbage model value: reject NaN, floor negatives to 0.
+      const units = Math.max(0, Math.round(Number(args.unitsProduced) || 0));
+      let productId: number | null = null;
+      let productName: string | null = null;
+      if (args.productRef) {
+        const r = await resolveActiveProduct(args.productRef);
+        if (r.candidateCount === 1 && r.product) {
+          productId = r.product.id;
+          productName = r.product.name;
+        }
+      }
+      const where = country ? ` en ${country}` : "";
+      // Honest preview (council: Amelia): if the owner named a product that did not resolve
+      // to exactly one, say so instead of silently dropping it — the record still posts,
+      // unassociated, and the card shows that.
+      const of = productName
+        ? ` de ${productName}`
+        : args.productRef
+          ? ` (sin asociar: no identifique "${args.productRef}")`
+          : "";
+      return {
+        stagedArgs: { productId, country: country || null, periodWeek: week, unitsProduced: units },
+        productName,
+        candidateCount: 1,
+        groundedAmounts: [],
+        preview: `Registrar produccion${of}: ${units} unidades${where}, semana ${week}.`,
+      };
+    },
+    commit: (args) => {
+      const a = args as { productId: number | null; country: string | null; periodWeek: string; unitsProduced: number };
+      return recordProduction({ productId: a.productId, country: a.country ?? "", periodWeek: a.periodWeek, unitsProduced: a.unitsProduced });
+    },
+  },
+
+  // Create a supplier from a name (optional country / contact).
+  CREATE_SUPPLIER: {
+    irreversible: true,
+    resolve: (rawArgs) => {
+      const args = rawArgs as { name?: string; country?: string; contact?: string };
+      const name = (args.name ?? "").trim();
+      const where = args.country ? ` (${args.country})` : "";
+      return Promise.resolve({
+        stagedArgs: { name, country: args.country ?? null, contact: args.contact ?? null },
+        productName: null,
+        candidateCount: name ? 1 : 0,
+        groundedAmounts: [],
+        preview: `Crear proveedor ${name}${where}.`,
+      });
+    },
+    commit: (args) => createSupplier(args as { name: string; country?: string | null; contact?: string | null }),
+  },
+
+  // Record a check-in (reply) with a supplier the owner names, resetting the overdue
+  // cadence. The supplier is resolved server-side to an id; the model never supplies it.
+  RECORD_CHECKIN: {
+    irreversible: true,
+    refIdField: "supplierId",
+    refNoun: "proveedor",
+    resolve: (rawArgs) => {
+      const args = rawArgs as { supplierId?: number; supplierRef?: string };
+      if (args.supplierId != null) {
+        return Promise.resolve({ stagedArgs: { supplierId: args.supplierId }, productName: null, candidateCount: 1, groundedAmounts: [], preview: `Registrar contacto con el proveedor #${args.supplierId}.` });
+      }
+      return resolveSupplier(args.supplierRef ?? "").then((r) => fromRef(r, "supplierId", (c) => `Registrar contacto con ${c.label}. Se reinicia la cadencia de seguimiento.`));
+    },
+    commit: (args) => recordCheckin((args as { supplierId: number }).supplierId),
+  },
+
+  // Edit a product's non-price fields (name, sku, unit cost). Price changes go through
+  // UPDATE_PRICE; this is the rename / re-sku / cost-correction path, confirm-only.
+  EDIT_PRODUCT: {
+    irreversible: true,
+    requiresHumanReview: true,
+    refIdField: "productId",
+    refNoun: "producto",
+    async resolve(rawArgs) {
+      const args = rawArgs as { productId?: number; productRef?: string; name?: string; sku?: string; unitCostCents?: number };
+      const edits: Record<string, unknown> = {};
+      if (args.name != null) edits.name = String(args.name).trim();
+      if (args.sku != null) edits.sku = String(args.sku).trim();
+      // Coerce + clamp the cost: reject NaN, floor negatives to 0 (the model is an
+      // uncontrolled source; the human card is the last guard but the value is sane here).
+      if (args.unitCostCents != null) edits.unitCostCents = Math.max(0, Math.round(Number(args.unitCostCents) || 0));
+      const changeText = describeProductEdits(edits);
+      // Resolve the product ONCE (council: Amelia — no double DB round-trip). By id when
+      // given; else by descriptor, where more-than-one drives the disambiguation picker.
+      let p: { id: number; name: string } | null = null;
+      if (args.productId != null) {
+        const row = await safeGetProduct(args.productId);
+        if (row) p = { id: row.id, name: row.name };
+      } else {
+        const res = await resolveActiveProduct(args.productRef ?? "");
+        if (res.candidateCount > 1) {
+          // More-than-one match -> disambiguation (AC5): surface candidates, stage nothing.
+          return { stagedArgs: { ...edits }, productName: null, candidateCount: res.candidateCount, groundedAmounts: [], candidates: res.candidates.map(productCandidate) };
+        }
+        if (res.candidateCount === 1 && res.product) p = { id: res.product.id, name: res.product.name };
+      }
+      if (!p) return { stagedArgs: { ...edits }, productName: null, candidateCount: 0, groundedAmounts: [] };
+      return {
+        stagedArgs: { productId: p.id, ...edits },
+        productName: p.name,
+        candidateCount: 1,
+        groundedAmounts: [],
+        preview: `Editar ${p.name}: ${changeText}.`,
+      };
+    },
+    commit: (args) => {
+      const a = args as { productId: number; name?: string; sku?: string; unitCostCents?: number };
+      const updates: Record<string, unknown> = {};
+      if (a.name !== undefined) updates.name = a.name;
+      if (a.sku !== undefined) updates.sku = a.sku;
+      if (a.unitCostCents !== undefined) updates.unitCostCents = a.unitCostCents;
+      return updateProduct(a.productId, updates);
+    },
+  },
 };
+
+// Human-readable summary of a product edit for the confirm card.
+function describeProductEdits(edits: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof edits.name === "string") parts.push(`nombre a "${edits.name}"`);
+  if (typeof edits.sku === "string") parts.push(`sku a ${edits.sku}`);
+  if (edits.unitCostCents != null) parts.push(`costo a ${money(Number(edits.unitCostCents))}`);
+  return parts.length ? parts.join(", ") : "sin cambios";
+}
+
+// Current ISO-8601 week as YYYY-Www (Monday-based), for a production record with no
+// explicit week. Matches normalizeWeek's output shape.
+function currentIsoWeek(d: Date = new Date()): string {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7; // Mon..Sun -> 1..7
+  t.setUTCDate(t.getUTCDate() + 4 - day); // nearest Thursday
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
 
 // The destructive ops (tighter rate cap name space in lib/audit).
 export const DESTRUCTIVE_OP_TYPES = new Set(["DEACTIVATE_PRODUCT", "CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK"]);

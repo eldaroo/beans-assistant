@@ -8,6 +8,13 @@
       "when": 1792776224874,
       "tag": "0000_beans_single_business",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792995759266,
+      "tag": "0001_operator_turns",
+      "breakpoints": true
     }
   ]
 }

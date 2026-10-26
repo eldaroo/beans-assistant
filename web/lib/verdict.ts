@@ -69,6 +69,16 @@ export function computeVerdict(params: {
   // promoted onto the auto path by a future grounding change, however well-grounded a turn
   // looks. Independent of `irreversible`: the flag lives on the OpDef, not in this proof.
   requiresHumanReview?: boolean;
+  // The multi-turn grounding corpus (spec 009 M5 / D-052 / AC10). When a flow spans turns
+  // ("vendi 40 stanleys" then "a que precio?" then "32"), a numeral and the product name
+  // may be grounded by an EARLIER operator turn than the current one. This corpus is the
+  // SERVER-AUTHENTICATED record of the operator's own turns in the active flow
+  // (lib/flow-turns.ts), never the client-supplied transcript — so a forged operator turn
+  // in the request body cannot launder an ungrounded amount onto the auto path. It defaults
+  // to the current utterance, which keeps single-turn behavior unchanged. The current
+  // utterance is still what the bare-confirmation check reads: the CURRENT turn must carry
+  // content, so "ok"/"dale" alone never auto-posts even when the flow corpus is rich.
+  groundingCorpus?: string;
 }): Verdict {
   const {
     operationType,
@@ -79,9 +89,12 @@ export function computeVerdict(params: {
     withinCaps = true,
     irreversible = false,
     requiresHumanReview: forcedHumanReview = false,
+    groundingCorpus,
   } = params;
   const reasons: string[] = [];
   const op = (operationType || "").toUpperCase();
+  // Grounding reads the flow corpus when given, else the current utterance alone.
+  const corpus = groundingCorpus && groundingCorpus.trim() ? groundingCorpus : utterance;
 
   if (forcedHumanReview) {
     reasons.push("registry-human-review");
@@ -99,11 +112,11 @@ export function computeVerdict(params: {
   const bare = isBareConfirmation(utterance);
   if (bare) reasons.push("bare-confirmation");
 
-  const said = parseNumbers(utterance);
+  const said = parseNumbers(corpus);
   const ungrounded = groundedAmounts.filter((a) => !numeralIsGrounded(a, said));
   if (ungrounded.length) reasons.push(`ungrounded-numerals:${JSON.stringify(ungrounded)}`);
 
-  const nameGrounded = productNameGrounded(productName, utterance);
+  const nameGrounded = productNameGrounded(productName, corpus);
   if (!nameGrounded) reasons.push("product-not-in-utterance");
 
   const deterministic = candidateCount === 1;

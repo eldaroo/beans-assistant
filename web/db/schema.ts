@@ -26,6 +26,7 @@ import {
   date,
   numeric,
   check,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -371,3 +372,32 @@ export const auditLog = pgTable("audit_log", {
   outcome: text("outcome").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+// The server-authenticated operator-turn record (spec 009 M5 / D-052). Append-only.
+// Grounding for the auto-post verdict (lib/verdict.ts) runs against THIS record of the
+// operator's own turns in the active flow, never against the client-supplied transcript:
+// the server writes each inbound operator message here itself, so a forged turn in the
+// request body can never launder an ungrounded amount onto the auto path (AC10). It is
+// lighter than a full conversation store: operator utterances for one flow only, keyed by
+// a flow_nonce the server echoes to the client, which rotates it when the flow closes.
+// The app never UPDATEs or DELETEs a row here.
+//
+// `owner` binds the record to the authenticated operator (session email), so "the
+// operator's OWN turns" is enforced as the same principal, not merely "whatever was
+// written under this nonce" — every read and write filters by (owner, flow_nonce). A
+// server-side TTL (lib/flow-turns.ts) bounds grounding to the recent active flow, so a
+// stale or client-pinned nonce can never accumulate an unbounded corpus. The unique
+// (flow_nonce, seq) index makes the append-sequence collision-safe.
+export const operatorTurns = pgTable("operator_turns", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  owner: text("owner"),
+  flowNonce: text("flow_nonce").notNull(),
+  seq: integer("seq").notNull(),
+  text: text("text").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (t) => ({
+  // Unique on the real per-owner key (council: Tamir) so the app-derived seq is collision-
+  // safe and two owners can never collide on a shared nonce; the leftmost (owner,flow_nonce)
+  // prefix also serves the scoped reads.
+  flowSeqUq: uniqueIndex("operator_turns_owner_flow_seq_uq").on(t.owner, t.flowNonce, t.seq),
+}));
