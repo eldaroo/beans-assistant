@@ -1,8 +1,8 @@
 ---
 name: timonel-architecture
-last_spec: native-tool-use-chat
+last_spec: guided-slot-filling
 created: 2026-06-11
-last_updated: 2026-10-19
+last_updated: 2026-10-26
 mode: update
 author: Winston (BuildOS Architect, architecture-author role)
 ---
@@ -684,3 +684,190 @@ Mode: UPDATE. Scope: only the decisions that connect the whole business-operatio
 - Why alternatives lost. (a) Trusting the client's role tags is the exact provenance-laundering hole. (b) A full conversation store is the stateful weight the rebuild dropped and is more than grounding needs.
 - Implications. A small append-only operator-turn store (pending_ops-adjacent, keyed by flow nonce) backs grounding; operator-turns-only and flow-scoped, far lighter than a session table. This is server state, which the 008 rebuild tried to avoid; named as spec Open Question 1 for Dario.
 - Panel source. Quinn synthesis, resolving the Winston (D-048) vs Tamir/Amelia/Edut disagreement toward the security and consent lens.
+
+### D-053: Required slots are a declarative requiredSlots descriptor on each OpDef, one source of truth (spec 010)
+
+- Chosen. OpDef gains `requiredSlots: SlotDef[]`, where `SlotDef = { arg, prompt, kind, loadBearing, satisfiedBy? }`: the arg path, the Kaze-calm question text, a slot kind (money | count | name | text), whether the slot is load-bearing (must ground), and an optional predicate for conditional slots. REGISTER_SALE's price slot is `satisfiedBy` a resolved catalog price (a catalogued product needs no "a que precio?"). The slot-filling controller reads this via the existing getOp(); the parser's `needs` list is only validated against it, never trusted verbatim.
+- Alternatives. (a) A separate slot-schema module keyed by operation type. (b) Infer required slots from the TypeScript arg types.
+- Why this won. The OpDef is already the one place that knows resolution and commit semantics; required slots are an intrinsic property of the op and belong beside resolve()/commit(). The controller already calls getOp(), so colocation adds zero new lookup.
+- Why alternatives lost. (a) A second module is a second source of truth that drifts from resolve() the moment an arg is renamed. (b) TS types are erased at runtime and cannot express "price-or-catalog" or "at least one edit field" conditionals, the two cases the spec names.
+- Implications. requiredSlots populated for ADD_STOCK, REGISTER_EXPENSE, CREATE_SUPPLIER, RECORD_PRODUCTION, REGISTER_SALE, EDIT_PRODUCT. The spec 009 M5 needsSalePrice special case becomes the REGISTER_SALE row of this table.
+- Panel source. Winston.
+
+### D-054: The parser emits a PARTIAL op + needs list, not {none:true}, when an op is detected with required slots missing; still one op per turn (spec 010)
+
+- Chosen. When the parser recognizes an operation type but lacks a required slot, it returns {operationType, args, needs:[...]} instead of {none:true}. This stays one op per turn (D-047 unchanged; a partial is a single step). The Nomad SYS prompt gains the partial contract and examples; fallbackParse mirrors it (intent verb matched, required numeral or ref absent, partial not null). A genuinely non-operational message (greeting, or a question the read path serves) still returns {none:true}. The app does NOT trust the model's needs: it re-derives required-vs-present from the OpDef (D-053) against the stripped args. The model proposes incompleteness; the app decides it.
+- Alternatives. (a) Keep {none:true}; have the app detect "intent-shaped but underspecified" purely from a failed parse. (b) Let the model ask the missing-field question directly in natural language.
+- Why this won. The remote LLM already knows the intent on the reported case ("acaba de entrar un nuevo tipo de producto"). Discarding that to null forces the deterministic fallback regex to carry all intent detection, which it cannot do (it returns null on precisely that phrase). The surfaced partial gives the route something to orchestrate against.
+- Why alternatives lost. (a) Without a surfaced op type the route has no seam to hang an ask on, the current dead-end. (b) A model that phrases the question holds flow state and owns the wording, breaking the propose-only spine and the three Kaze shapes; the app must own the ask.
+- Implications. parse/types.ts adds optional needs field to ParsedOp; parse/client.ts stops collapsing a partial to null; the SYS prompt rule "si no hay numero para un monto obligatorio, usa {none:true}" is replaced by the partial rule for detected ops. One-op-per-turn holds.
+- Panel source. Winston; the none-vs-partial boundary is spec Open Question Q3 for Dario (M2 calibration).
+
+### D-055: The slot-filling controller is a general app-side state machine; the partial-op TYPE is a server-written marker on the flow record, slot VALUES are re-derived and grounded per slot from operator_turns (spec 010)
+
+- Chosen. Generalize flow.ts into an op-agnostic controller: missingSlots(op, record), nextQuestion, applySlotAnswer, subsuming the price helpers. It reads requiredSlots (D-053), computes the still-missing slots, asks ONE question (kind:"needs", flow_open:true), and completes when every required slot is grounded. Partial-op state crosses turns by a MINIMAL server-written marker, the detected operationType and which slots are filled, recorded adjacent to operator_turns under the same (owner, flow_nonce) key, TTL-bounded. Each slot ANSWER grounds against the operator turn that answered THAT slot's ask (per-slot provenance), never a client-echoed value and never the flow-union corpus.
+- Alternatives. (a) Re-derive the whole partial by replaying fallbackParse over prior turns (the M5 mechanism). (b) A dedicated partial_ops table holding the accumulating args.
+- Why this won. The op TYPE is a routing fact (server-authenticated, not a groundable numeral) while slot VALUES are groundable facts under D-052. Separating them is load-bearing: the type is remembered structurally so a remote-LLM-detected op survives the conversation, and each value still traces to the operator turn that supplied it for that slot. This extends the operator_turns substrate rather than inventing a parallel store.
+- Why alternatives lost. (a) Pure replay generalizes falsely: "acaba de entrar un nuevo tipo" is NOT re-parseable by the fallback regex, so the op type is silently lost mid-flow, the exact reported case breaks. (b) A partial_ops table duplicates operator_turns and creates a SECOND grounding source that can drift from the turn record D-052 trusts.
+- Implications. The flow record gains a tiny op-type and filled-slots annotation (append-only, flow-scoped, TTL-bounded); grounding is re-checked per slot and the corpus resets on complete, abort, or op-switch. Spec Open Question Q2 for Dario: the marker as a column on operator_turns or a sibling flow_state row (same key, same TTL).
+- Panel source. Winston, sharpened by Tamir (per-slot provenance, flow-boundary reset); refines D-052 to the multi-slot case.
+
+### D-056: The completed op re-enters the existing stage/verdict/confirm pipeline unchanged; the step stays the unit of commit (spec 010)
+
+- Chosen. When the last required slot grounds, the controller assembles a full ParsedOp and hands it to stageOperation exactly as a single-turn op, same groundingCorpus (the operator's own turns), same computeVerdict, same /api/ops/confirm. The controller only GATHERS args; it never touches the verdict. Confirm-only ops stay confirm-only (their irreversible and requiresHumanReview stamps untouched, evaluated on the assembled op).
+- Alternatives. (a) Give the controller a fast path that stages and auto-commits a fully-collected op. (b) Treat a completed slot-fill as a new op type.
+- Why this won. computeVerdict is the proof-of-safety (D-041/D-052); re-running it over the assembled op means the slot-filling layer is pure convenience with no new trust. Nothing in stage/verdict/confirm changes, the smallest possible blast radius.
+- Why alternatives lost. (a) A fast path is a second commit route the model's phrasing could influence, reopening what D-038/D-044 closed. (b) A new op type duplicates every resolve() and commit().
+- Implications. Zero change to stage.ts, verdict.ts, /api/ops/confirm. The guided layer is additive: parser contract (D-054) + OpDef descriptor (D-053) + controller (D-055) + completion handoff (here) + the consent gate (D-057).
+- Panel source. Winston; keystone, the spine stays absolute.
+
+### D-057: A multi-turn-assembled op always shows a final confirm card; the verdict, not slot-completeness, is the only gate to auto (spec 010, refines D-056 and D-041)
+
+- Chosen. A slot-filled op whose grounding spans more than the current turn is never auto-posted: computeVerdict returns auto:false whenever the op was assembled across turns, so the owner sees and assents to the assembled whole on a final confirm card. Single-turn auto-post is unchanged (grounding and consent coincide when the whole is one typed utterance). Slot-completeness is necessary for a write but never sufficient for auto.
+- Alternatives. (a) Let a fully-grounded slot-filled reversible op auto-post, since every numeral already grounds (Winston's D-056 as first drafted). (b) Always confirm EVERY op, retiring auto-post entirely.
+- Why this won. Grounding proves provenance (each numeral is the operator's own, unforgeable per D-052); it does not prove consent to the assembled whole. In "vendi 40 stanleys" then "a que precio" then "32", the owner uttered 40 and 32 but never saw or assented to "40 stanleys at 32 = 1280" before it would commit. The whole was assembled by the app and uttered by no one (Edut). Always-confirm also closes the cross-slot laundering path to the auto route: a number from an abandoned or different op cannot reach an auto-write if slot-filled ops never auto-post (Tamir R1).
+- Why alternatives lost. (a) Auto-posting the assembled whole is a consent-by-omission breach and leaves the laundering path open to auto. (b) Retiring auto-post entirely removes the "reversible posts, irreversible asks" ergonomics spec 007/008 built for the single-turn common case, which is not broken.
+- Implications. computeVerdict (or the controller handing it the completed op) carries a multi-turn flag so the verdict can force auto:false; a one-line rule, no change to the commit path. Named as spec Open Question Q1 for Dario (one extra confirm tap on a slot-filled sale).
+- Panel source. Quinn synthesis, resolving the Winston (D-056 auto-ok) vs Edut and Tamir (always-confirm) disagreement toward the consent and security lens.
+### D-058: The chat brain is the native tool-use loop on `beans-ai`; the propose-only parser becomes the fallback (supersedes D-046)
+
+- **Chosen.** `web/app/api/chat/route.ts` calls the gateway `/run-agent` (passing the
+  operator utterance, a server-minted `turnNonce` and `flowNonce` out of band, and a
+  bounded history) instead of `parseMessage`. The model understands the whole turn and
+  drives the beans MCP tools. `parseMessage` (the spec-008/009 parser) is retained **only
+  as the degrade path** when the gateway errors or times out.
+- **Supersedes D-046,** which made the propose-only parser the live brain after the 008
+  cutover. The parser was never the right brain; it was the serverless-safe stopgap. It
+  is now the fallback, not the brain.
+- **Why.** One reasoner over a fixed tool set removes the parser's dead-end on anything
+  outside N ops (Dario, 2026-10-26). Keeping the parser as fallback means a gateway
+  outage degrades to "dumb but working," never to "down."
+- **Implications.** The swap seam is one call in the route. The envelope the route
+  returns (`proposal` / `compound` / `needs` / `answer`) is unchanged, so `chat.tsx`
+  renders identically.
+- **Panel source.** Winston; Dario (binding re-home choice, native loop on the box).
+
+### D-059: The MCP internal operation API is re-homed from the dead FastAPI to the Next.js app (re-homes D-036)
+
+- **Chosen.** The beans MCP tools keep calling `/internal/ops/*`, but `BEANS_OPS_URL`
+  now points at the Next app. **Read tools** (`read_stock`, `read_revenue`, …,
+  `business_status`) call the existing domain reads (`lib/domains/*`,
+  `attention_service` equivalent) behind these endpoints. **Write-preview tools**
+  (`register_sale`, …) call endpoints that delegate to `stageOperation` — which already
+  re-derives resolution, grounded amounts, the verdict, and stages an `op_token`.
+- **Why.** The app that owns the DB owns re-validation and the verdict. `stageOperation`
+  is exactly the FastAPI `preview_*` contract's replacement; `callPreview` already strips
+  `op_token` before returning to the model, so the tool shapes need no change.
+- **Implications.** `beans-mcp.mjs` is reused near-verbatim; the work is the Next
+  endpoints behind the same paths and the `BEANS_OPS_URL` repoint. D-036's "tools hold no
+  DB credentials, call an authenticated internal API" is preserved; only the API's host
+  moves FastAPI → Next.
+- **Panel source.** Winston, grounding Amelia's "reuse the endpoint contracts."
+
+### D-060: Internal service-token auth is a dedicated `/api/internal/ops/*` route family; the session routes are untouched; tenant is pinned and validated out of band
+
+- **Chosen.** A new route family authenticates with `INTERNAL_SERVICE_TOKEN`
+  (`x-internal-token`, constant-time compared), **not** `auth()`. It reads the tenant from
+  `x-beans-tenant` and validates it against the single-business allowlist — the tenant is
+  never trusted as arbitrary and never a model-settable arg (D-037). The session routes
+  (`/api/chat`, `/api/ops/stage`, `/api/ops/confirm`) keep `auth()`; the commit path stays
+  session-only, so the Nomad box can stage but can never commit.
+- **Why.** The box has no user session; it needs a service identity. A separate route tree
+  keeps the service path from ever widening the session path, and keeps the token's blast
+  radius to read + stage.
+- **Implications.** Two auth substrates, cleanly split: session (owner UI, commit) and
+  service token (box, read + preview). A-Q17 is resolved: shared `INTERNAL_SERVICE_TOKEN`
+  with tenant pinned and Next re-validation for now; per-request minting only if the
+  callback path widens.
+- **Panel source.** Winston, grounding Tamir on the write boundary.
+
+### D-061: The operator's real utterance reaches `computeVerdict` only via the server-authenticated `operator_turns` record, never via model tool args (re-affirms D-041/D-052)
+
+- **Chosen.** Before calling the gateway, the route appends the real inbound message to
+  `operator_turns` keyed by `(owner, flowNonce)` and injects `flowNonce`/`turnNonce`/tenant
+  into the gateway's per-request MCP env out of band. The internal preview endpoint, on a
+  tool call, builds `utterance` and `groundingCorpus` **from that server record**
+  (`groundingCorpusFor(owner, flowNonce)`), not from anything the model passed, and hands
+  them to `stageOperation`. The model's tool-supplied numeral lives only in `args` and is
+  *grounded against* the server corpus.
+- **Why.** This is the keystone the re-home must not lose. In the tool-use loop the model
+  proposes write args; a tool-sourced or model-invented numeral must not auto-post. Because
+  grounding reads the operator's own recorded words (D-052) and not the args, an invented
+  numeral fails grounding → `auto:false` → confirm card. Provenance laundering (D-041) stays
+  closed across the box boundary.
+- **Implications.** The MCP preview tool threads a `flowNonce` header alongside the existing
+  `x-beans-turn`. The bare-confirmation guard still reads the *current* turn, so "dale"
+  alone never auto-posts.
+- **Panel source.** Winston, sharpened by Tamir (grounding is a check outside the model).
+
+### D-062: The `op_token` never crosses the gateway or the model; the route reads staged ops back from `pending_ops` by the turn nonce it minted
+
+- **Chosen.** `callPreview` already strips `op_token` before returning to the model, and
+  the gateway returns only assistant prose. So after `/run-agent` returns, the route obtains
+  commitable handles by reading `pending_ops` with `verdictPendingForTurn(turnNonce)` — the
+  nonce it minted and injected out of band — then renders cards / auto-post exactly as spec
+  009. Commit stays `/api/ops/confirm`.
+- **Why.** No path may hand the model (or a hijacked model) something that could commit. The
+  token lives in Neon, keyed by the server's own nonce; the gateway is a prose channel only.
+- **Implications.** `verdictPendingForTurn` already exists (D-047 substrate). The route loops
+  it to render an ordered multi-step turn. A write with no staged op means the model only
+  talked — render the prose.
+- **Panel source.** Winston (keystone).
+
+### D-063: The route → gateway call is synchronous with a bounded agent budget under `maxDuration`; timeout falls back to the parser
+
+- **Chosen.** The chat route awaits `/run-agent` synchronously. The agent budget
+  (`BEANS_AGENT_MAX_TURNS`, `BEANS_AGENT_TIMEOUT_MS`) is tightened to fit under the route's
+  `maxDuration` (Pro/fluid), and the fetch carries an `AbortSignal.timeout` below it. On
+  timeout or a `model-error`, the route falls back to `parseMessage` (D-058), so a slow or
+  dead box degrades to the parser rather than a 504.
+- **Why.** A multi-hop loop (child start + MCP connect + internal round-trip + generation)
+  is the real latency tension (context packet). Synchronous-with-fallback is the smallest
+  design that ships; an async poll/stream is the escalation only if the budget cannot fit.
+- **Implications.** M3 measures live and sets the budget. A-Q19 resolved: cap `--max-turns`
+  low, measure, add a tool-call counter only if a turn loops.
+- **Panel source.** Winston, with Amelia on the live budget.
+
+### D-064: Model-native multi-turn understanding supersedes the slot-filling controller (D-053..D-056); D-057's multi-turn-confirm consent gate is retained
+
+- **Chosen.** The app-side slot-filling state machine (D-053 `requiredSlots`, D-054 partial
+  op, D-055 controller, D-056 completion handoff) is **not built**: the native loop owns
+  multi-turn understanding ("a que precio?" is the model asking, then the operator answering,
+  grounded per-turn via D-061). D-057's rule is **retained**: an op whose load-bearing
+  grounding spans more than the current turn never auto-posts — `computeVerdict` forces
+  `auto:false` so the operator assents to the assembled whole on a final card.
+- **Why.** The slot controller existed to give a dumb parser multi-turn memory; a reasoner
+  needs none. But the *consent* reason for D-057 (the owner never saw "40 stanleys at 32"
+  assembled) is independent of which brain assembles it, so it survives.
+- **Implications.** D-053..D-056 are marked superseded-by-D-064 in the log; their consent
+  invariant lives on as the multi-turn verdict gate.
+- **Panel source.** Quinn synthesis of the Winston (native loop) and Edut/Tamir (consent)
+  lenses.
+
+## Carry-forward ledger (spec-007 decisions on the new stack)
+
+| Decision | Status on Vercel/Neon |
+|----------|----------------------|
+| D-034 native loop | **Revived**, chat seam now the Next route, not FastAPI `ChatService` |
+| D-035 posture / denylist / self-check | **Unchanged** — code already on the box |
+| D-036 tools hold no DB creds, call internal API | **Re-homed** (D-059): internal API FastAPI → Next |
+| D-037 tenant out of band, never model-set | **Unchanged** (reinforced by D-060/D-061) |
+| D-038 two-phase, commit non-model | **Unchanged** — reuses `stage`/`/api/ops/confirm` |
+| D-039 phone from session | **Re-homed** — route resolves owner, pins it into the gateway call |
+| D-040..D-044 verdict doctrine | **Unchanged** — already live in `verdict.ts`/`stage.ts` |
+| D-046 parser-as-brain | **Superseded by D-058** — parser is now the fallback |
+| D-052 operator_turns grounding | **Unchanged** — the keystone for D-061 |
+| D-053..D-056 slot controller | **Superseded by D-064** |
+| D-057 multi-turn confirm gate | **Retained** (D-064) |
+
+## Open architectural questions (spec 010)
+
+- **A-Q21.** Does the tightened agent budget fit under the route `maxDuration` at live
+  latency, or must the call go async (poll/stream)? Fallback: synchronous + parser fallback;
+  measure in M3. (D-063)
+- **A-Q22.** The `flowNonce` the box must thread for grounding: a new MCP preview header, or
+  folded into `x-beans-turn`? Fallback: a distinct header, since turn and flow have different
+  lifetimes. (D-061)
+- **A-Q23.** When the gateway loop reads a tool result then stages a write in the same turn,
+  is the per-session tool-call cap tight enough to bound a runaway loop? Fallback: measure,
+  add a tool-call counter if a turn loops. (D-063, D-035)
