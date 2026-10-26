@@ -1,3 +1,5 @@
+> Tracked as eldaroo/beans-assistant#276
+
 ---
 name: revive-native-tool-use
 status: scoped
