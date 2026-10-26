@@ -32,9 +32,10 @@ export type StageOutcome =
   | { ok: false; code: "ambiguous_reference"; message: string; candidates: RefCandidate[]; operation_type: string; id_field: string; pending_args: Record<string, unknown> }
   | { ok: false; code: string; message: string };
 
-// Spanish article for a reference noun, for a grammatical not-found message.
+// Spanish article for a reference noun, for a grammatical not-found message. Masculine
+// nouns ("gasto", "proveedor") take "un"; feminine ("venta", "entrada") take "una".
 function articleFor(noun: string): string {
-  return noun === "gasto" ? "un" : "una";
+  return noun === "gasto" || noun === "proveedor" ? "un" : "una";
 }
 
 // Best-effort product reference text for a clean "not found" message.
@@ -51,6 +52,13 @@ export async function stageOperation(input: {
   args?: Record<string, unknown>;
   utterance?: string;
   turnNonce?: string;
+  // The server-authenticated grounding corpus for the active flow (spec 009 M5 / D-052).
+  // When set, the verdict grounds numerals and the product name against the operator's own
+  // recorded turns in this flow, not the single utterance. Omitted for a single-turn stage
+  // (the direct /api/ops/stage path, the disambiguation re-stage) where the utterance is
+  // the whole flow. Never carries the client transcript — the chat route builds it from
+  // lib/flow-turns.ts, the server's own record.
+  groundingCorpus?: string;
 }): Promise<StageOutcome> {
   const operationType = (input.operationType ?? "").toUpperCase();
   const op = getOp(operationType);
@@ -116,6 +124,7 @@ export async function stageOperation(input: {
     withinCaps: caps,
     irreversible: op.irreversible,
     requiresHumanReview: op.requiresHumanReview,
+    groundingCorpus: input.groundingCorpus,
   });
   await pending.setVerdict(opToken, verdict);
   await appendAudit({ name: operationType, args: resolved.stagedArgs, caller: "stage", opToken, outcome: "staged" });

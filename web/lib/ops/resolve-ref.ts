@@ -14,6 +14,7 @@
 import { listSales, type SaleRow } from "@/lib/domains/sales";
 import { listExpenses, type ExpenseView } from "@/lib/domains/expenses";
 import { recentStockMovements, type StockMovementRef } from "@/lib/domains/stock";
+import { directory as supplierDirectory, type SupplierStatus } from "@/lib/domains/suppliers";
 
 export interface RefCandidate {
   id: number;
@@ -160,6 +161,40 @@ export function matchStockMovements(descriptor: string, rows: StockMovementRef[]
   return resolutionOf([]);
 }
 
+// Suppliers (spec 009 M6 / AC12): "atendi al proveedor Acme", "me contesto el de China".
+// A supplier check-in resolves the supplier the owner names to a server-held id; the model
+// never supplies the id. A bare "atendi al proveedor" with a single active supplier resolves
+// to it; a name token filters; more than one match drives the disambiguation picker.
+const SUPPLIER_STOP = new Set([
+  "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas", "a", "al", "con", "y", "en", "mi", "su",
+  "proveedor", "proveedores", "contesto", "contestaron", "respondio", "respondieron", "atendi", "atendio",
+  "hable", "hablamos", "contacte", "contactamos", "escribio", "escribi", "check", "checkin", "atencion",
+]);
+function supplierTokens(n: string): string[] {
+  return n.replace(/[^\w\s]/g, " ").split(/\s+/).filter((w) => w && !SUPPLIER_STOP.has(w) && !/^\d+$/.test(w));
+}
+export function matchSuppliers(descriptor: string, rows: SupplierStatus[]): RefResolution {
+  const n = norm(descriptor);
+  const label = (r: SupplierStatus): RefCandidate => ({
+    id: r.id,
+    label: r.name,
+    detail: r.country ?? undefined,
+  });
+  const num = explicitNumber(descriptor);
+  if (num != null) return resolutionOf(rows.filter((r) => r.id === num).map(label));
+  const toks = supplierTokens(n);
+  if (toks.length) {
+    const hit = rows.filter((r) => {
+      const name = norm(r.name);
+      const country = norm(r.country ?? "");
+      return toks.some((t) => name.includes(t) || country.includes(t));
+    });
+    return resolutionOf(hit.map(label));
+  }
+  // Bare "atendi al proveedor": resolve to the single active supplier, else disambiguate.
+  return resolutionOf(rows.map(label));
+}
+
 // ------------------------------------------------------------------ DB wrappers
 // Injected reads default to the real domains so a test drives the pure matchers above with
 // fakes and never touches a database.
@@ -167,8 +202,9 @@ export interface RefReads {
   listSales: typeof listSales;
   listExpenses: typeof listExpenses;
   recentStockMovements: typeof recentStockMovements;
+  supplierDirectory: typeof supplierDirectory;
 }
-export const realRefReads: RefReads = { listSales, listExpenses, recentStockMovements };
+export const realRefReads: RefReads = { listSales, listExpenses, recentStockMovements, supplierDirectory };
 
 export async function resolveSale(descriptor: string, reads: RefReads = realRefReads): Promise<RefResolution> {
   if (!descriptor.trim()) return { candidateCount: 0, id: null, candidates: [] };
@@ -181,4 +217,7 @@ export async function resolveExpense(descriptor: string, reads: RefReads = realR
 export async function resolveStockMovement(descriptor: string, reads: RefReads = realRefReads): Promise<RefResolution> {
   if (!descriptor.trim()) return { candidateCount: 0, id: null, candidates: [] };
   return matchStockMovements(descriptor, await reads.recentStockMovements(50));
+}
+export async function resolveSupplier(descriptor: string, reads: RefReads = realRefReads): Promise<RefResolution> {
+  return matchSuppliers(descriptor, await reads.supplierDirectory());
 }

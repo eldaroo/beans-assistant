@@ -18,7 +18,7 @@ type Candidate = { id: number; label: string; detail?: string };
 // The destructive and edit ops (spec 009 M3): their card is amber and its confirm button
 // carries the verb, so the safety spine is visible, not theater (Kaze, three response
 // shapes). Everything else is a neutral create card.
-const DESTRUCTIVE_OPS = new Set(["CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK", "UPDATE_PRICE", "DEACTIVATE_PRODUCT"]);
+const DESTRUCTIVE_OPS = new Set(["CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK", "UPDATE_PRICE", "DEACTIVATE_PRODUCT", "EDIT_PRODUCT"]);
 function confirmVerb(operation: string): string {
   switch (operation.toUpperCase()) {
     case "CANCEL_SALE":
@@ -26,6 +26,7 @@ function confirmVerb(operation: string): string {
     case "CANCEL_STOCK": return "Revertir";
     case "UPDATE_PRICE": return "Cambiar precio";
     case "DEACTIVATE_PRODUCT": return "Desactivar";
+    case "EDIT_PRODUCT": return "Guardar cambios";
     default: return "Confirmar";
   }
 }
@@ -38,6 +39,7 @@ function actionLabel(operation: string): string {
     case "CANCEL_STOCK": return "Revertir entrada";
     case "UPDATE_PRICE": return "Cambiar precio";
     case "DEACTIVATE_PRODUCT": return "Desactivar producto";
+    case "EDIT_PRODUCT": return "Editar producto";
     default: return "Confirmar accion";
   }
 }
@@ -51,6 +53,7 @@ function destructiveFallback(operation: string): string {
     case "CANCEL_STOCK": return "Revertir la entrada de stock indicada.";
     case "UPDATE_PRICE": return "Cambiar el precio del producto indicado.";
     case "DEACTIVATE_PRODUCT": return "Desactivar el producto indicado.";
+    case "EDIT_PRODUCT": return "Editar el producto indicado.";
     default: return "Confirmar la accion.";
   }
 }
@@ -111,6 +114,15 @@ export function Chat() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  // The active flow nonce (spec 009 M5). Held across turns while a flow stays open (a
+  // "needs" exchange like asking for a price), rotated to null once a turn closes the flow,
+  // so the server-side grounding record is bounded to the operator's own turns in THIS
+  // flow. It is echoed to the server; the server owns the authenticated turn record.
+  const flowNonce = useRef<string | null>(null);
+  // A bounded role-tagged transcript for resume context (never used server-side for
+  // grounding — the server grounds only against its own authenticated turn record).
+  const msgsRef = useRef<Msg[]>(msgs);
+  msgsRef.current = msgs;
 
   function push(m: Msg) {
     setMsgs((prev) => [...prev, m]);
@@ -132,11 +144,33 @@ export function Chat() {
     push({ role: "user", text: message });
     setBusy(true);
     try {
-      const r = await postJson("/api/chat", { message, turnNonce: crypto.randomUUID() });
+      // A bounded, role-tagged transcript for resume context (last 12 turns). The server
+      // never grounds against this; it is only context for a multi-turn flow.
+      const history = msgsRef.current
+        .filter((m) => m.role === "user" || m.role === "bot" || m.role === "answer")
+        .slice(-12)
+        .map((m) => ({ role: m.role === "user" ? "operator" : "assistant", text: (m as { text: string }).text }));
+      const r = await postJson("/api/chat", {
+        message,
+        turnNonce: crypto.randomUUID(),
+        flowNonce: flowNonce.current ?? undefined,
+        history,
+      });
+      // Rotate the flow nonce: hold it while the flow stays open (a "needs" exchange),
+      // drop it once a turn closes the flow so grounding stays bounded to the active flow.
+      if (r.ok && r.data?.flow_nonce) {
+        flowNonce.current = r.data.flow_open ? r.data.flow_nonce : null;
+      } else if (r.ok) {
+        flowNonce.current = null;
+      }
       if (!r.ok) {
         push({ role: "bot", text: r.error?.message ?? "No pude procesar eso." });
       } else if (r.data.kind === "answer") {
         push({ role: "answer", text: r.data.reply });
+      } else if (r.data.kind === "needs") {
+        // The app needs one more fact (e.g. a price) to complete the flow. Ask, and keep
+        // the flow open; the operator's next lone answer completes the pending op.
+        push({ role: "bot", text: r.data.reply });
       } else if (r.data.kind === "unparsed") {
         push({ role: "bot", text: r.data.reply });
       } else if (r.data.kind === "compound") {
