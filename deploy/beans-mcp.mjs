@@ -75,8 +75,8 @@ export const TOOLS = [
   {
     name: 'business_status',
     description:
-      'Read the one prioritized "what needs attention today" list across the whole business (low stock, ' +
-      'overdue items, and so on). Takes no arguments. Use it when the owner asks how the business is doing ' +
+      'Read the one prioritized "what needs attention today" list across the whole business (overdue ' +
+      'arrivals, overdue supplier check-ins, pending customs). Takes no arguments. Use it when the owner asks how the business is doing ' +
       'or what needs them today. This is the same list the command-center home shows; never invent items.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },

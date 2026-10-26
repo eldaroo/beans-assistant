@@ -5,21 +5,18 @@ import { guard } from "@/lib/api-auth";
 import { ok, fail } from "@/lib/http";
 import { dashboardSnapshot } from "@/lib/domains/analytics";
 import { listProducts } from "@/lib/domains/products";
-import { overdueArrivals } from "@/lib/domains/production";
-import { overdueCheckins, countActive } from "@/lib/domains/suppliers";
-import { pendingCustoms } from "@/lib/domains/logistics";
+import { countActive } from "@/lib/domains/suppliers";
+import { attentionSnapshot } from "@/lib/domains/command-center";
 
 export async function GET() {
   const g = await guard();
   if (g) return g;
   try {
-    const [snap, products, arrivals, checkins, suppliers, customs] = await Promise.all([
+    const [snap, products, suppliers, attention] = await Promise.all([
       dashboardSnapshot(),
       listProducts(),
-      overdueArrivals(),
-      overdueCheckins(),
       countActive(),
-      pendingCustoms(),
+      attentionSnapshot(),
     ]);
     return ok({
       revenue_usd: snap.revenueUsd,
@@ -27,11 +24,10 @@ export async function GET() {
       recent_days: snap.recentDays,
       product_count: products.length,
       supplier_count: suppliers,
-      attention: {
-        overdue_arrivals: arrivals,
-        overdue_checkins: checkins,
-        pending_customs: customs,
-      },
+      // The attention block is the same aggregation the internal business_status endpoint
+      // returns (lib/domains/command-center attentionSnapshot); the chat's "what needs
+      // attention" list is byte-equal to the command-center home's (spec 010 T-010, AC6).
+      attention,
     });
   } catch (e) {
     return fail("read_failed", (e as Error).message, 500);
