@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { internalGuard } from "@/lib/internal-auth";
 import { fail, requireDb } from "@/lib/http";
+import { auditToolCall } from "@/lib/audit";
 import { MODULE_IDS, isModuleId, moduleSnapshot } from "@/lib/domains/command-center";
 
 export const runtime = "nodejs";
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
 
   try {
     const snapshot = await moduleSnapshot(body.module);
+    await auditToolCall("read_module");
     return NextResponse.json({ ok: true, module: snapshot });
   } catch (e) {
     console.error("read_module internal read failed:", (e as Error).message);

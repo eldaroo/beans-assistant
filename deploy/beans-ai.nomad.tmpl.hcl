@@ -85,6 +85,10 @@ job "beans-ai" {
         args       = ["-c", "/local/entrypoint.sh"]
         force_pull = true
         ports      = ["http"]
+        # NET_ADMIN lets the entrypoint apply the network egress firewall (spec 010 M5, T-026,
+        # AC-T7): a deny-all-except control that is the LOAD-BEARING egress guard, with the in-code
+        # egress-guard.mjs as the second layer. Without this cap the firewall step fails closed.
+        cap_add = ["NET_ADMIN"]
       }
 
       # NON-SECRET env only. The two secrets live in the allowlist template below.
@@ -149,6 +153,58 @@ job "beans-ai" {
             log "pinning Claude CLI $${HAVE_CLAUDE} -> $${WANT_CLAUDE}"
             npm i -g @anthropic-ai/claude-code@$${WANT_CLAUDE} >/dev/null 2>&1 || { log "FATAL: claude pin failed"; exit 1; }
             log "pinned: $(claude --version 2>/dev/null | head -1)"
+          fi
+
+          # ── Network egress firewall (spec 010 M5, T-026, AC-T7) ─────────────────────────────
+          # The LOAD-BEARING egress control: default-DROP on OUTPUT, allow only loopback, already-
+          # established flows, DNS to the box's resolvers, and TCP/443 to the resolved IPs of the
+          # Next internal-ops host (BEANS_OPS_URL) and api.anthropic.com. The in-code
+          # egress-guard.mjs is the SECOND layer (it cannot stop a compromised dependency calling
+          # fetch directly; this can). It runs AFTER the Claude-CLI pin on purpose (council: Tamir
+          # HIGH): the pin's `npm i` reaches registry.npmjs.org, which is NOT on the allowlist, so a
+          # firewall applied before the pin would fail-closed and brick the boot. By here the only
+          # egress the running gateway needs is the ops host + Anthropic. Fail CLOSED: if the
+          # firewall cannot be applied the box must not serve, because an un-firewalled tool-use box
+          # is the exact exfiltration surface spec 007 forbids. BEANS_EGRESS_FIREWALL=0 is the
+          # documented deploy escape hatch (relies on the in-code guard only) for a host where
+          # NET_ADMIN or nft is unavailable; Dario sets it explicitly at deploy (#273), never default.
+          if [ "$${BEANS_EGRESS_FIREWALL:-1}" != "0" ]; then
+            OPS_HOST="$(node -e 'try{process.stdout.write(new URL(process.env.BEANS_OPS_URL).hostname)}catch(e){process.exit(3)}')" || { log "FATAL: BEANS_OPS_URL invalid, cannot firewall"; exit 1; }
+            log "egress firewall: default-drop, allow DNS + 443 to $${OPS_HOST} + api.anthropic.com"
+            command -v nft >/dev/null 2>&1 || { log "FATAL: nft absent and BEANS_EGRESS_FIREWALL!=0 (fail closed)"; exit 1; }
+            resolve_ips() { getent ahosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
+            ALLOW_IPS="$(resolve_ips "$${OPS_HOST}"; resolve_ips api.anthropic.com)"
+            [ -n "$${ALLOW_IPS}" ] || { log "FATAL: could not resolve any allowed egress IP (fail closed)"; exit 1; }
+            # External (non-loopback) resolvers to pin DNS to (council: Tamir/Binyan MED — DNS-to-any
+            # is a covert exfil channel). Loopback resolvers (systemd-resolved 127.0.0.53, Docker
+            # embedded 127.0.0.11) are already covered by `oif lo accept`. SAFE FALLBACK: if no
+            # external resolver is found, leave 53 open rather than risk bricking DNS (the firewall
+            # is deploy-validated, #273, and must never fail-closed on a resolver topology we did not
+            # test). The tighter the better, but availability wins over a NIT-grade channel here.
+            RESOLVERS="$(awk '/^nameserver/ && $2 !~ /^127\./ && $2 !~ /:/ {print $2}' /etc/resolv.conf 2>/dev/null | sort -u)"
+            nft flush ruleset 2>/dev/null || true
+            nft add table inet beans_egress
+            nft 'add chain inet beans_egress output { type filter hook output priority 0 ; policy drop ; }'
+            nft add rule inet beans_egress output oif lo accept
+            nft add rule inet beans_egress output ct state established,related accept
+            if [ -n "$${RESOLVERS}" ]; then
+              for r in $${RESOLVERS}; do
+                nft add rule inet beans_egress output ip daddr "$${r}" udp dport 53 accept
+                nft add rule inet beans_egress output ip daddr "$${r}" tcp dport 53 accept
+              done
+              log "egress firewall: DNS pinned to resolvers [$$(echo $${RESOLVERS} | tr '\n' ' ')]"
+            else
+              nft add rule inet beans_egress output udp dport 53 accept
+              nft add rule inet beans_egress output tcp dport 53 accept
+              log "egress firewall: no external resolver in resolv.conf; DNS left open (loopback resolver assumed)"
+            fi
+            for ip in $${ALLOW_IPS}; do
+              case "$${ip}" in *:*) continue;; esac   # v4 allowlist; the box reaches both hosts over v4
+              nft add rule inet beans_egress output ip daddr "$${ip}" tcp dport 443 accept
+            done
+            log "egress firewall applied: allow 443 -> [$$(echo $${ALLOW_IPS} | tr '\n' ' ')]"
+          else
+            log "egress firewall DISABLED by BEANS_EGRESS_FIREWALL=0; relying on the in-code guard only"
           fi
 
           log "starting warm gateway on :$${NOMAD_PORT_http}"

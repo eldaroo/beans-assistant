@@ -4,7 +4,7 @@
 import { getOp } from "@/lib/ops/registry";
 import type { RefCandidate } from "@/lib/ops/resolve-ref";
 import * as pending from "@/lib/pending-ops";
-import { computeVerdict } from "@/lib/verdict";
+import { computeVerdict, demoteOverTurnCap } from "@/lib/verdict";
 import { withinCaps, appendAudit } from "@/lib/audit";
 
 export type StageOutcome =
@@ -115,7 +115,7 @@ export async function stageOperation(input: {
     turnNonce,
   });
   const caps = await withinCaps(operationType);
-  const verdict = computeVerdict({
+  const baseVerdict = computeVerdict({
     operationType,
     utterance,
     groundedAmounts: resolved.groundedAmounts,
@@ -126,6 +126,11 @@ export async function stageOperation(input: {
     requiresHumanReview: op.requiresHumanReview,
     groundingCorpus: input.groundingCorpus,
   });
+  // Per-turn auto-post cap (spec 010 M5, T-023, AC-T6): bound how many reversible writes a single
+  // grounded turn can auto-post. The current row is already staged with auto=NULL, so the count is
+  // strictly the prior auto writes of this turn; at or above the cap, demote to a confirm card.
+  const priorAuto = await pending.countAutoForTurn(turnNonce);
+  const verdict = demoteOverTurnCap(baseVerdict, priorAuto);
   await pending.setVerdict(opToken, verdict);
   await appendAudit({ name: operationType, args: resolved.stagedArgs, caller: "stage", opToken, outcome: "staged" });
 

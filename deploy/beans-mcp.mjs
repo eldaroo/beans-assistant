@@ -171,8 +171,10 @@ export const TOOLS = [
   {
     name: 'register_products_batch',
     description:
-      'Prepare CREATING several products at once. Always needs ONE confirmation for the whole set. ' +
-      '"products" is a list, each with "name" and "price_amount" (and optional "cost_amount").',
+      'Prepare CREATING several products at once. Each product is prepared as its OWN confirm card, so ' +
+      'the owner confirms each one (nothing is created until they do). After calling, tell the owner how ' +
+      'many products you prepared and that each needs their confirmation. "products" is a list, each with ' +
+      '"name" and "price_amount" (and optional "cost_amount").',
     inputSchema: {
       type: 'object',
       properties: {

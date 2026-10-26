@@ -11,7 +11,7 @@
 // COMMITTED->CANCELLING->CANCELLED. Every transition is one conditional UPDATE whose
 // row count names the single winner, which is exactly what neon-http delivers per query.
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { pendingOps } from "@/db/schema";
 import type { Verdict } from "@/lib/verdict";
@@ -180,6 +180,25 @@ export async function revertCancel(opToken: string): Promise<void> {
 // PENDING row for the turn already carries auto/requires_human_review/reasons. The readback
 // filters only on (turn, PENDING) — an op the route already rendered and the owner committed
 // leaves PENDING, so it never re-renders; a still-PENDING op is exactly the unrendered set.
+// How many AUTO writes this turn has already staged (spec 010 M5, T-023). Counts auto=1 rows
+// under the turn nonce that are not CANCELLED, so a demoted/undone write does not count against
+// the cap. The current row is staged with auto=NULL before its verdict is set, so it is never
+// counted here — the count is strictly the PRIOR auto writes of this turn. Empty nonce -> 0.
+export async function countAutoForTurn(turnNonce: string): Promise<number> {
+  if (!turnNonce) return 0;
+  const [{ c }] = await db
+    .select({ c: count() })
+    .from(pendingOps)
+    .where(
+      and(
+        eq(pendingOps.turnNonce, turnNonce),
+        eq(pendingOps.auto, 1),
+        ne(pendingOps.status, "CANCELLED"),
+      ),
+    );
+  return Number(c);
+}
+
 export async function verdictPendingForTurn(turnNonce: string): Promise<PendingOp[]> {
   if (!turnNonce) return [];
   const rows = await db
@@ -191,6 +210,10 @@ export async function verdictPendingForTurn(turnNonce: string): Promise<PendingO
         eq(pendingOps.status, "PENDING"),
       ),
     )
-    .orderBy(asc(pendingOps.createdAt));
+    // Deterministic tiebreaker (council: Winston NIT): batch rows staged in a tight loop can share
+    // a millisecond createdAt, and there is no monotonic id column (the PK is the random opToken).
+    // Ordering by opToken as the tiebreaker makes the read STABLE across re-renders (the independent
+    // batch cards keep one consistent order), which is the enforceable form of the ordering contract.
+    .orderBy(asc(pendingOps.createdAt), asc(pendingOps.opToken));
   return rows.map(hydrate);
 }

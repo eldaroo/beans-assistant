@@ -5,7 +5,7 @@
 // The caps are a floor against a hijacked model or a runaway loop spamming the
 // write API; generous for normal use, tight only where a write is destructive.
 
-import { and, count, gte, inArray } from "drizzle-orm";
+import { and, count, gte, inArray, isNull, ne, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLog } from "@/db/schema";
 import { DESTRUCTIVE_OP_TYPES } from "@/lib/ops/registry";
@@ -13,6 +13,23 @@ import { DESTRUCTIVE_OP_TYPES } from "@/lib/ops/registry";
 const WINDOW_SECONDS = 60;
 const GLOBAL_CAP = 60; // all write intents per window
 const DESTRUCTIVE_CAP = 8; // cancel_* / deactivate per window (tighter)
+
+// The pure cap decision (spec 010 M5, T-027): given the counts in the window, is one more call
+// of this op allowed? Extracted from withinCaps so the arithmetic is testable without a DB. The
+// global cap bounds all write intents; the tighter destructive cap bounds cancels/deactivations
+// (DESTRUCTIVE_OPS) on TOP of the global one. Returns false at or above either applicable cap.
+export function capDecision(
+  windowTotal: number,
+  windowDestructiveTotal: number,
+  destructive: boolean,
+  caps: { global?: number; destructive?: number } = {},
+): boolean {
+  const globalCap = caps.global ?? GLOBAL_CAP;
+  const destructiveCap = caps.destructive ?? DESTRUCTIVE_CAP;
+  if (windowTotal >= globalCap) return false;
+  if (destructive && windowDestructiveTotal >= destructiveCap) return false;
+  return true;
+}
 
 // The destructive write intents get the tighter cap and fail CLOSED. The names
 // MUST match the operationType the stage path passes (uppercase) and the `name`
@@ -24,7 +41,7 @@ const DESTRUCTIVE_CAP = 8; // cancel_* / deactivate per window (tighter)
 // stress (spec 008 AC7 hardening; caught by m7-guards).
 export const DESTRUCTIVE_OPS = DESTRUCTIVE_OP_TYPES;
 
-function isDestructive(opName: string): boolean {
+export function isDestructive(opName: string): boolean {
   return DESTRUCTIVE_OPS.has((opName || "").toUpperCase());
 }
 
@@ -60,19 +77,34 @@ export async function appendAudit(params: {
   }
 }
 
+// Audit one TOOL CALL (read or write), best-effort (spec 010 M5, T-027: "every tool call").
+// Write intents are already audited inside stageOperation (caller "stage") / confirm / undo; this
+// records the read-tool calls so the append-only log is a complete trail of what the box invoked,
+// not only what it tried to write. appendAudit never throws, so a lost audit row cannot sink a
+// real read. A read carries no op_token and no committing outcome.
+export async function auditToolCall(name: string, caller = "read-tool"): Promise<void> {
+  await appendAudit({ name, caller, outcome: "ok" });
+}
+
 // True if a call to opName is within the per-session window caps. Counts prior
 // audit rows in the window; the destructive cap is checked against destructive
 // rows only. Fails CLOSED for destructive ops under DB stress, open otherwise.
 export async function withinCaps(opName: string): Promise<boolean> {
   const since = isoSince(WINDOW_SECONDS);
   try {
+    // The GLOBAL cap bounds WRITE intents only. Read-tool audit rows (caller "read-tool", added
+    // in M5 T-027 for the complete tool-call trail) must NOT consume the write budget, or a
+    // read-heavy turn would spuriously trip the cap and demote legitimate grounded auto-posts to
+    // confirm cards (council: Tamir MED). Count rows whose caller is not "read-tool" (NULL-caller
+    // legacy rows still count as write intents).
     const [{ c: total }] = await db
       .select({ c: count() })
       .from(auditLog)
-      .where(gte(auditLog.createdAt, since));
-    if (total >= GLOBAL_CAP) return false;
-    if (isDestructive(opName)) {
-      const [{ c: dtotal }] = await db
+      .where(and(gte(auditLog.createdAt, since), or(ne(auditLog.caller, "read-tool"), isNull(auditLog.caller))));
+    const destructive = isDestructive(opName);
+    let dtotal = 0;
+    if (destructive) {
+      const [{ c }] = await db
         .select({ c: count() })
         .from(auditLog)
         .where(
@@ -81,9 +113,9 @@ export async function withinCaps(opName: string): Promise<boolean> {
             inArray(auditLog.name, [...DESTRUCTIVE_OPS]),
           ),
         );
-      if (dtotal >= DESTRUCTIVE_CAP) return false;
+      dtotal = Number(c);
     }
-    return true;
+    return capDecision(Number(total), dtotal, destructive);
   } catch {
     return !isDestructive(opName);
   }

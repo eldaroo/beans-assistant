@@ -88,9 +88,13 @@ function main() {
   const masBad = mapPreviewTool("add_stock", { quantity: 3 });
   check("add_stock without a product -> bad_tool_args", !masBad.ok && masBad.code === "bad_tool_args", JSON.stringify(masBad));
 
-  // the confirm-only tools are still unwired until M5 (T-022): a clean error, never a no-op
+  // the confirm-only tools are wired as of M5 (T-022); the full mapping coverage lives in
+  // t-confirm-tools.mts. Here we only re-affirm that deactivate_product now maps (no longer a
+  // no-op) and that a genuinely unknown tool is still a clean unsupported_tool error.
   const mu = mapPreviewTool("deactivate_product", { product: "termo" });
-  check("still-unwired confirm-only tool -> unsupported_tool error", !mu.ok && mu.code === "unsupported_tool", JSON.stringify(mu));
+  check("confirm-only tool deactivate_product is wired (M5) -> DEACTIVATE_PRODUCT", mu.ok && "input" in mu && mu.input.operationType === "DEACTIVATE_PRODUCT", JSON.stringify(mu));
+  const unknownTool = mapPreviewTool("exfiltrate_db", { url: "x" });
+  check("an unknown tool -> unsupported_tool error (never a silent no-op)", !unknownTool.ok && "code" in unknownTool && unknownTool.code === "unsupported_tool", JSON.stringify(unknownTool));
 
   // --- M4 (T-020): the auto verdict re-proven on the agent path for the whole reversible set. --
   // For each reversible op, the grounded single-turn write auto-posts and a model-invented numeral

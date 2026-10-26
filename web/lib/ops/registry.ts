@@ -5,9 +5,9 @@
 // runs commit. (spec 008 AC5/AC6.)
 
 import { resolveActiveProduct, getProduct, type ProductRow } from "@/lib/domains/products";
-import { registerSale, cancelSale } from "@/lib/domains/sales";
-import { registerExpense, cancelExpense } from "@/lib/domains/expenses";
-import { addStock, cancelStockMovement } from "@/lib/domains/stock";
+import { registerSale, cancelSale, listSales } from "@/lib/domains/sales";
+import { registerExpense, cancelExpense, listExpenses } from "@/lib/domains/expenses";
+import { addStock, cancelStockMovement, recentStockMovements } from "@/lib/domains/stock";
 import { createProduct, updateProduct, deactivateProduct } from "@/lib/domains/products";
 import { recordProduction, normalizeWeek } from "@/lib/domains/production";
 import { createSupplier, recordCheckin } from "@/lib/domains/suppliers";
@@ -186,7 +186,15 @@ export const OPS: Record<string, OpDef> = {
         const name = (args.name ?? args.productRef ?? "").trim();
         if (name) {
           const minted = mintMinimalProductArgs(name);
-          return { stagedArgs: minted as unknown as Record<string, unknown>, productName: minted.name, candidateCount: 1, groundedAmounts: [] };
+          // Honor an explicitly-stated price/cost (spec 010 M5, the register_product tool path):
+          // the name-only auto-mint used by the compound heal leaves price pending (null), but an
+          // explicit "register product X at $Y" keeps Y. A stated cost overrides the 0 placeholder.
+          const withStated = {
+            ...minted,
+            ...(args.unitPriceCents != null ? { unitPriceCents: args.unitPriceCents } : {}),
+            ...(args.unitCostCents != null ? { unitCostCents: args.unitCostCents } : {}),
+          };
+          return { stagedArgs: withStated as unknown as Record<string, unknown>, productName: withStated.name, candidateCount: 1, groundedAmounts: [] };
         }
       }
       return { stagedArgs: rawArgs, productName: args.name ?? null, candidateCount: 1, groundedAmounts: [] };
@@ -288,6 +296,49 @@ export const OPS: Record<string, OpDef> = {
       return resolveStockMovement(args.movementRef ?? "").then((r) => fromRef(r, "movementId", (c) => `Revertir ${c.label}. Se descuenta esa entrada del inventario.`));
     },
     commit: (args) => cancelStockMovement((args as { movementId: number }).movementId),
+  },
+
+  // Cancel the single most-recent operation across sales, expenses, and stock entries
+  // (spec 010 M5, T-022; the cancel_last_operation tool). The model names nothing: resolve
+  // reads the newest row of each kind, picks the newest overall by timestamp, and stages the
+  // matching cancel. Confirm-only (irreversible + requiresHumanReview) and destructive-capped.
+  CANCEL_LAST: {
+    irreversible: true,
+    requiresHumanReview: true,
+    // refNoun so an empty ledger (candidateCount 0) yields the clean "no encontre una operacion"
+    // reference_not_found message from stage, not the misleading product-not-found copy. CANCEL_LAST
+    // never disambiguates (no refIdField): it always picks the single newest op server-side.
+    refNoun: "operacion",
+    async resolve() {
+      const [sales, expenses, stock] = await Promise.all([
+        listSales({ limit: 1 }),
+        listExpenses({ limit: 1 }),
+        recentStockMovements(1),
+      ]);
+      const cands: Array<LastOpCandidate | null> = [
+        sales[0] ? { kind: "sale", id: sales[0].id, label: `la venta #${sales[0].id}`, whenMs: toMs(sales[0].createdAt) } : null,
+        expenses[0] ? { kind: "expense", id: expenses[0].id, label: `el gasto #${expenses[0].id}`, whenMs: toMs(expenses[0].createdAt) } : null,
+        stock[0] ? { kind: "stock", id: stock[0].id, label: `el movimiento de stock #${stock[0].id}`, whenMs: toMs(stock[0].occurredAt) } : null,
+      ];
+      const newest = pickNewestOperation(cands);
+      if (!newest) {
+        // Nothing on the ledger to cancel: candidateCount 0 yields a clean message from stage.
+        return { stagedArgs: {}, productName: null, candidateCount: 0, groundedAmounts: [] };
+      }
+      const preview =
+        newest.kind === "sale"
+          ? `Cancelar ${newest.label}. Si estaba pagada, se revierte el stock vendido al inventario.`
+          : newest.kind === "expense"
+            ? `Cancelar ${newest.label}. Se registra una cancelacion que lo neutraliza en el total.`
+            : `Revertir ${newest.label}. Se descuenta esa entrada del inventario.`;
+      return { stagedArgs: { kind: newest.kind, id: newest.id }, productName: null, candidateCount: 1, groundedAmounts: [], preview };
+    },
+    commit: (args) => {
+      const a = args as { kind: string; id: number };
+      if (a.kind === "sale") return cancelSale(a.id);
+      if (a.kind === "expense") return cancelExpense(a.id);
+      return cancelStockMovement(a.id);
+    },
   },
 
   // ------------------------------------- orphan operational writes (spec 009 M6 / AC12)
@@ -442,8 +493,36 @@ function currentIsoWeek(d: Date = new Date()): string {
   return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
-// The destructive ops (tighter rate cap name space in lib/audit).
-export const DESTRUCTIVE_OP_TYPES = new Set(["DEACTIVATE_PRODUCT", "CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK"]);
+// A most-recent-operation candidate, for CANCEL_LAST's cross-type pick (spec 010 M5). Comparison
+// is on `whenMs` (epoch millis), NOT a string: the three kinds hydrate their timestamps in
+// DIFFERENT shapes — sale/expense `createdAt` are Date objects (drizzle timestamp, no mode) while
+// stock `occurredAt` is a raw pg string from a `sql` execute — so a lexicographic string compare
+// mixes "Mon Oct 26 2026 …" (letter-leading) with "2026-10-26 …" (digit-leading) and picks the
+// wrong row routinely (council: Amelia/Winston HIGH). An epoch number is format-agnostic.
+export type LastOpCandidate = { kind: "sale" | "expense" | "stock"; id: number; label: string; whenMs: number };
+
+// Epoch millis from a Date OR a timestamp string (ISO or the pg "YYYY-MM-DD HH:MM:SS+00" form).
+// NaN when unparseable, so pickNewestOperation drops it rather than mis-ordering it as 0.
+export function toMs(v: unknown): number {
+  if (v == null) return NaN;
+  if (v instanceof Date) return v.getTime();
+  const s = String(v);
+  const t = Date.parse(s);
+  if (!Number.isNaN(t)) return t;
+  return Date.parse(s.replace(" ", "T")); // pg space-separated -> ISO-ish
+}
+
+// Pick the newest operation across kinds by epoch millis (pure; testable without a DB). Candidates
+// with an unparseable/missing timestamp are dropped. Ties resolve to the first of equal millis.
+export function pickNewestOperation(cands: Array<LastOpCandidate | null>): LastOpCandidate | null {
+  const live = cands.filter((c): c is LastOpCandidate => !!c && Number.isFinite(c.whenMs));
+  if (!live.length) return null;
+  return live.reduce((a, b) => (b.whenMs > a.whenMs ? b : a));
+}
+
+// The destructive ops (tighter rate cap name space in lib/audit). CANCEL_LAST is destructive:
+// it reverts whichever operation it resolves, so it shares the tighter per-window cap.
+export const DESTRUCTIVE_OP_TYPES = new Set(["DEACTIVATE_PRODUCT", "CANCEL_SALE", "CANCEL_EXPENSE", "CANCEL_STOCK", "CANCEL_LAST"]);
 
 export function getOp(operationType: string): OpDef | null {
   return OPS[operationType?.toUpperCase?.()] ?? null;

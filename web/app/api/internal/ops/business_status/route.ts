@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { internalGuard } from "@/lib/internal-auth";
 import { fail, requireDb } from "@/lib/http";
+import { auditToolCall } from "@/lib/audit";
 import { attentionSnapshot } from "@/lib/domains/command-center";
 
 export const runtime = "nodejs";
@@ -21,6 +22,7 @@ export async function POST(req: Request) {
   if (dbErr) return dbErr;
   try {
     const attention = await attentionSnapshot();
+    await auditToolCall("business_status");
     return NextResponse.json({ ok: true, attention });
   } catch (e) {
     console.error("business_status internal read failed:", (e as Error).message);
