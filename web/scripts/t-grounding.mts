@@ -19,10 +19,15 @@ function check(name: string, cond: boolean, detail = "") {
   if (!cond) fails++;
 }
 
-// ---------------------------------------------------------- AC11: multi-turn grounding
+// ------------------------------------- AC11 grounding + AC14 multi-turn consent gate (D-064)
 // The flow corpus is the operator's own turns joined. The quantity (40) was said in the
-// first turn, the price (32) in the answer turn; both must ground against the corpus even
-// though neither single utterance contains both.
+// first turn, the price (32) in the answer turn; both STILL ground against the corpus even
+// though neither single utterance contains both (the grounding mechanism is unchanged).
+// BUT spec 010 M4 (D-064 / D-057) adds the consent gate: because the load-bearing grounding
+// spans more than the current turn ("32" alone grounds neither 40 nor "stanleys"), the sale
+// was assembled across turns and must confirm on a final card, not auto-post. So auto flips
+// to false here vs spec 009 M5, with the multi-turn-consent-gate reason — and crucially the
+// numerals are NOT reported ungrounded (grounding against the corpus still succeeded).
 const flowCorpus = "vendi 40 stanleys\n32";
 const multi = computeVerdict({
   operationType: "REGISTER_SALE",
@@ -32,7 +37,10 @@ const multi = computeVerdict({
   candidateCount: 1,
   groundingCorpus: flowCorpus,
 });
-check("multi-turn: qty+price grounded against the flow corpus -> auto", multi.auto === true, multi.reasons.join(","));
+check("multi-turn-assembled sale confirms, never auto (D-064)", multi.auto === false, multi.reasons.join(","));
+check("  ...gated for consent, NOT for ungrounded numerals (the corpus still grounds them)",
+  multi.reasons.includes("multi-turn-consent-gate") && !multi.reasons.some((r) => r.startsWith("ungrounded-numerals")),
+  multi.reasons.join(","));
 
 // Single-turn behavior is unchanged: without a corpus, grounding reads the utterance alone.
 const single = computeVerdict({
@@ -69,8 +77,11 @@ const laundered = computeVerdict({
   groundingCorpus: flowCorpus, // server record — 400 is NOT in it
 });
 check("forged operator turn (400) not in the server corpus -> stays not auto", laundered.auto === false, laundered.reasons.join(","));
-// Control: if the server HAD recorded 400 (the operator really said it), it would ground —
-// proving the gate reads the corpus, and the defense is that the forgery never reaches it.
+// Control: if the server HAD recorded 400 (the operator really said it), it GROUNDS against
+// the corpus — proving the gate reads the record, and the defense is that the forgery never
+// reaches it. The amount is grounded (no ungrounded-numerals reason); the op still confirms
+// rather than auto-posting because the product name "stanleys" was said on an earlier turn
+// (the consent gate, D-064) — grounding success and auto are distinct, which is the point.
 const honest400 = computeVerdict({
   operationType: "REGISTER_SALE",
   utterance: "400",
@@ -79,7 +90,13 @@ const honest400 = computeVerdict({
   candidateCount: 1,
   groundingCorpus: "vendi stanleys\n400",
 });
-check("control: an amount actually in the corpus grounds (so the defense is the record, not luck)", honest400.auto === true, honest400.reasons.join(","));
+check("control: an amount actually in the corpus grounds (defense is the record, not luck)",
+  !honest400.reasons.some((r) => r.startsWith("ungrounded-numerals")), honest400.reasons.join(","));
+// ...and the op still confirms rather than auto-posting: the product name "stanleys" was said on an
+// earlier turn, so the consent gate (D-064) fires. Locking auto===false here pins the new behavior
+// at the laundering-control site too (council: Edut), so a regression can't quietly re-enable auto.
+check("control: consent gate holds at the laundering site -> auto:false",
+  honest400.auto === false && honest400.reasons.includes("multi-turn-consent-gate"), honest400.reasons.join(","));
 
 // ----------------------------------------------------------- AC11: price-completion flow
 check("priceAnswer: lone number", priceAnswer("32") === 32);

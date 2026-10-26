@@ -12,6 +12,9 @@
 //                          the product name (when the op names one) appears too
 //   (c) determinism      - the product resolved to exactly one active candidate
 //   (d) within caps      - per-write and per-session caps hold
+//   (e) single-turn consent - the load-bearing facts are all present in the CURRENT turn, not
+//                          assembled across turns (D-064 / D-057): an op whose grounding spans
+//                          more than this turn confirms on a final card, it never auto-posts
 // A bare confirmation turn ("ok", "dale") grounds nothing, so it is never auto.
 
 import { parseNumbers, numeralIsGrounded, tokenSet, stripAccents } from "@/lib/money";
@@ -125,13 +128,46 @@ export function computeVerdict(params: {
 
   if (!withinCaps) reasons.push("over-cap");
 
-  const auto =
+  const groundedAuto =
     reversible &&
     !bare &&
     ungrounded.length === 0 &&
     nameGrounded &&
     deterministic &&
     withinCaps;
+
+  // CALLER INVARIANT the gate below depends on (council: Winston HIGH). The gate infers "assembled
+  // across turns" from `corpus !== utterance`, so the caller MUST pass `utterance` = the CURRENT
+  // operator turn only and `groundingCorpus` = the full-flow record (the join of all operator turns
+  // this flow). Both callers honor it: the preview endpoint sets utterance = turns[last].text and
+  // groundingCorpus = turns.join("\n"); the parser path passes proposal.utterance + the flow corpus.
+  // A caller that passed utterance === groundingCorpus would silently make this gate inert, so the
+  // invariant is pinned by a source-assertion in scripts/t-internal-preview.mts (grep of the route),
+  // which fails loudly if a future edit collapses the two at the call site.
+  //
+  // D-064 / D-057 consent gate (spec 010 M4, AC14): an op whose load-bearing grounding spans
+  // more than the current turn never auto-posts. When the flow corpus carries more than the
+  // current utterance, the numerals or the product name may have been grounded by an EARLIER
+  // operator turn ("vendi 40 stanleys" ... "32"): grounding succeeds against the corpus, but
+  // the owner never saw the assembled whole ("40 stanleys at 32") in one place and so never
+  // consented to it. Re-ground against the CURRENT turn alone; if a load-bearing fact is
+  // grounded only by an earlier turn, force auto:false so the owner assents to the assembled
+  // whole on a final confirm card. Single-turn flows are unaffected: when the corpus equals the
+  // current utterance, utterance-alone grounding equals corpus grounding and the gate is inert.
+  // This supersedes the spec-009 M5 behavior (a multi-turn-completed sale auto-posted); the
+  // consent reason for D-057 is retained as this verdict-time gate (ARCHITECTURE D-064).
+  let multiTurnConsentGate = false;
+  if (groundedAuto && corpus !== utterance) {
+    const saidCurrent = parseNumbers(utterance);
+    const numeralsInCurrentTurn = groundedAmounts.every((a) => numeralIsGrounded(a, saidCurrent));
+    const nameInCurrentTurn = productNameGrounded(productName, utterance);
+    if (!numeralsInCurrentTurn || !nameInCurrentTurn) {
+      multiTurnConsentGate = true;
+      reasons.push("multi-turn-consent-gate");
+    }
+  }
+
+  const auto = groundedAuto && !multiTurnConsentGate;
 
   return { auto, requiresHumanReview: !auto, reasons };
 }

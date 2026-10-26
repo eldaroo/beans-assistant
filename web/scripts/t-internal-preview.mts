@@ -57,11 +57,66 @@ function main() {
   check("negative unit_amount stages price-less (no unitPriceCents)",
     mneg.ok && !("unitPriceCents" in (mneg.input.args as { items: Array<Record<string, unknown>> }).items[0]), JSON.stringify(mneg));
 
-  // --- an unwired tool is a clean error, never a silent no-op (M4/M5 extend the map)
-  const mu = mapPreviewTool("register_expense", { amount: 500, description: "envio" });
-  check("unwired tool -> unsupported_tool error", !mu.ok && mu.code === "unsupported_tool", JSON.stringify(mu));
   const mb = mapPreviewTool("register_sale", {});
   check("register_sale without a product -> bad_tool_args", !mb.ok && mb.code === "bad_tool_args", JSON.stringify(mb));
+
+  // --- M4 (T-018): the rest of the reversible set round-trips through the box. ----------------
+  // register_expense { amount (whole), description, category? } -> REGISTER_EXPENSE { amountCents, description }
+  const me = mapPreviewTool("register_expense", { amount: 500, description: "envio", category: "logistica" });
+  check("register_expense maps to REGISTER_EXPENSE { amountCents, description }",
+    me.ok && me.input.operationType === "REGISTER_EXPENSE"
+      && (me.input.args as Record<string, unknown>).amountCents === 50000
+      && (me.input.args as Record<string, unknown>).description === "envio",
+    JSON.stringify(me));
+  check("register_expense drops the non-op `category` arg (keystone: no stray arg leaks through)",
+    me.ok && !("category" in (me.input.args as Record<string, unknown>)), JSON.stringify(me));
+  const meBad = mapPreviewTool("register_expense", { amount: 500 });
+  check("register_expense without a description -> bad_tool_args", !meBad.ok && meBad.code === "bad_tool_args", JSON.stringify(meBad));
+  const meNeg = mapPreviewTool("register_expense", { amount: -10, description: "x" });
+  check("register_expense with a negative amount -> bad_tool_args (never a negative-cost expense)", !meNeg.ok && meNeg.code === "bad_tool_args", JSON.stringify(meNeg));
+
+  // add_stock { product, quantity } -> ADD_STOCK { productRef, quantity } (product resolved server-side)
+  const mas = mapPreviewTool("add_stock", { product: "termos", quantity: 10 });
+  check("add_stock maps to ADD_STOCK { productRef, quantity }",
+    mas.ok && mas.input.operationType === "ADD_STOCK"
+      && (mas.input.args as Record<string, unknown>).productRef === "termos"
+      && (mas.input.args as Record<string, unknown>).quantity === 10,
+    JSON.stringify(mas));
+  const masStr = mapPreviewTool("add_stock", { product: "termos", quantity: "7" });
+  check("add_stock stringified quantity '7' coerces to 7 (not default 1)",
+    masStr.ok && (masStr.input.args as Record<string, unknown>).quantity === 7, JSON.stringify(masStr));
+  const masBad = mapPreviewTool("add_stock", { quantity: 3 });
+  check("add_stock without a product -> bad_tool_args", !masBad.ok && masBad.code === "bad_tool_args", JSON.stringify(masBad));
+
+  // the confirm-only tools are still unwired until M5 (T-022): a clean error, never a no-op
+  const mu = mapPreviewTool("deactivate_product", { product: "termo" });
+  check("still-unwired confirm-only tool -> unsupported_tool error", !mu.ok && mu.code === "unsupported_tool", JSON.stringify(mu));
+
+  // --- M4 (T-020): the auto verdict re-proven on the agent path for the whole reversible set. --
+  // For each reversible op, the grounded single-turn write auto-posts and a model-invented numeral
+  // (present in the args, absent from the operator corpus) fails grounding -> confirm card.
+  const expGrounded = computeVerdict({
+    operationType: "REGISTER_EXPENSE", utterance: "gaste 500 en envio",
+    groundedAmounts: [500], productName: null, candidateCount: 1, withinCaps: true, groundingCorpus: "gaste 500 en envio",
+  });
+  check("REGISTER_EXPENSE grounded single-turn -> auto:true", expGrounded.auto === true, JSON.stringify(expGrounded));
+  const expInvented = computeVerdict({
+    operationType: "REGISTER_EXPENSE", utterance: "gaste algo en envio",
+    groundedAmounts: [999], productName: null, candidateCount: 1, withinCaps: true, groundingCorpus: "gaste algo en envio",
+  });
+  check("REGISTER_EXPENSE invented amount (999 absent from corpus) -> auto:false",
+    expInvented.auto === false && expInvented.reasons.some((r) => r.startsWith("ungrounded-numerals")), JSON.stringify(expInvented));
+  const stockGrounded = computeVerdict({
+    operationType: "ADD_STOCK", utterance: "entraron 10 termos",
+    groundedAmounts: [10], productName: "termos", candidateCount: 1, withinCaps: true, groundingCorpus: "entraron 10 termos",
+  });
+  check("ADD_STOCK grounded single-turn -> auto:true", stockGrounded.auto === true, JSON.stringify(stockGrounded));
+  const stockInvented = computeVerdict({
+    operationType: "ADD_STOCK", utterance: "entraron termos",
+    groundedAmounts: [50], productName: "termos", candidateCount: 1, withinCaps: true, groundingCorpus: "entraron termos",
+  });
+  check("ADD_STOCK invented quantity (50 absent from corpus) -> auto:false",
+    stockInvented.auto === false && stockInvented.reasons.some((r) => r.startsWith("ungrounded-numerals")), JSON.stringify(stockInvented));
 
   // --- 2. THE KEYSTONE, behaviorally (AC5). The operator typed "vendi 2 medias a 300". The model
   // calls register_sale but its args carry an INVENTED price of 999 (absent from what the operator
@@ -93,18 +148,22 @@ function main() {
   });
   check("grounded obvious reversible write -> auto:true", grounded.auto === true, JSON.stringify(grounded));
 
-  // --- a numeral grounded by an EARLIER operator turn still auto-posts (multi-turn grounding is
-  // the whole flow record, not the single turn): corpus spans "vendi 2 medias" then "a 300".
+  // --- a sale assembled across turns confirms, never auto-posts (spec 010 M4, D-064 / AC14):
+  // corpus spans "vendi 2 medias" then "300". The grounding still succeeds against the corpus
+  // (no ungrounded-numerals), but the current turn "300" grounds neither the quantity nor the
+  // product, so the consent gate forces auto:false. This supersedes the spec-009 M5 behavior.
   const multi = computeVerdict({
     operationType: "REGISTER_SALE",
-    utterance: "300", // the current turn is just the price; the quantity grounds to the earlier turn
+    utterance: "300", // the current turn is just the price; the quantity is from the earlier turn
     groundedAmounts: [2, 300],
     productName: "medias",
     candidateCount: 1,
     withinCaps: true,
     groundingCorpus: "vendi 2 medias\n300",
   });
-  check("numeral grounded by an earlier turn in the flow corpus -> auto:true", multi.auto === true, JSON.stringify(multi));
+  check("multi-turn-assembled sale confirms (D-064) -> auto:false, consent-gated not ungrounded",
+    multi.auto === false && multi.reasons.includes("multi-turn-consent-gate") && !multi.reasons.some((r) => r.startsWith("ungrounded-numerals")),
+    JSON.stringify(multi));
 
   // --- 3. THE KEYSTONE, in the wiring. The preview route must build grounding from operator_turns
   // (flow-turns), never from the request body. Assert against the route source so a future edit
@@ -120,6 +179,29 @@ function main() {
       !/utterance:\s*body/.test(routeSrc) &&
       !/groundingCorpus:\s*body/.test(routeSrc),
     "grounding source must be the server record, not the tool args");
+
+  // --- 4. THE CONSENT-GATE CALLER INVARIANT, pinned at the call site (council: Winston HIGH / Edut).
+  // D-064's consent gate (verdict.ts) infers "assembled across turns" from `corpus !== utterance`.
+  // That is sound ONLY while the route passes utterance = the CURRENT (latest) operator turn and
+  // groundingCorpus = the full-flow JOIN. If a future edit collapsed the two (e.g. utterance = the
+  // join), the gate would silently go inert with no failing unit test, because the computeVerdict
+  // tests call it with hand-split args. Pin the distinction against the route source so that
+  // regression fails loudly here.
+  check("route sets utterance = the LATEST operator turn (not the whole corpus)",
+    /const utterance = turns\.length \? turns\[turns\.length - 1\]\.text/.test(routeSrc),
+    "utterance must be the current turn (turns[last]) so the consent gate can detect a multi-turn span");
+  check("route sets groundingCorpus = the JOIN of all turns (distinct from utterance)",
+    /const groundingCorpus = turns\.map\(\(t\) => t\.text\)\.join\("\\n"\)/.test(routeSrc),
+    "groundingCorpus must be the full-flow join so corpus !== utterance holds across turns");
+
+  // --- 5. T-020 derivation seam (council: Bob). The verdict re-proofs above feed groundedAmounts by
+  // hand ([500], [10]); confirm the hand-fed expense value matches what REGISTER_EXPENSE.resolve
+  // actually derives. registry.ts REGISTER_EXPENSE.resolve returns groundedAmounts = [amountCents/100];
+  // the map produced amountCents = 50000, so the real derived grounded amount is 500 — the value the
+  // T-020 verdict assertion uses. (Kept pure: mirror the formula rather than import the DB-coupled
+  // registry; the full map -> stage -> groundedAmounts wiring is covered by the shared M3 route test.)
+  check("expense derivation: map amountCents 50000 grounds as [500] (matches REGISTER_EXPENSE.resolve)",
+    me.ok && ((me.input.args as Record<string, number>).amountCents / 100) === 500, JSON.stringify(me));
 
   console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAIL`);
   process.exit(fails ? 1 : 0);
