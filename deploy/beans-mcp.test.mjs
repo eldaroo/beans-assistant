@@ -33,6 +33,22 @@ test('read_stock sends the internal token and pins the tenant via header, never 
   assert.match(r.content[0].text, /PCC-001/);
 });
 
+test('read_stock round-trips against a Next.js base URL (spec 010 T-003 repoint FastAPI -> Next)', async () => {
+  // The repoint is BEANS_OPS_URL = the Next app base (https://<app>/api). The tool path then
+  // resolves to the Next route at app/api/internal/ops/read_stock. Proves the composed URL and
+  // that a trailing slash on the base does not double up the separator.
+  let seen;
+  const fetchImpl = fakeFetch((url, opts) => {
+    seen = { url, headers: opts.headers };
+    return { ok: true, status: 200, json: async () => ({ ok: true, stock: [{ sku: 'PCC-001', quantity: 48 }] }) };
+  });
+  const r = await readStock({ opsUrl: 'https://beans.example/api/', token: 'tok-xyz', phone: '+5491100000001', fetchImpl });
+  assert.equal(seen.url, 'https://beans.example/api/internal/ops/read_stock');
+  assert.equal(seen.headers['x-internal-token'], 'tok-xyz');
+  assert.equal(r.isError, undefined);
+  assert.match(r.content[0].text, /PCC-001/);
+});
+
 test('read_stock surfaces an error envelope as an error content, not a crash', async () => {
   const fetchImpl = fakeFetch(() => ({ ok: false, status: 500, json: async () => ({ ok: false, error: { code: 'internal_error', message: 'read_stock failed' } }) }));
   const r = await readStock({ ...CFG, fetchImpl });
