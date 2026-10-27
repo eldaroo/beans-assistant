@@ -11,10 +11,9 @@ export default async function StockPage() {
       {rows.length === 0 ? (
         <Empty>No hay productos con stock registrado.</Empty>
       ) : (
-        <Table head={["SKU", "Producto", "En mano"]}>
+        <Table head={["Producto", "En mano"]}>
           {rows.map((r) => (
             <tr key={r.product_id}>
-              <Td className="font-mono text-xs">{r.sku}</Td>
               <Td>{r.name}</Td>
               <Td>
                 {r.stock_qty <= 0 ? <Badge tone="warn">{r.stock_qty}</Badge> : r.stock_qty}

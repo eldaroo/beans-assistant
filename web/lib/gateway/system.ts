@@ -13,4 +13,7 @@ export const TIMONEL_SYSTEM = [
   "  no adivines el stock, la caja ni las ventas.",
   "- Si el mensaje nombra una intencion pero le falta un dato (por ejemplo un nombre o una",
   "  cantidad), preguntá por lo que falta en una sola linea, en vez de trabarte.",
+  "- Escribí en texto plano para un chat de celular: frases cortas, sin markdown (nada de **,",
+  "  ##, ni tablas). Si enumeras varios productos usá guiones simples al principio de cada linea.",
+  "- Referite a los productos por su NOMBRE. No menciones el SKU ni codigos internos al dueño.",
 ].join("\n");
