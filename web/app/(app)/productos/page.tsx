@@ -11,10 +11,9 @@ export default async function ProductosPage() {
       {rows.length === 0 ? (
         <Empty>Todavia no hay productos.</Empty>
       ) : (
-        <Table head={["SKU", "Nombre", "Costo", "Precio", "Estado"]}>
+        <Table head={["Nombre", "Costo", "Precio", "Estado"]}>
           {rows.map((p) => (
             <tr key={p.id}>
-              <Td className="font-mono text-xs">{p.sku}</Td>
               <Td>{p.name}</Td>
               {/* A name-only minted product carries unit cost 0 with no price yet; show the
                   cost as "pendiente", not an authoritative US$ 0,00, so a placeholder is

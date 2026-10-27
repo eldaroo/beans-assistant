@@ -7,8 +7,80 @@
 // The compound commit is driven by the SAME `driveCompound` the AC3 atomicity test pins
 // (tested contract == shipped contract): the step is the unit of commit, and a late-step
 // failure leaves the product created with nothing stranded.
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect, type ReactNode } from "react";
 import { threadProductId, driveCompound, pickedStageArgs } from "@/lib/ops/compound";
+
+// ── Light text formatting for the assistant's prose ───────────────────────────────────────
+// The native tool-use brain (and the parser replies) emit plain Spanish that can carry line
+// breaks, simple **bold**, and dash/number bullets. The bubble used to render the raw string,
+// so markdown showed as literal characters and newlines collapsed. This renders it safely
+// WITHOUT dangerouslySetInnerHTML (every piece is a real React node): bold spans, dash bullets
+// as a list, blank lines as spacing, numbered lines kept verbatim. Deliberately tiny — the
+// system prompt also asks the model to keep it plain, so this only has to be robust, not full
+// markdown.
+function renderInline(text: string, keyBase: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) => {
+    const b = /^\*\*([^*]+)\*\*$/.exec(part);
+    if (b) return <strong key={`${keyBase}-${i}`}>{b[1]}</strong>;
+    return <span key={`${keyBase}-${i}`}>{part}</span>;
+  });
+}
+function FormattedText({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/);
+  const blocks: ReactNode[] = [];
+  let bullets: string[] = [];
+  const flushBullets = (key: string) => {
+    if (!bullets.length) return;
+    const items = bullets;
+    bullets = [];
+    blocks.push(
+      <ul key={key} className="my-1 ml-4 list-disc space-y-0.5">
+        {items.map((b, i) => <li key={i}>{renderInline(b, `${key}-${i}`)}</li>)}
+      </ul>,
+    );
+  };
+  lines.forEach((ln, i) => {
+    const bullet = /^\s*[-*•]\s+(.*)$/.exec(ln);
+    if (bullet) { bullets.push(bullet[1]); return; }
+    flushBullets(`ul-${i}`);
+    if (ln.trim() === "") { blocks.push(<div key={`sp-${i}`} className="h-1.5" />); return; }
+    blocks.push(<p key={`p-${i}`}>{renderInline(ln, `p-${i}`)}</p>);
+  });
+  flushBullets("ul-end");
+  return <div className="space-y-1 leading-relaxed">{blocks}</div>;
+}
+
+// ── Voice dictation (Web Speech API) ──────────────────────────────────────────────────────
+// Minimal typing for the browser SpeechRecognition (not in lib.dom for the webkit-prefixed
+// form). We only touch the fields we use, so a small interface keeps it typed without `any`.
+type SpeechAlt = { transcript: string };
+type SpeechResult = ArrayLike<SpeechAlt> & { isFinal: boolean };
+type SpeechResultEvent = { resultIndex: number; results: ArrayLike<SpeechResult> };
+interface SpeechRec {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((e: SpeechResultEvent) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+type SpeechRecCtor = new () => SpeechRec;
+function getSpeechRecognition(): SpeechRecCtor | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: SpeechRecCtor; webkitSpeechRecognition?: SpeechRecCtor };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
+  );
+}
 
 type Act = { operationType: string; args: Record<string, unknown>; utterance: string };
 type CardState = "pending" | "done" | "undone" | "cancelled";
@@ -122,6 +194,12 @@ export function Chat() {
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [micSupported, setMicSupported] = useState(false);
+  const recRef = useRef<SpeechRec | null>(null);
+  // Feature-detect in an effect so the server render and the first client render agree (the
+  // button only shows once we know the browser supports dictation).
+  useEffect(() => { setMicSupported(getSpeechRecognition() !== null); }, []);
   const listRef = useRef<HTMLDivElement>(null);
   // The active flow nonce (spec 009 M5). Held across turns while a flow stays open (a
   // "needs" exchange like asking for a price), rotated to null once a turn closes the flow,
@@ -241,6 +319,40 @@ export function Chat() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // Voice dictation: tap the mic to speak, tap again (or just pause) to stop. The transcript
+  // fills the input live and auto-sends when recognition ends, so a hands-free "vendi 2 medias
+  // a 300" flows through the same sendMessage path as typing. Hidden when unsupported.
+  function toggleMic() {
+    if (busy) return;
+    if (listening) { recRef.current?.stop(); return; }
+    const SR = getSpeechRecognition();
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = "es-AR";
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        const t = r[0]?.transcript ?? "";
+        if (r.isFinal) finalText += t; else interim += t;
+      }
+      setInput((finalText + interim).replace(/\s+/g, " ").trimStart());
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => {
+      setListening(false);
+      recRef.current = null;
+      const text = finalText.trim();
+      if (text) sendMessage(text);
+    };
+    recRef.current = rec;
+    setListening(true);
+    try { rec.start(); } catch { setListening(false); }
   }
 
   async function confirm(opToken: string) {
@@ -384,12 +496,12 @@ export function Chat() {
           if (m.role === "user")
             return <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-indigo-600 px-3 py-2 text-white">{m.text}</div>;
           if (m.role === "bot")
-            return <div key={i} className="max-w-[90%] rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">{m.text}</div>;
+            return <div key={i} className="max-w-[90%] rounded-2xl rounded-bl-sm bg-neutral-100 px-3 py-2 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200"><FormattedText text={m.text} /></div>;
           // shape 1: answer, borderless, no button
           if (m.role === "answer")
             return (
               <div key={i} className="max-w-[92%] border-l-2 border-indigo-300 pl-3 text-neutral-800 dark:border-indigo-700 dark:text-neutral-200">
-                {m.text}
+                <FormattedText text={m.text} />
               </div>
             );
           // compound create card: one card, two numbered steps, one Confirmar
@@ -498,10 +610,21 @@ export function Chat() {
         onSubmit={(e) => { e.preventDefault(); sendMessage(input.trim()); }}
         className="flex gap-2 border-t border-neutral-200 p-3 dark:border-neutral-800"
       >
+        {micSupported && (
+          <button
+            type="button"
+            onClick={toggleMic}
+            aria-label={listening ? "Detener dictado" : "Hablar"}
+            title={listening ? "Detener" : "Hablar por voz"}
+            className={`flex w-10 shrink-0 items-center justify-center rounded-lg border transition ${listening ? "animate-pulse border-red-300 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-950/40" : "border-neutral-300 text-neutral-500 hover:border-indigo-400 hover:text-indigo-600 dark:border-neutral-700 dark:text-neutral-400"}`}
+          >
+            <MicIcon />
+          </button>
+        )}
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Escribi una operacion o una pregunta..."
+          placeholder={listening ? "Escuchando..." : "Escribi o deci una operacion o pregunta..."}
           className="flex-1 rounded-lg border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-indigo-500 dark:border-neutral-700 dark:bg-neutral-800"
         />
         <button type="submit" disabled={busy} className="rounded-lg bg-indigo-600 px-4 text-sm text-white disabled:opacity-50 hover:bg-indigo-500">
